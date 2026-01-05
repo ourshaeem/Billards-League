@@ -65,6 +65,7 @@ CREATE TABLE Queue (
     queue_id INT AUTO_INCREMENT PRIMARY KEY,
     user_id INT,
     table_id INT,
+    queue_position INT NOT NULL,
     joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES Players(user_id),
     FOREIGN KEY (table_id) REFERENCES Pool_Tables(table_id)
