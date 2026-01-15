@@ -1,0 +1,13 @@
+/* src/index.css */
+* {
+  box-sizing: border-box; /* Forces padding to stay INSIDE the width */
+}
+
+body, html, #root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow-x: hidden; /* Safety net: hides any accidental horizontal scroll */
+  background-color: #076324;
+}
