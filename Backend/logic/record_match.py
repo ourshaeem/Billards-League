@@ -1,97 +1,155 @@
 from database import get_db_connection
-# Records a match result, updates ELO ratings, and adjusts player ranks as needed in the data
-        
 
 def update_player_rank(user_id, cursor):
-    find_rank_sql = " SELECT rank_id FROM ranks WHERE min_elo <= (SELECT elo_rating FROM Players WHERE user_id = %s) ORDER BY min_elo DESC LIMIT 1"
+    """Update player's rank based on their current ELO rating"""
+    find_rank_sql = """
+        SELECT rank_id 
+        FROM Ranks 
+        WHERE min_elo <= (SELECT elo_rating FROM Players WHERE user_id = %s) 
+        ORDER BY min_elo DESC 
+        LIMIT 1
+    """
     
     cursor.execute(find_rank_sql, (user_id,))
     result = cursor.fetchone()
     if result:
         new_rank_id = result[0]
         update_rank_sql = "UPDATE Players SET rank_id = %s WHERE user_id = %s"
-        cursor.execute(update_rank_sql,(new_rank_id, user_id,))
-
+        cursor.execute(update_rank_sql, (new_rank_id, user_id,))
 
 def start_new_session(table_id):
+    """Start a new match session after a match ends"""
     db = get_db_connection()
     cursor = db.cursor()
 
     try:
-        cursor.execute("SELECT winner_id FROM Matches WHERE table_id = %s AND match_status = 'Active'", (table_id,))
-        active_match = cursor.fetchone()
+        # Check if there's already a winner at the table
+        cursor.execute("""
+            SELECT winner_id 
+            FROM Matches 
+            WHERE table_id = %s AND match_status = 'Active' AND loser_id IS NULL
+        """, (table_id,))
+        
+        king_match = cursor.fetchone()
 
-        if active_match:
-            king_id = active_match[0]
-            print("There is already a winner at the Table. Finding a challenger")
+        if king_match:
+            # King of the hill mode
+            king_id = king_match[0]
             
-            cursor.execute("SELECT user_id FROM Queue WHERE table_id = %s AND queue_position = 1", (table_id,))
+            # Get next player from queue
+            cursor.execute("""
+                SELECT user_id 
+                FROM Queue 
+                WHERE table_id = %s 
+                ORDER BY queue_position ASC 
+                LIMIT 1
+            """, (table_id,))
+            
             challenger = cursor.fetchone()
 
             if challenger:
                 challenger_id = challenger[0]
-                cursor.execute("DELETE FROM Queue WHERE table_id = %s AND queue_position = 1", (table_id,))
-                cursor.execute("UPDATE Queue SET queue_position = queue_position - 1 WHERE table_id = %s", (table_id,))
-
-                cursor.execute("UPDATE Matches SET loser_id = %s WHERE table_id = %s AND match_status = 'Active' AND loser_id IS NULL", (challenger_id, table_id,))
-
-
-                print(f"Challenger {challenger_id} is up next to face Winner {king_id} at Table {table_id}")
-        
+                
+                # Remove challenger from queue
+                cursor.execute("DELETE FROM Queue WHERE table_id = %s AND user_id = %s", (table_id, challenger_id))
+                
+                # Create new match
+                cursor.execute("""
+                    UPDATE Matches 
+                    SET loser_id = %s 
+                    WHERE table_id = %s AND winner_id = %s AND match_status = 'Active' AND loser_id IS NULL
+                """, (challenger_id, table_id, king_id))
+                
+                db.commit()
+                return True
         else:
-            print(f" No players are currently at Table {table_id}. Ready for new match and wating for 2 Players.")
-            cursor.execute("SELECT user_id FROM Queue WHERE table_id = %s ORDER BY queue_position ASC LIMIT 2", (table_id,))
+            # Regular match - get next 2 players from queue
+            cursor.execute("""
+                SELECT user_id 
+                FROM Queue 
+                WHERE table_id = %s 
+                ORDER BY queue_position ASC 
+                LIMIT 2
+            """, (table_id,))
+            
             players = cursor.fetchall()
 
-            if len(players) == 2:
-                player_1, player_2= players[0][0], players[1][0]
-
-                cursor.execute("DELETE FROM Queue WHERE table_id = %s AND (queue_position <= 2)", (table_id,))
-                cursor.execute("UPDATE Queue SET queue_position = queue_position - 2 WHERE table_id = %s", (table_id,))
-                cursor.execute("INSERT INTO Matches (table_id, winner_id, loser_id, elo_change, match_status) VALUES (%s,%s,%s,0, 'Active')", (table_id, player_1,player_2))
-
-                print(f"Players {player_1} AND {player_2} have filled the table {table_id} and have started a new match.")
+            if len(players) >= 2:
+                player_1, player_2 = players[0][0], players[1][0]
                 
-        db.commit()
-    
+                # Remove from queue
+                cursor.execute("DELETE FROM Queue WHERE table_id = %s AND user_id IN (%s, %s)", (table_id, player_1, player_2))
+                
+                # Create new match
+                cursor.execute("""
+                    INSERT INTO Matches (table_id, winner_id, loser_id, match_status) 
+                    VALUES (%s, %s, %s, 'Active')
+                """, (table_id, player_1, player_2))
+                
+                db.commit()
+                return True
+        
+        return False
+        
     except Exception as e:
         db.rollback()
-        print(f"Error starting a new session {e}")
+        print(f"Error starting a new session: {e}")
+        return False
     finally:
         cursor.close()
         db.close()
 
-
-def record_match_result(table_id, winner_id , loser_id, elo_change):
+def record_match_result(table_id, winner_id, loser_id, elo_change):
+    """Record match result and update ELO ratings"""
     db = get_db_connection()
     cursor = db.cursor()
 
     try:
-        Update_match = "UPDATE Matches SET match_status = 'Finished', elo_change = %s WHERE table_id = %s AND match_status = 'Active'"
-        sql_winner = "UPDATE Players SET total_wins = total_wins + 1, elo_rating = elo_rating + %s WHERE user_id = %s"
-        sql_loser = "UPDATE Players SET total_losses = total_losses + 1, elo_rating = elo_rating - %s WHERE user_id = %s"
-        return_king = "INSERT INTO Matches (table_id, winner_id, loser_id, elo_change, match_status) VALUES (%s, %s, NULL, 0, 'Active')"
-
-        cursor.execute(Update_match, (elo_change, table_id))
-        cursor.execute(sql_winner, (elo_change, winner_id))
-        cursor.execute(sql_loser, (elo_change, loser_id))
-        cursor.execute(return_king, (table_id, winner_id))
-
+        # 1. Update the match to finished
+        cursor.execute("""
+            UPDATE Matches 
+            SET match_status = 'Finished', 
+                elo_change = %s
+            WHERE table_id = %s 
+                AND match_status = 'Active'
+                AND ((winner_id = %s AND loser_id = %s) OR (winner_id = %s AND loser_id = %s))
+        """, (elo_change, table_id, winner_id, loser_id, loser_id, winner_id))
+        
+        # 2. Update winner's stats
+        cursor.execute("""
+            UPDATE Players 
+            SET total_wins = total_wins + 1, 
+                elo_rating = elo_rating + %s
+            WHERE user_id = %s
+        """, (elo_change, winner_id))
+        
+        # 3. Update loser's stats
+        cursor.execute("""
+            UPDATE Players 
+            SET total_losses = total_losses + 1, 
+                elo_rating = elo_rating - %s
+            WHERE user_id = %s
+        """, (elo_change, loser_id))
+        
+        # 4. Update ranks
         update_player_rank(winner_id, cursor)
         update_player_rank(loser_id, cursor)
-
+        
+        # 5. Winner becomes king (stays at table)
+        cursor.execute("""
+            INSERT INTO Matches (table_id, winner_id, match_status) 
+            VALUES (%s, %s, 'Active')
+        """, (table_id, winner_id))
+        
         db.commit()
-
-        print("Match , ELO, and Ranks were all updated successfully.")
-
+        
+        # 6. Start a new session (find challenger for king)
         start_new_session(table_id)
-
+        
     except Exception as e:
-        db.rollback() # Undo everything if this part fails and you get a eception
-        print(f"Error happened fix. {e}")
+        db.rollback()
+        print(f"Error recording match result: {e}")
+        raise
     finally:
         cursor.close()
         db.close()
-
-
-
