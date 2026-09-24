@@ -1,0 +1,25 @@
+# Backend dependencies.
+# Install with:  pip install -r requirements.txt
+#
+# Versions are the ones already present in the project's .venv, pinned so
+# a fresh machine gets the same behaviour rather than whatever is newest.
+
+Flask==3.1.2
+Flask-Cors==6.0.2
+Flask-JWT-Extended==4.7.1
+bcrypt==5.0.0
+
+# ORM layer. Flask-SQLAlchemy 3.1 requires SQLAlchemy 2.x, and the code
+# uses the 2.0 query style (db.select / db.session.scalars), so these two
+# versions go together.
+Flask-SQLAlchemy==3.1.1
+SQLAlchemy==2.0.36
+
+# Still required: SQLAlchemy doesn't talk to MySQL itself, it drives this
+# connector underneath (mysql+mysqlconnector:// in the connection URI).
+mysql-connector-python==9.5.0
+
+# Optional: lets Backend/.env be loaded automatically. Without it the app
+# still runs and falls back to the defaults in database.py, so it's safe
+# to skip - but with it you can keep the DB password out of the source.
+python-dotenv==1.0.1

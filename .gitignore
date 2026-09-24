@@ -1,0 +1,21 @@
+__pycache__/
+*.pyc
+node_modules/
+
+# Local secrets - never commit these.
+.env
+.env.local
+Backend/.env
+
+# Local virtualenv
+.venv/
+venv/
+
+# Build output
+dist/
+build/
+
+# Editor / OS noise
+.DS_Store
+.vscode/
+.idea/

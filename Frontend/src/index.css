@@ -1,0 +1,865 @@
+/* =====================================================================
+   Billiards League - design system
+
+   Purple and white, with gray as the quiet secondary. Purple is the
+   league's colour - the 4-ball - and it marks everything you can act on.
+   White carries the page, and gray does the supporting work: secondary
+   text, borders, and controls that shouldn't compete.
+
+   One element is allowed to be loud - the status panel, a solid block
+   of deep purple that answers the only question anyone opens this for:
+   can I play right now? Everything else stays white and calm beneath it.
+
+   Colours are defined once, here. Components use the role tokens
+   (--text, --accent, --on-accent...) rather than raw values.
+   ===================================================================== */
+
+:root {
+  /* Purple scale */
+  --purple-950: #1e0b3d;
+  --purple-900: #2e1065;
+  --purple-800: #3b1582;
+  --purple-700: #5b21b6;
+  --purple-600: #6d28d9;
+  --purple-500: #7c3aed;
+  --purple-300: #c4b5fd;
+  --purple-200: #ddd6fe;
+  --purple-100: #ede9fe;
+  --purple-50: #f6f3ff;
+
+  /* White and grays */
+  --white: #ffffff;
+  --gray-50: #f8f8fa;
+  --gray-100: #efeff3;
+  --gray-200: #e3e3e9;
+  --gray-300: #cdcdd6;
+  --gray-500: #676775;
+  --gray-700: #3d3d48;
+  --gray-900: #1b1a22;
+
+  /* Roles on the white page */
+  --page: var(--white);
+  --surface: var(--white);
+  --line: var(--gray-200);
+  --line-soft: var(--gray-100);
+  --text: var(--gray-900);
+  --text-muted: var(--gray-500);
+  --accent: var(--purple-600);
+  --accent-hover: var(--purple-700);
+  --accent-strong: var(--purple-800);
+  --accent-soft: var(--purple-100);
+  --accent-wash: var(--purple-50);
+
+  /* Roles on the purple status panel */
+  --on-accent: var(--white);
+  --on-accent-dim: rgba(255, 255, 255, 0.8);
+  --on-accent-faint: rgba(255, 255, 255, 0.62);
+  --on-accent-line: rgba(255, 255, 255, 0.28);
+  --on-accent-fill: rgba(255, 255, 255, 0.14);
+  --on-accent-fill-hover: rgba(255, 255, 255, 0.24);
+
+  /* Only for things going wrong */
+  --danger: #b42318;
+  --danger-soft: #fef3f2;
+  --danger-line: #fecdca;
+  --danger-on-dark: #fda29b;
+  --warn: #93370d;
+  --warn-soft: #fffaeb;
+  --warn-line: #fedf89;
+
+  /* Toasts sit on dark gray so they read against both page and panel */
+  --toast-bg: var(--gray-900);
+  --toast-text: var(--white);
+  --toast-muted: #b4b4c0;
+
+  --radius-sm: 8px;
+  --radius: 12px;
+  --radius-lg: 20px;
+
+  --shadow-card: 0 1px 2px rgba(30, 11, 61, 0.05), 0 4px 16px rgba(30, 11, 61, 0.04);
+  --shadow-panel: 0 20px 44px rgba(46, 16, 101, 0.26);
+  --shadow-toast: 0 12px 32px rgba(27, 26, 34, 0.28);
+
+  --font-display: 'Instrument Serif', Georgia, 'Times New Roman', serif;
+  --font-ui: 'Archivo', system-ui, -apple-system, 'Segoe UI', sans-serif;
+
+  /* Type scale */
+  --step--1: 0.84rem;
+  --step-0: 1rem;
+  --step-1: 1.22rem;
+  --step-2: 1.6rem;
+  --step-3: 2.2rem;
+  --step-4: 3.1rem;
+
+  color-scheme: light;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-ui);
+  font-size: var(--step-0);
+  line-height: 1.55;
+  color: var(--text);
+  background-color: var(--page);
+  /* A soft lilac glow from the top, so the white page doesn't read as
+     an unstyled document. */
+  background-image: radial-gradient(
+    ellipse 100% 55% at 50% -12%,
+    var(--accent-soft) 0%,
+    var(--page) 72%
+  );
+  background-repeat: no-repeat;
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--purple-200);
+  color: var(--purple-950);
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-weight: 600;
+  line-height: 1.15;
+}
+
+p {
+  margin: 0;
+}
+
+/* --- Keyboard focus must always be visible --- */
+:focus-visible {
+  outline: 2px solid var(--purple-500);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* --- Layout --- */
+
+.page {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: clamp(16px, 4vw, 40px) clamp(16px, 4vw, 32px) 64px;
+}
+
+.masthead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 28px;
+}
+
+.wordmark {
+  font-family: var(--font-display);
+  font-size: var(--step-3);
+  font-weight: 400;
+  letter-spacing: 0.01em;
+  color: var(--purple-900);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* The 4-ball: solid purple with its white number spot. */
+.wordmark-dot {
+  position: relative;
+  width: 0.66em;
+  height: 0.66em;
+  border-radius: 50%;
+  background: radial-gradient(circle at 32% 28%, #a98bfa 0%, var(--purple-600) 42%, var(--purple-900) 100%);
+  box-shadow: 0 2px 6px rgba(46, 16, 101, 0.35);
+  flex: none;
+}
+
+.wordmark-dot::after {
+  content: '';
+  position: absolute;
+  inset: 30%;
+  border-radius: 50%;
+  background: var(--white);
+  opacity: 0.92;
+}
+
+.masthead-side {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: var(--step--1);
+  color: var(--text-muted);
+}
+
+.masthead-user {
+  color: var(--text);
+}
+
+/* --- The hero: your status --- */
+
+.status-panel {
+  position: relative;
+  border-radius: var(--radius-lg);
+  padding: clamp(24px, 5vw, 40px);
+  margin-bottom: 28px;
+  color: var(--on-accent);
+  background: linear-gradient(155deg, var(--purple-600) 0%, var(--purple-800) 60%, var(--purple-900) 100%);
+  box-shadow: var(--shadow-panel);
+  overflow: hidden;
+}
+
+/* A faint highlight across the top edge, like light on a cushion. */
+.status-panel::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent);
+}
+
+.status-panel[data-tone='playing'] {
+  background: linear-gradient(155deg, var(--purple-700) 0%, var(--purple-900) 55%, var(--purple-950) 100%);
+}
+
+.status-panel :focus-visible {
+  outline-color: var(--white);
+}
+
+.status-headline {
+  font-family: var(--font-display);
+  font-size: clamp(2rem, 6vw, var(--step-4));
+  font-weight: 400;
+  line-height: 1.05;
+  margin-bottom: 10px;
+}
+
+.headline-icon {
+  margin-right: 10px;
+  vertical-align: -0.05em;
+}
+
+.headline-icon-crown {
+  color: var(--purple-200);
+}
+
+.status-sub {
+  color: var(--on-accent-dim);
+  max-width: 54ch;
+  margin-bottom: 24px;
+}
+
+.status-loading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 0;
+}
+
+.status-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.status-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--step--1);
+  color: var(--on-accent-dim);
+}
+
+.status-note {
+  margin-top: 14px;
+  font-size: var(--step--1);
+  color: var(--on-accent-faint);
+}
+
+.status-problem {
+  margin: -8px 0 20px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  font-size: var(--step--1);
+  background: var(--on-accent-fill);
+  border: 1px solid var(--on-accent-line);
+  color: var(--on-accent);
+}
+
+/* --- Buttons --- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-family: inherit;
+  font-size: var(--step-0);
+  font-weight: 600;
+  line-height: 1.2;
+  padding: 13px 24px;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  cursor: pointer;
+  color: var(--on-accent);
+  background: var(--accent);
+  transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.08s ease;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  font-size: var(--step-1);
+  padding: 15px 30px;
+  box-shadow: 0 2px 8px rgba(109, 40, 217, 0.28);
+}
+
+.btn-quiet {
+  background: transparent;
+  border-color: var(--gray-300);
+  color: var(--gray-700);
+}
+
+.btn-quiet:hover:not(:disabled) {
+  background: var(--gray-100);
+  color: var(--text);
+}
+
+.btn-small {
+  font-size: var(--step--1);
+  padding: 8px 14px;
+  gap: 6px;
+}
+
+.btn-link {
+  background: none;
+  border: none;
+  color: var(--accent-hover);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+  padding: 6px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.btn-link:hover {
+  color: var(--accent-strong);
+}
+
+/* Buttons on the purple panel flip: white is the loud one there. */
+.status-panel .btn-primary {
+  background: var(--white);
+  color: var(--purple-800);
+  box-shadow: 0 2px 10px rgba(30, 11, 61, 0.3);
+}
+
+.status-panel .btn-primary:hover:not(:disabled) {
+  background: var(--accent-wash);
+}
+
+.status-panel .btn-quiet {
+  border-color: var(--on-accent-line);
+  color: var(--on-accent);
+}
+
+.status-panel .btn-quiet:hover:not(:disabled) {
+  background: var(--on-accent-fill);
+  color: var(--on-accent);
+}
+
+/* The leave countdown lives on a disabled button, and it's information
+   people are waiting on - keep it legible rather than half-faded. */
+.status-panel .btn-quiet:disabled {
+  opacity: 1;
+  color: var(--on-accent-faint);
+  border-style: dashed;
+}
+
+.btn-score {
+  font-size: var(--step--1);
+  padding: 10px 12px;
+}
+
+.status-panel .btn-win {
+  background: var(--on-accent-fill-hover);
+  color: var(--on-accent);
+}
+
+.status-panel .btn-win:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.34);
+}
+
+.status-panel .btn-loss {
+  background: transparent;
+  border-color: var(--on-accent-line);
+  color: var(--on-accent-dim);
+}
+
+.status-panel .btn-loss:hover:not(:disabled) {
+  background: var(--on-accent-fill);
+  color: var(--on-accent);
+}
+
+/* --- Cards --- */
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr));
+  gap: 20px;
+  align-items: start;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 22px;
+  box-shadow: var(--shadow-card);
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.card-title {
+  font-size: var(--step-1);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.card-title svg {
+  color: var(--accent);
+}
+
+.count-pill {
+  font-size: var(--step--1);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  padding: 3px 11px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--purple-700);
+  white-space: nowrap;
+}
+
+/* --- Queue list --- */
+
+.queue-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.queue-row:last-child {
+  border-bottom: none;
+}
+
+/* Position numbers are a real sequence, so numbering them earns its place. */
+.queue-pos {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: var(--step--1);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  background: var(--gray-100);
+  color: var(--text-muted);
+}
+
+.queue-row[data-next='true'] .queue-pos {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.queue-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tag-you {
+  margin-left: 8px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--on-accent);
+  vertical-align: middle;
+}
+
+.up-next {
+  font-size: var(--step--1);
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+/* --- Leaderboard --- */
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+th {
+  text-align: left;
+  font-size: var(--step--1);
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 0 12px 10px 0;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+
+td {
+  padding: 11px 12px 11px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+tbody tr[data-self='true'] {
+  background: var(--accent-wash);
+}
+
+tbody tr[data-self='true'] td:first-child {
+  box-shadow: inset 3px 0 0 var(--accent);
+  padding-left: 10px;
+}
+
+.elo {
+  font-weight: 700;
+}
+
+.record {
+  white-space: nowrap;
+}
+
+.record-win {
+  color: var(--purple-700);
+  font-weight: 600;
+}
+.record-loss {
+  color: var(--text-muted);
+}
+
+.rank-name {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+/* --- Forms --- */
+
+.auth-shell {
+  max-width: 420px;
+  margin: clamp(24px, 8vh, 80px) auto;
+}
+
+.field {
+  margin-bottom: 14px;
+}
+
+.field-flush {
+  margin-bottom: 0;
+}
+
+.field label {
+  display: block;
+  font-size: var(--step--1);
+  font-weight: 600;
+  color: var(--gray-700);
+  margin-bottom: 6px;
+}
+
+.status-panel .field label {
+  color: var(--on-accent-dim);
+}
+
+input[type='text'],
+input[type='password'],
+input[type='number'] {
+  width: 100%;
+  font: inherit;
+  color: var(--text);
+  background: var(--white);
+  border: 1px solid var(--gray-300);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+input::placeholder {
+  color: var(--text-muted);
+}
+
+input:focus {
+  border-color: var(--purple-500);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.status-panel input:focus {
+  border-color: var(--white);
+  box-shadow: 0 0 0 3px var(--on-accent-line);
+}
+
+input[aria-invalid='true'] {
+  border-color: var(--danger);
+}
+
+.field-error {
+  display: block;
+  margin-top: 5px;
+  font-size: var(--step--1);
+  color: var(--danger);
+}
+
+.score-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.score-input {
+  text-align: center;
+  font-size: var(--step-2);
+  padding: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.quick-scores {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+/* --- Feedback --- */
+
+.banner {
+  padding: 12px 16px;
+  border-radius: var(--radius-sm);
+  margin-bottom: 18px;
+  font-size: var(--step--1);
+  border: 1px solid;
+}
+
+.banner-error {
+  background: var(--danger-soft);
+  border-color: var(--danger-line);
+  color: var(--danger);
+}
+
+.banner-offline {
+  background: var(--warn-soft);
+  border-color: var(--warn-line);
+  color: var(--warn);
+}
+
+/* Red text on purple is unreadable, so on the panel the error keeps its
+   red edge but the words stay white. */
+.status-panel .banner-on-panel {
+  background: var(--on-accent-fill);
+  border-color: var(--on-accent-line);
+  border-left: 4px solid var(--danger-on-dark);
+  color: var(--on-accent);
+}
+
+.toast-stack {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 100;
+  width: min(440px, calc(100vw - 32px));
+  /* Never taller than the screen, so every close button stays reachable. */
+  max-height: calc(100vh - 48px);
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 8px 12px 16px;
+  border-radius: var(--radius);
+  background: var(--toast-bg);
+  color: var(--toast-text);
+  border-left: 4px solid var(--toast-muted);
+  box-shadow: var(--shadow-toast);
+  font-size: var(--step--1);
+}
+
+.toast[data-tone='error'] {
+  border-left-color: var(--danger-on-dark);
+}
+.toast[data-tone='success'] {
+  border-left-color: var(--purple-300);
+}
+
+/* A long message scrolls inside its box instead of growing the box off
+   the screen - the failure that made the old error impossible to close. */
+.toast-message {
+  flex: 1;
+  min-width: 0;
+  max-height: 7.5em;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  padding-top: 5px;
+}
+
+.toast-count {
+  color: var(--toast-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.toast-close {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--toast-muted);
+  cursor: pointer;
+}
+
+.toast-close:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--toast-text);
+}
+
+.toast-close:focus-visible {
+  outline-color: var(--purple-300);
+}
+
+.empty {
+  color: var(--text-muted);
+  padding: 18px 0;
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+.small {
+  font-size: var(--step--1);
+}
+
+.countdown {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Screen-reader-only text, for live announcements. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The one orchestrated motion moment: a match appearing. */
+@keyframes rack-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.status-panel[data-animate='true'] {
+  animation: rack-in 0.32s ease-out;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spin {
+  flex: none;
+  animation: spin 0.9s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+@media (max-width: 560px) {
+  .score-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .masthead {
+    align-items: flex-start;
+  }
+
+  .status-actions .btn {
+    flex: 1 1 auto;
+  }
+}
