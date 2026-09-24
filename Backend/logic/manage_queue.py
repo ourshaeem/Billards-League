@@ -10,10 +10,11 @@ future change to matchmaking belongs here and nowhere else.
 """
 import logging
 
-from sqlalchemy import func, text
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 
-from database import retry_on_deadlock
+from database import retry_on_deadlock, seconds_since
+from logic.tables import league_for_table
 from models import Match, PoolTable, QueueEntry, db
 
 log = logging.getLogger(__name__)
@@ -211,7 +212,7 @@ def get_queue_status(user_id, table_id):
     goes negative, and the leave button never unlocks.
     """
     try:
-        seconds_expr = _seconds_since(QueueEntry.joined_at).label("seconds_waiting")
+        seconds_expr = seconds_since(QueueEntry.joined_at).label("seconds_waiting")
 
         row = db.session.execute(
             db.select(QueueEntry.queue_id, QueueEntry.queue_position, seconds_expr).where(
@@ -220,7 +221,7 @@ def get_queue_status(user_id, table_id):
             )
         ).first()
     except Exception as e:
-        # Only reachable on a database _seconds_since doesn't know. Letting
+        # Only reachable on a database seconds_since doesn't know. Letting
         # people leave beats trapping them, but it switches the wait rule
         # off, so it's logged loudly rather than passed over.
         log.error("wait timer unavailable, letting players leave freely: %s", e)
@@ -284,19 +285,6 @@ def _place_in_line(queue_id, stored_position, table_id):
         )
     )
     return (ahead or 0) + 1
-
-
-def _seconds_since(column):
-    """
-    Seconds between a timestamp column and now, computed by the database.
-
-    MySQL has TIMESTAMPDIFF; SQLite (the tests) doesn't, and the old code
-    treated that failure as "let everyone leave at once" - which switched
-    the wait rule off in exactly the place meant to prove it works.
-    """
-    if db.session.get_bind().dialect.name == "sqlite":
-        return db.cast((func.julianday("now") - func.julianday(column)) * 86400, db.Integer)
-    return func.timestampdiff(text("SECOND"), column, func.now())
 
 
 @retry_on_deadlock
@@ -431,14 +419,23 @@ def get_player_status(user_id, table_id):
             log.exception("matchmaking during a status check failed (table %s)", heal_table)
         match = _active_match_for_player(user_id)
 
+    # The league of the table the answer is about. A player mid-game in one
+    # league can be looking at the other; the frontend uses this to report
+    # the score under the right league's rules.
     if match is not None:
+        league = league_for_table(match.table_id)
         if match.is_in_progress:
-            return match.to_playing_dict(user_id)
-        return match.to_waiting_dict()
+            return match.to_playing_dict(user_id, league)
+        return match.to_waiting_dict(league)
 
     queue_status = get_queue_status(user_id, table_id)
     if queue_status:
-        return {"status": "queued", "table_id": table_id, **queue_status}
+        return {
+            "status": "queued",
+            "table_id": table_id,
+            "league_type": league_for_table(table_id),
+            **queue_status,
+        }
 
     return {"status": "idle"}
 

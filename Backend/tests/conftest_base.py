@@ -20,7 +20,7 @@ os.environ["DATABASE_URL"] = "sqlite:///:memory:"
 os.environ.setdefault("JWT_SECRET_KEY", "test-secret-key-long-enough-for-hs256")
 
 from app import create_app  # noqa: E402
-from models import Match, PoolTable, Player, Rank, db  # noqa: E402
+from models import BILLIARDS, PING_PONG, Match, PoolTable, Player, Rank, db  # noqa: E402
 
 SEED_RANKS = [
     ("Bronze", 0),
@@ -28,6 +28,10 @@ SEED_RANKS = [
     ("Gold", 1300),
     ("Platinum", 1500),
 ]
+
+# Well clear of the table numbers the older tests use as "some other
+# table" (2, 42, 99), so none of them lands on the ping pong table.
+PING_PONG_TABLE_ID = 10
 
 
 class BaseTestCase(unittest.TestCase):
@@ -55,7 +59,12 @@ class BaseTestCase(unittest.TestCase):
     def _seed(self):
         for name, min_elo in SEED_RANKS:
             db.session.add(Rank(rank_name=name, min_elo=min_elo))
-        db.session.add(PoolTable(table_id=1, table_name="Table 1"))
+        db.session.add(PoolTable(table_id=1, table_name="Table 1", league_type=BILLIARDS))
+        db.session.add(
+            PoolTable(
+                table_id=PING_PONG_TABLE_ID, table_name="Ping Pong Table", league_type=PING_PONG
+            )
+        )
         db.session.commit()
 
         self.alice = self.add_player("alice")
@@ -64,13 +73,14 @@ class BaseTestCase(unittest.TestCase):
 
     # --- helpers ---
 
-    def add_player(self, username, elo=1200):
+    def add_player(self, username, elo=1200, ping_pong_elo=1200):
         player = Player(
             username=username,
             first_name="Test",
             last_name="Player",
             password_hash="x",
             elo_rating=elo,
+            ping_pong_elo=ping_pong_elo,
         )
         db.session.add(player)
         db.session.commit()
@@ -142,3 +152,19 @@ class BaseTestCase(unittest.TestCase):
         with self.app.app_context():
             token = create_access_token(identity=str(user_id))
         return {"Authorization": f"Bearer {token}"}
+
+
+class ApiTestCase(BaseTestCase):
+    """Adds header-carrying request helpers."""
+
+    def login_as(self, user_id):
+        self._headers = self.auth_headers(user_id)
+
+    def get(self, url, **kwargs):
+        return self.client.get(url, headers=getattr(self, "_headers", {}), **kwargs)
+
+    def post(self, url, **kwargs):
+        return self.client.post(url, headers=getattr(self, "_headers", {}), **kwargs)
+
+    def patch(self, url, **kwargs):
+        return self.client.patch(url, headers=getattr(self, "_headers", {}), **kwargs)

@@ -12,7 +12,7 @@ import os
 import random
 import time
 
-from sqlalchemy import inspect, text
+from sqlalchemy import func, inspect, text
 from sqlalchemy.exc import DBAPIError
 
 from models import db
@@ -35,7 +35,7 @@ DB_PORT = os.environ.get("DB_PORT", "3306")
 
 # The fallback password above is the one that was already hardcoded here,
 # kept so a machine without a .env carries on working. It is not a safe
-# long-term answer: that string is in this repo's git history and the repo
+# Shaeem reminder long-term: that string is in this repo's git history and the repo
 # is on GitHub. Set DB_PASSWORD in Backend/.env and rotate the password on
 # the database itself.
 if "DB_PASSWORD" not in os.environ:
@@ -124,6 +124,27 @@ def check_schema():
         return False
 
 
+# Columns added since the database was first built, as (table, column,
+# definition). Each is added only if missing, and every definition either
+# allows NULL or carries a default, so adding one to a table that already
+# has rows can't fail. Kept as an explicit list rather than generated from
+# the models: an ALTER on the live database should be something a person
+# can read before it runs.
+ADDED_COLUMNS = [
+    ("Queue", "joined_at", "TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP"),
+    ("Pool_Tables", "league_type", "VARCHAR(20) NOT NULL DEFAULT 'billiards'"),
+    ("Players", "ping_pong_elo", "INTEGER NOT NULL DEFAULT 0"),
+    ("Players", "ping_pong_wins", "INTEGER NOT NULL DEFAULT 0"),
+    ("Players", "ping_pong_losses", "INTEGER NOT NULL DEFAULT 0"),
+    ("Players", "ping_pong_rank_id", "INTEGER NULL"),
+    ("Players", "country_flag", "VARCHAR(2) NULL"),
+    ("Players", "profile_picture", "VARCHAR(512) NULL"),
+]
+
+# The name ping pong's first table is given when ensure_schema creates it.
+PING_PONG_TABLE_NAME = "Ping Pong Table"
+
+
 def ensure_schema():
     """
     Bring an existing database up to what the app needs. Safe to run on
@@ -131,15 +152,21 @@ def ensure_schema():
     ever adds - no column or table is dropped.
 
     Steps:
-      1. Queue.joined_at exists (powers the leave-queue timer).
+      1. Every column in ADDED_COLUMNS exists: the leave-queue timer, each
+         table's league, the ping pong ratings, and profile flag/picture.
+         Players.ping_pong_rank_id also gets its foreign key to Ranks.
       2. Table 1 exists in Pool_Tables. The UI plays on table 1, and Queue
          and Matches both have foreign keys to it, so without the row
          every join fails.
-      3. Old-style Matches rows are converted. The original code kept the
+      3. The ping pong league has a table. Without one, nobody could join
+         its queue.
+      4. Players who have never played ping pong start in the rank a
+         rating of 0 earns, exactly as a newly registered player would.
+      5. Old-style Matches rows are converted. The original code kept the
          two seats in winner_id/loser_id during a game; the app now keeps
          them in king_id/challenger_id. Left unconverted, an old Active
          row is a king nobody can see or play.
-      4. Duplicate queue entries are removed, then every index the models
+      6. Duplicate queue entries are removed, then every index the models
          declare is created if missing - including the unique index that
          stops a double-tapped Join queueing someone twice.
 
@@ -147,7 +174,7 @@ def ensure_schema():
     """
     # Imported here: models imports db from this module's neighbour, and
     # these are only needed once the app is configured.
-    from models import Match, PoolTable, QueueEntry
+    from models import BILLIARDS, PING_PONG, STARTING_ELO, Match, Player, PoolTable, QueueEntry, Rank
 
     def step(label, fn):
         try:
@@ -159,23 +186,68 @@ def ensure_schema():
             db.session.rollback()
             print(f"[schema] {label} - skipped, couldn't apply it: {e}")
 
-    def add_joined_at():
-        columns = {c["name"] for c in inspect(db.engine).get_columns(QueueEntry.__tablename__)}
-        if "joined_at" in columns:
+    def add_columns():
+        added = []
+        inspector = inspect(db.engine)
+        existing_tables = {name.lower(): name for name in inspector.get_table_names()}
+        for table, column, definition in ADDED_COLUMNS:
+            actual = existing_tables.get(table.lower())
+            if actual is None:
+                continue  # check_schema() reports a missing table
+            if column in {c["name"] for c in inspector.get_columns(actual)}:
+                continue
+            db.session.execute(text(f"ALTER TABLE {actual} ADD COLUMN {column} {definition}"))
+            added.append(f"{table}.{column}")
+        return f"added {', '.join(added)}" if added else None
+
+    def add_ping_pong_rank_key():
+        # SQLite (the tests) can't add a constraint to an existing table,
+        # and gets it from the model when the tests build their tables.
+        if db.engine.dialect.name != "mysql":
+            return None
+        keys = inspect(db.engine).get_foreign_keys(Player.__tablename__)
+        if any(k["constrained_columns"] == ["ping_pong_rank_id"] for k in keys):
             return None
         db.session.execute(
             text(
-                f"ALTER TABLE {QueueEntry.__tablename__} "
-                "ADD COLUMN joined_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP"
+                f"ALTER TABLE {Player.__tablename__} ADD CONSTRAINT fk_players_ping_pong_rank "
+                f"FOREIGN KEY (ping_pong_rank_id) REFERENCES {Rank.__tablename__} (rank_id)"
             )
         )
-        return "added Queue.joined_at"
+        return "added the foreign key from Players.ping_pong_rank_id to Ranks"
 
     def add_table_one():
         if db.session.get(PoolTable, 1) is not None:
             return None
-        db.session.add(PoolTable(table_id=1, table_name="Table 1"))
+        db.session.add(PoolTable(table_id=1, table_name="Table 1", league_type=BILLIARDS))
         return "added 'Table 1' to Pool_Tables"
+
+    def add_ping_pong_table():
+        has_one = db.session.scalar(
+            db.select(PoolTable.table_id).where(PoolTable.league_type == PING_PONG).limit(1)
+        )
+        if has_one is not None:
+            return None
+        db.session.add(PoolTable(table_name=PING_PONG_TABLE_NAME, league_type=PING_PONG))
+        return f"added '{PING_PONG_TABLE_NAME}' to Pool_Tables"
+
+    def seed_ping_pong_ranks():
+        # Only players with no ping pong games and no rank yet, so this
+        # never overrides a rank that play has earned (or lost).
+        starting = Rank.for_elo(STARTING_ELO)
+        if starting is None:
+            return None
+        count = db.session.execute(
+            db.update(Player)
+            .where(
+                Player.ping_pong_rank_id.is_(None),
+                Player.ping_pong_elo == STARTING_ELO,
+                Player.ping_pong_wins == 0,
+                Player.ping_pong_losses == 0,
+            )
+            .values(ping_pong_rank_id=starting.rank_id)
+        ).rowcount
+        return f"gave {count} player(s) their starting ping pong rank" if count else None
 
     def convert_legacy_matches():
         # A row written by the new code always has a king, so "no king but
@@ -236,11 +308,33 @@ def ensure_schema():
                     added.append(index.name)
         return f"added index(es) {', '.join(added)}" if added else None
 
-    step("Queue timer column", add_joined_at)
+    # Columns first: every later step reads models that map them.
+    step("New columns", add_columns)
+    step("Ping pong rank key", add_ping_pong_rank_key)
     step("Table 1", add_table_one)
+    step("Ping pong table", add_ping_pong_table)
+    step("Ping pong ranks", seed_ping_pong_ranks)
     step("Old match rows", convert_legacy_matches)
     step("Duplicate queue entries", dedupe_queue)
     step("Indexes", add_indexes)
+
+
+def seconds_since(column):
+    """
+    Seconds between a timestamp column and now, computed by the database.
+
+    Both timestamps then come from one clock in one timezone. Doing this
+    subtraction in Python is the trap: the column is written by MySQL's
+    clock, datetime.now() reads the app server's, and the two disagree by
+    however far apart their timezones are.
+
+    MySQL has TIMESTAMPDIFF; SQLite (the tests) doesn't, and the old code
+    treated that failure as "let everyone leave at once" - which switched
+    the queue's wait rule off in exactly the place meant to prove it works.
+    """
+    if db.session.get_bind().dialect.name == "sqlite":
+        return db.cast((func.julianday("now") - func.julianday(column)) * 86400, db.Integer)
+    return func.timestampdiff(text("SECOND"), column, func.now())
 
 
 # MySQL's "deadlock found - try restarting transaction". It isn't a bug

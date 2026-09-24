@@ -23,7 +23,12 @@ from werkzeug.exceptions import HTTPException
 
 from database import check_schema, configure_app, ensure_schema, reset_session
 from logic.auth import login_user, register_user
+from logic.countries import country_list
 from logic.leaderboard import top50_leaderboard
+from logic.match_history import DEFAULT_LIMIT, MAX_LIMIT, league_history, player_history
+from logic.profile import EDITABLE_FIELDS, get_profile, update_profile
+from logic.tables import default_table_for, list_leagues, table_snapshot
+from models import BILLIARDS, LEAGUE_NAMES, LEAGUE_TYPES, Player, db
 from logic.manage_queue import (
     JOIN_RESULT_ALREADY_PLAYING,
     JOIN_RESULT_ALREADY_QUEUED,
@@ -40,17 +45,18 @@ from logic.manage_queue import (
 )
 from logic.record_match import (
     REPORT_RESULT_ALREADY_REPORTED,
+    REPORT_RESULT_INVALID_SCORE,
     REPORT_RESULT_NO_OPPONENT,
     REPORT_RESULT_RECORDED,
+    REPORT_RESULT_WRONG_LEAGUE,
     report_result,
 )
 
 log = logging.getLogger("billiards")
 
-# Highest number of balls a player can have sunk in a reported game.
-MAX_BALLS = 8
-
 GENERIC_ERROR = "Something went wrong on our side. Please try again in a moment."
+UNKNOWN_LEAGUE = "league_type must be 'billiards' or 'ping_pong'."
+ACCOUNT_GONE = "We couldn't find your account. Please sign in again."
 
 
 def create_app():
@@ -177,16 +183,101 @@ def read_table_id(source):
     return table_id, None
 
 
+def read_league(source):
+    """
+    league_type from a request body or query string: (league, None) or
+    (None, error_response). (None, None) means the request didn't say.
+    """
+    raw = source.get("league_type")
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None, None
+    if isinstance(raw, str) and raw.strip().lower() in LEAGUE_TYPES:
+        return raw.strip().lower(), None
+    return None, error(UNKNOWN_LEAGUE, 400)
+
+
+def read_table_and_league(source, must_exist=False):
+    """
+    Which table a request is about, and that table's league:
+    (table_id, league, None) or (None, None, error_response).
+
+      - table_id given: that table. If league_type is given as well it
+        has to be the table's league, so a ping pong request can't act on
+        the pool table.
+      - only league_type: that league's table.
+      - neither: table 1, as before there were two leagues.
+
+    must_exist refuses a table with no Pool_Tables row. Queue and Matches
+    both have foreign keys to Pool_Tables, so joining an unknown table
+    would otherwise fail deep inside the INSERT.
+    """
+    league, bad = read_league(source)
+    if bad:
+        return None, None, bad
+
+    if source.get("table_id") is None and league is not None:
+        table_id = default_table_for(league)
+        if table_id is None:
+            return None, None, error(f"The {LEAGUE_NAMES[league]} doesn't have a table yet.", 404)
+        return table_id, league, None
+
+    table_id, bad = read_table_id(source)
+    if bad:
+        return None, None, bad
+
+    table = get_pool_table(table_id)
+    if table is None and must_exist:
+        return None, None, error("That table doesn't exist.", 404)
+
+    table_league = table.league_type if table is not None else BILLIARDS
+    if league is not None and league != table_league:
+        table_name = table.table_name if table is not None else f"Table {table_id}"
+        return None, None, error(
+            f"{table_name} is in the {LEAGUE_NAMES[table_league]}, "
+            f"not the {LEAGUE_NAMES[league]}.",
+            400,
+        )
+    return table_id, table_league, None
+
+
+def read_limit(source):
+    """How many history entries to return: (limit, None) or (None, error)."""
+    problem = f"limit must be a whole number from 1 to {MAX_LIMIT}."
+    try:
+        limit = read_whole_number(source.get("limit", DEFAULT_LIMIT))
+    except ValueError:
+        return None, error(problem, 400)
+    if not 1 <= limit <= MAX_LIMIT:
+        return None, error(problem, 400)
+    return limit, None
+
+
 def register_routes(app):
     # 1. LEADERBOARD (Public)
     @app.route("/leaderboard", methods=["GET"])
     def get_leaderboard():
-        return jsonify(top50_leaderboard())
+        league, bad = read_league(request.args)
+        if bad:
+            return bad
+        return jsonify(top50_leaderboard(league or BILLIARDS))
+
+    # 1b. LEAGUES (Public) - each league and the table it plays on.
+    @app.route("/leagues", methods=["GET"])
+    def get_leagues():
+        return jsonify({"leagues": list_leagues()})
 
     # 2. QUEUE (Public)
     @app.route("/queue/<int:table_id>", methods=["GET"])
     def get_queue(table_id):
         return jsonify(view_queue(table_id))
+
+    # 2b. WHO IS AT A TABLE (Public)
+    @app.route("/table/<int:table_id>", methods=["GET"])
+    def get_table(table_id):
+        snapshot = table_snapshot(table_id)
+        if snapshot is None:
+            return error("That table doesn't exist.", 404)
+        return jsonify({"table": snapshot})
 
     # 3. JOIN QUEUE (Protected)
     @app.route("/queue/join", methods=["POST"])
@@ -194,15 +285,11 @@ def register_routes(app):
     def join_table_queue():
         user_id = int(get_jwt_identity())
 
-        data = json_body()
-        table_id, bad = read_table_id(data)
+        # league_type picks the league's table; table_id picks a table
+        # directly. Both, and they have to agree.
+        table_id, _league, bad = read_table_and_league(json_body(), must_exist=True)
         if bad:
             return bad
-
-        # Queue and Matches both have foreign keys to Pool_Tables, so an
-        # unknown table would fail deep inside the INSERT. Say so plainly.
-        if get_pool_table(table_id) is None:
-            return error("That table doesn't exist.", 404)
 
         try:
             result = join_queue(user_id, table_id)
@@ -242,8 +329,7 @@ def register_routes(app):
     def leave_table_queue():
         user_id = int(get_jwt_identity())
 
-        data = json_body()
-        table_id, bad = read_table_id(data)
+        table_id, _league, bad = read_table_and_league(json_body())
         if bad:
             return bad
 
@@ -324,7 +410,7 @@ def register_routes(app):
     @jwt_required()
     def get_match_status():
         user_id = int(get_jwt_identity())
-        table_id, bad = read_table_id(request.args)
+        table_id, _league, bad = read_table_and_league(request.args)
         if bad:
             return bad
 
@@ -345,19 +431,23 @@ def register_routes(app):
 
         data = json_body()
 
+        # The league the player thinks this game is in. Optional; the
+        # game's real league is what decides the rules either way.
+        league_type, bad = read_league(data)
+        if bad:
+            return bad
+
         # Scores can legitimately arrive as strings from a form, or null.
-        # Coerce once here so the comparison below can't raise a TypeError.
+        # Coerce once here so the comparisons later can't raise a
+        # TypeError. my_balls / opp_balls hold the score in the game's own
+        # units: balls sunk in billiards, points in ping pong. Whether the
+        # score is a possible one is checked against the game's league,
+        # under the same lock that records it (see report_result).
         try:
-            my_balls = read_whole_number(data.get("my_balls"))
-            opp_balls = read_whole_number(data.get("opp_balls"))
+            my_score = read_whole_number(data.get("my_balls"))
+            opp_score = read_whole_number(data.get("opp_balls"))
         except ValueError:
             return error("Both scores are required, as whole numbers.", 400)
-
-        if not (0 <= my_balls <= MAX_BALLS) or not (0 <= opp_balls <= MAX_BALLS):
-            return error(f"Scores must be between 0 and {MAX_BALLS}.", 400)
-
-        if my_balls == opp_balls:
-            return error("Scores can't be a tie - somebody sank the 8.", 400)
 
         # Which game the player is reporting - see report_result.
         expected_match_id = data.get("match_id")
@@ -368,7 +458,9 @@ def register_routes(app):
                 return error("match_id must be a whole number.", 400)
 
         try:
-            outcome, details = report_result(user_id, my_balls, opp_balls, expected_match_id)
+            outcome, details = report_result(
+                user_id, my_score, opp_score, expected_match_id, league_type
+            )
         except Exception:
             log.exception("recording a match failed (user %s)", user_id)
             reset_session()
@@ -376,11 +468,103 @@ def register_routes(app):
 
         if outcome == REPORT_RESULT_RECORDED:
             return jsonify({"message": "Match recorded.", **details})
+        if outcome == REPORT_RESULT_INVALID_SCORE:
+            return error(details["problem"], 400)
+        if outcome == REPORT_RESULT_WRONG_LEAGUE:
+            actual = details["league_type"]
+            return error(
+                f"That game is in the {LEAGUE_NAMES[actual]}, so it wasn't recorded here.",
+                409,
+                league_type=actual,
+            )
         if outcome == REPORT_RESULT_ALREADY_REPORTED:
             return error("That game has already been reported, so this score wasn't saved.", 409)
         if outcome == REPORT_RESULT_NO_OPPONENT:
             return error("You don't have an opponent yet - waiting on the queue.", 409)
         return error("You don't have a game in progress to report.", 404)
+
+    # 6b. MATCH HISTORY (Public)
+    # The latest finished games in a league - or at one table, which
+    # implies its league.
+    @app.route("/matches/history", methods=["GET"])
+    def get_match_history():
+        table_id = None
+        if request.args.get("table_id") is not None:
+            table_id, league, bad = read_table_and_league(request.args, must_exist=True)
+        else:
+            league, bad = read_league(request.args)
+        if bad:
+            return bad
+
+        limit, bad = read_limit(request.args)
+        if bad:
+            return bad
+
+        league = league or BILLIARDS
+        return jsonify(
+            {"league_type": league, "matches": league_history(league, table_id, limit)}
+        )
+
+    # 6c. ONE PLAYER'S MATCH HISTORY (Public)
+    @app.route("/players/<int:user_id>/matches", methods=["GET"])
+    def get_player_matches(user_id):
+        league, bad = read_league(request.args)
+        if bad:
+            return bad
+        limit, bad = read_limit(request.args)
+        if bad:
+            return bad
+
+        if db.session.get(Player, user_id) is None:
+            return error("That player doesn't exist.", 404)
+
+        league = league or BILLIARDS
+        return jsonify(
+            {
+                "user_id": user_id,
+                "league_type": league,
+                "matches": player_history(user_id, league, limit),
+            }
+        )
+
+    # 6d. YOUR PROFILE (Protected)
+    @app.route("/profile", methods=["GET"])
+    @jwt_required()
+    def get_my_profile():
+        profile = get_profile(int(get_jwt_identity()))
+        if profile is None:
+            return error(ACCOUNT_GONE, 404)
+        return jsonify({"profile": profile})
+
+    # 6e. CHANGE YOUR FLAG / PICTURE (Protected)
+    # Send either field or both; null or "" clears one. A refusal names
+    # the field it's about in "field", so the form can show it there.
+    @app.route("/profile", methods=["PATCH"])
+    @jwt_required()
+    def update_my_profile():
+        user_id = int(get_jwt_identity())
+        data = json_body()
+
+        if not any(field in data for field in EDITABLE_FIELDS):
+            return error("Nothing to change - send a country_flag or a profile_picture.", 400)
+
+        try:
+            problem, profile = update_profile(user_id, data)
+        except Exception:
+            log.exception("updating a profile failed (user %s)", user_id)
+            reset_session()
+            return error("Couldn't save your profile just now. Please try again.", 500)
+
+        if problem:
+            return error(problem["message"], 400, field=problem["field"])
+        if profile is None:
+            return error(ACCOUNT_GONE, 404)
+        return jsonify({"message": "Profile saved.", "profile": profile})
+
+    # 6f. COUNTRIES FOR THE FLAG PICKER (Public)
+    @app.route("/countries", methods=["GET"])
+    def get_countries():
+        return jsonify({"countries": country_list()})
 
     # 7. REGISTER (Public)
     @app.route("/register", methods=["POST"])

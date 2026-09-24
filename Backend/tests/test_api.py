@@ -10,23 +10,10 @@ import unittest
 
 from unittest import mock
 
-from tests.conftest_base import BaseTestCase
+from tests.conftest_base import ApiTestCase
 from models import STARTING_ELO, Match, Player, PoolTable, QueueEntry, db
 
 from logic.manage_queue import LEAVE_UNLOCK_SECONDS
-
-
-class ApiTestCase(BaseTestCase):
-    """Adds header-carrying request helpers."""
-
-    def login_as(self, user_id):
-        self._headers = self.auth_headers(user_id)
-
-    def get(self, url, **kwargs):
-        return self.client.get(url, headers=getattr(self, "_headers", {}), **kwargs)
-
-    def post(self, url, **kwargs):
-        return self.client.post(url, headers=getattr(self, "_headers", {}), **kwargs)
 
 
 class PublicRoutes(ApiTestCase):
@@ -172,6 +159,21 @@ class ErrorsNeverLeakInternals(ApiTestCase):
         with mock.patch("app.top50_leaderboard", side_effect=self.SQL_ERROR):
             self.assert_readable(self.client.get("/leaderboard"), 500)
 
+    def test_match_history(self):
+        with mock.patch("app.league_history", side_effect=self.SQL_ERROR):
+            self.assert_readable(self.client.get("/matches/history"), 500)
+        with mock.patch("app.player_history", side_effect=self.SQL_ERROR):
+            self.assert_readable(self.client.get(f"/players/{self.alice}/matches"), 500)
+
+    def test_profile_update(self):
+        self.login_as(self.alice)
+        with mock.patch("app.update_profile", side_effect=self.SQL_ERROR):
+            self.assert_readable(self.patch("/profile", json={"country_flag": "US"}), 500)
+
+    def test_table_snapshot(self):
+        with mock.patch("app.table_snapshot", side_effect=self.SQL_ERROR):
+            self.assert_readable(self.client.get("/table/1"), 500)
+
     def test_a_join_whose_matchmaking_fails_still_counts_as_joined(self):
         """Matchmaking reruns on the next poll, so this isn't the player's problem."""
         self.login_as(self.alice)
@@ -192,6 +194,16 @@ class MalformedInput(ApiTestCase):
                 res = self.post(path, data=body, content_type="application/json")
                 self.assertLess(res.status_code, 500, f"{path} with {body!r}")
                 self.assertIn("message", res.get_json())
+            res = self.patch("/profile", data=body, content_type="application/json")
+            self.assertEqual(res.status_code, 400, f"/profile with {body!r}")
+            self.assertIn("message", res.get_json())
+
+    def test_league_type_that_is_not_text_is_a_400(self):
+        self.login_as(self.alice)
+        for league in (1, ["ping_pong"], {"a": 1}, True):
+            res = self.post("/queue/join", json={"league_type": league})
+            self.assertEqual(res.status_code, 400, league)
+        self.assertEqual(self.queued_user_ids(), [])
 
     def test_register_with_numbers_instead_of_text(self):
         res = self.client.post(
@@ -342,12 +354,13 @@ class MatchStatusRoute(ApiTestCase):
 
         self.assertEqual(
             set(body.keys()),
-            {"status", "opponent", "opponent_id", "match_id", "table_id"},
+            {"status", "opponent", "opponent_id", "match_id", "table_id", "league_type"},
             "StatusPanel.jsx reads exactly these keys",
         )
         self.assertEqual(body["status"], "playing")
         self.assertEqual(body["opponent"], "alice")
         self.assertEqual(body["opponent_id"], self.alice)
+        self.assertEqual(body["league_type"], "billiards")
 
     def test_opponent_resolves_from_either_seat(self):
         """Whichever seat you're in, the opponent is the other player."""

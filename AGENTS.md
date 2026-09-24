@@ -109,9 +109,16 @@ is a contract with the frontend. See *Shared contracts* below.
   moves to Backend 1. Note the date and the test name in the pull request
   so the handoff is on the record.
 
-**Candidate next features:** multiple tables (the backend already keys
-everything on `table_id`; the UI hardcodes table 1), match history, an
-admin view to clear a stuck table, seasons.
+**Candidate next features:** more than one table per league (the backend
+accepts any `table_id`; the UI uses each league's first table), an admin
+view to clear a stuck table, seasons.
+
+**Shipped, handed to Backend 1 on 2026-09-23:** the ping pong league,
+match history and player profiles. Tests: `tests/test_leagues.py`
+(`LeagueRouting`, `PingPongRecording`, `PingPongScoreRules`,
+`PingPongEloTests`, `LeaderboardByLeague`, `TableSnapshotRoute`),
+`tests/test_match_history.py`, `tests/test_profile.py`, and the
+`ensure_schema` additions in `tests/test_schema.py`.
 
 ---
 
@@ -167,6 +174,11 @@ class names in `Frontend/src/components/`.
   hardcode colours in components.
 - The palette is purple and white, with gray as the secondary colour.
   Red and amber are for errors and warnings only.
+- Two league themes, chosen by `<html data-league>`: billiards (purple,
+  white, gray - the default) and ping pong (white, purple, gray - the
+  status panel turns white). A theme only redefines tokens, including
+  the `--panel-*` roles the status panel uses; components never check
+  which league they're drawn in.
 - Quality floor, not negotiable: works down to a phone width, visible
   keyboard focus, readable contrast, `prefers-reduced-motion` respected.
 - The status panel is the one loud element on the page. If something else
@@ -181,6 +193,17 @@ with Frontend 2, or rename props without checking with Frontend 1.
 
 These are the seams. Changing one side alone breaks the app.
 
+### Leagues and tables
+
+A league is a property of a table: `Pool_Tables.league_type`, either
+`billiards` or `ping_pong`. A match belongs to its table's league.
+Routes that act on a table accept `table_id`, `league_type` (meaning
+that league's table), or both - and then they must agree, or the answer
+is `400`. Neither means table 1. An unknown `league_type` is `400`.
+
+`GET /leagues` returns `{ leagues: [{ league_type, name, table_id,
+table_name }] }` - how the UI finds each league's table.
+
 ### `GET /match/status?table_id=1`
 
 Returns exactly one of (built by `manage_queue.get_player_status()`, which
@@ -189,9 +212,14 @@ also gives matchmaking a chance when the player is waiting):
 | `status`                 | Meaning                              | Extra keys |
 |--------------------------|--------------------------------------|------------|
 | `idle`                   | Not queued, not playing              | -          |
-| `queued`                 | Waiting for an opponent              | `queue_position`, `seconds_waiting`, `can_leave`, `leave_unlocks_in` |
-| `waiting_for_challenger` | Won and holding the table            | `match_id`, `table_id` |
-| `playing`                | Game in progress                     | `opponent`, `opponent_id`, `match_id`, `table_id` |
+| `queued`                 | Waiting for an opponent              | `queue_position`, `seconds_waiting`, `can_leave`, `leave_unlocks_in`, `table_id`, `league_type` |
+| `waiting_for_challenger` | Won and holding the table            | `match_id`, `table_id`, `league_type` |
+| `playing`                | Game in progress                     | `opponent`, `opponent_id`, `match_id`, `table_id`, `league_type` |
+
+`league_type` is the league of the game, which can differ from the league
+asked about: a player plays one game at a time, whichever league's
+screen they are looking at. The UI reports the score with *this*
+`league_type`, never the screen's.
 
 `queue_position` is the player's actual place in line, 1 at the front.
 (The stored column only counts up; never show it directly.)
@@ -216,13 +244,19 @@ server-side; the disabled button is only a courtesy.
 
 ### `POST /match/record`
 
-Body `{ my_balls, opp_balls, match_id }` - whole numbers, 0-8, no tie.
+Body `{ my_balls, opp_balls, match_id, league_type }`. The scores are
+whole numbers in the game's own units - balls in billiards (0-8, no
+tie), points in ping pong (one game to 11, won by two). They are judged
+against the league of the game actually being played, under the lock
+that records it; a score that doesn't fit is `400` with the reason.
 `match_id` is the game the player saw; if that game has already been
 recorded (their opponent reported first) the answer is `409` and nothing
 is saved. Without it, a late report lands on the sender's *next* game.
-`match_id` is optional for old clients, but the UI always sends it.
-Returns `{ message, elo_change, winner_id }`. `404` no game in progress,
-`409` no opponent yet.
+`league_type` is the league the player thinks the game is in; if it's
+wrong the answer is `409` (body carries the real `league_type`) and
+nothing is saved. Both are optional for old clients, but the UI always
+sends them. Returns `{ message, elo_change, winner_id }`. `404` no game
+in progress, `409` no opponent yet.
 
 ### `POST /table/step-down`
 
@@ -234,6 +268,55 @@ The freed table goes to the first two in the queue.
 
 `[{ queue_position, username }]` in order, `queue_position` being the
 place in line (1, 2, 3...).
+
+### `GET /leaderboard?league_type=`
+
+`[{ username, elo_rating, total_wins, total_losses, rank_name }]` - the
+same shape for both leagues, filled from that league's columns. No
+`league_type` means billiards.
+
+### Player cards
+
+Wherever other players are shown with their picture, the backend sends a
+card (`Player.to_card`): `{ user_id, username, country_flag,
+profile_picture, league_type, elo, rank_name, wins, losses }`, with the
+numbers for `league_type`. The hover card reads these; hovering never
+makes a request. `country_flag` is an ISO code (`"CA"`) - the client
+draws the emoji. `profile_picture` is an http(s) link or null.
+
+### `GET /table/<table_id>`
+
+`{ table: { table_id, table_name, league_type, state, match_id, king,
+challenger, king_streak } }`. `state` is `free`,
+`waiting_for_challenger` or `playing`; `king` / `challenger` are player
+cards or null. `404` for an unknown table. Public.
+
+### `GET /matches/history?league_type=&table_id=&limit=`
+
+`{ league_type, matches: [...] }`, newest first. Each entry:
+`{ match_id, table_id, league_type, winner, loser, winner_score,
+loser_score, elo_change, seconds_ago }`, `winner` / `loser` being player
+cards. `seconds_ago` is measured by the database's clock (the same
+reason as the queue timer), from when the game *finished*. `limit` is
+1-50, default 20. Public.
+
+### `GET /players/<user_id>/matches?league_type=&limit=`
+
+As above, for one player, each entry adding `result`: `won` or `lost`.
+`404` for an unknown player. Public.
+
+### `GET /profile`, `PATCH /profile`
+
+`GET` returns `{ profile: { user_id, username, first_name, last_name,
+country_flag, profile_picture, leagues: { billiards: {elo, rank_name,
+wins, losses}, ping_pong: {...} } } }`. `PATCH` takes `{ country_flag?,
+profile_picture? }` (null or `""` clears one) and returns `{ message,
+profile }`. A value that can't be saved is `400` with `field` naming it,
+so the form can show the message beside that field; nothing is saved.
+Only those two fields are editable. Both need a login.
+
+`GET /countries` returns `{ countries: [{ code, name }] }`, sorted by
+name - the picker's list, and the only codes `PATCH` accepts.
 
 ### Error response shape
 

@@ -73,8 +73,11 @@ def register_user(username, first_name, last_name, password_text):
                 # into a String column is what produced the str/bytes mess
                 # that used to crash login.
                 password_hash=hashed.decode("utf-8"),
-                elo_rating=STARTING_ELO,
-                rank_id=starting_rank.rank_id if starting_rank else None,
+                # Everyone starts level in both leagues.
+                billiards_elo=STARTING_ELO,
+                billiards_rank_id=starting_rank.rank_id if starting_rank else None,
+                ping_pong_elo=STARTING_ELO,
+                ping_pong_rank_id=starting_rank.rank_id if starting_rank else None,
             )
         )
         db.session.commit()

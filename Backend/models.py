@@ -28,12 +28,22 @@ environment it was written in.
 """
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import func
+from sqlalchemy.orm import synonym
 
 db = SQLAlchemy()
 
 # Where every new player's rating starts. Matches the database's own
 # column default and the Ranks table, whose lowest tier begins at 0.
 STARTING_ELO = 0
+
+# The two leagues. Each is the value of Pool_Tables.league_type and of the
+# `league_type` the API accepts. A table belongs to exactly one league, and
+# a match belongs to the league of the table it was played on - so
+# matchmaking, which only ever deals in tables, needs no league logic.
+BILLIARDS = "billiards"
+PING_PONG = "ping_pong"
+LEAGUE_TYPES = (BILLIARDS, PING_PONG)
+LEAGUE_NAMES = {BILLIARDS: "Billiards League", PING_PONG: "Ping Pong League"}
 
 
 class Player(db.Model):
@@ -51,6 +61,12 @@ class Player(db.Model):
     # as either str or bytes.
     password_hash = db.Column(db.String(255), nullable=False)
 
+    # --- Billiards standing ---
+    # These columns predate the ping pong league, so their names don't say
+    # "billiards". billiards_elo / billiards_rank_id are the same columns
+    # under the league's name - aliases, not copies. A second pair of
+    # columns holding the same rating would be two homes for one fact,
+    # which is how this project's worst bugs started.
     elo_rating = db.Column(
         db.Integer, nullable=False, default=STARTING_ELO, server_default=str(STARTING_ELO)
     )
@@ -58,21 +74,102 @@ class Player(db.Model):
     total_losses = db.Column(db.Integer, nullable=False, default=0, server_default="0")
 
     rank_id = db.Column(db.Integer, db.ForeignKey("Ranks.rank_id"), nullable=True)
-    rank = db.relationship("Rank", back_populates="players", lazy="joined")
+    rank = db.relationship(
+        "Rank", back_populates="players", foreign_keys=[rank_id], lazy="joined"
+    )
 
-    def to_leaderboard_dict(self):
+    billiards_elo = synonym("elo_rating")
+    billiards_rank_id = synonym("rank_id")
+
+    # --- Ping pong standing ---
+    ping_pong_elo = db.Column(
+        db.Integer, nullable=False, default=STARTING_ELO, server_default=str(STARTING_ELO)
+    )
+    ping_pong_wins = db.Column(db.Integer, nullable=False, default=0, server_default="0")
+    ping_pong_losses = db.Column(db.Integer, nullable=False, default=0, server_default="0")
+    ping_pong_rank_id = db.Column(db.Integer, db.ForeignKey("Ranks.rank_id"), nullable=True)
+    # Loaded on first use rather than joined. Matchmaking reads players
+    # under SELECT ... FOR UPDATE, and every joined table there is another
+    # set of locked rows. There are only a handful of Ranks, so after the
+    # first lookup these come from the session without a query.
+    ping_pong_rank = db.relationship("Rank", foreign_keys=[ping_pong_rank_id])
+
+    # --- Profile ---
+    # ISO 3166-1 alpha-2 code ("US"), not the emoji itself: a code can be
+    # checked against a list, and the flag is drawn from it by the client.
+    country_flag = db.Column(db.String(2), nullable=True)
+    profile_picture = db.Column(db.String(512), nullable=True)
+
+    # Where each league keeps its numbers, so code that works for either
+    # league reads one table instead of branching everywhere.
+    LEAGUE_FIELDS = {
+        BILLIARDS: {
+            "elo": "elo_rating",
+            "rank_id": "rank_id",
+            "rank": "rank",
+            "wins": "total_wins",
+            "losses": "total_losses",
+        },
+        PING_PONG: {
+            "elo": "ping_pong_elo",
+            "rank_id": "ping_pong_rank_id",
+            "rank": "ping_pong_rank",
+            "wins": "ping_pong_wins",
+            "losses": "ping_pong_losses",
+        },
+    }
+
+    def standing(self, league=BILLIARDS):
+        """This player's numbers in one league."""
+        fields = self.LEAGUE_FIELDS[league]
+        rank = getattr(self, fields["rank"])
+        return {
+            "elo": getattr(self, fields["elo"]),
+            "rank_name": rank.rank_name if rank else "Unranked",
+            "wins": getattr(self, fields["wins"]) or 0,
+            "losses": getattr(self, fields["losses"]) or 0,
+        }
+
+    def to_leaderboard_dict(self, league=BILLIARDS):
         """
-        Exactly the shape /leaderboard already returns.
+        Exactly the shape /leaderboard already returns, for either league.
 
         "Unranked" mirrors the LEFT JOIN in the old SQL: a player whose
         rank hasn't been calculated yet still has to appear on the ladder.
         """
+        standing = self.standing(league)
         return {
             "username": self.username,
-            "elo_rating": self.elo_rating,
-            "total_wins": self.total_wins,
-            "total_losses": self.total_losses,
-            "rank_name": self.rank.rank_name if self.rank else "Unranked",
+            "elo_rating": standing["elo"],
+            "total_wins": standing["wins"],
+            "total_losses": standing["losses"],
+            "rank_name": standing["rank_name"],
+        }
+
+    def to_card(self, league=BILLIARDS):
+        """
+        A player as other people see them: enough to draw their avatar and
+        flag, plus the rank and rating the hover card shows for `league`.
+        """
+        return {
+            "user_id": self.user_id,
+            "username": self.username,
+            "country_flag": self.country_flag,
+            "profile_picture": self.profile_picture,
+            "league_type": league,
+            **self.standing(league),
+        }
+
+    def to_profile_dict(self):
+        """The signed-in player's own profile, with both leagues."""
+        return {
+            "user_id": self.user_id,
+            "username": self.username,
+            "first_name": self.first_name,
+            "last_name": self.last_name,
+            "country_flag": self.country_flag,
+            "profile_picture": self.profile_picture,
+            "leagues": {league: self.standing(league) for league in LEAGUE_TYPES},
         }
 
     def __repr__(self):
@@ -80,7 +177,7 @@ class Player(db.Model):
 
 
 class Rank(db.Model):
-    """An ELO tier. Maps to the existing `Ranks` table."""
+    """An ELO tier. Maps to the existing `Ranks` table. Both leagues share it."""
 
     __tablename__ = "Ranks"
 
@@ -88,7 +185,7 @@ class Rank(db.Model):
     rank_name = db.Column(db.String(50), nullable=False)
     min_elo = db.Column(db.Integer, nullable=False)
 
-    players = db.relationship("Player", back_populates="rank")
+    players = db.relationship("Player", back_populates="rank", foreign_keys="Player.rank_id")
 
     @classmethod
     def for_elo(cls, elo):
@@ -142,12 +239,21 @@ class PoolTable(db.Model):
     current_streak = db.Column(db.Integer, nullable=True, default=0, server_default="0")
     table_record_streak = db.Column(db.Integer, nullable=True, default=0, server_default="0")
 
+    # Which league plays here: BILLIARDS or PING_PONG. Deliberately not the
+    # league_id above - that points at the Leagues table, which holds
+    # groups of players rather than sports. Every table that existed before
+    # ping pong is a pool table, which is what the default says.
+    league_type = db.Column(
+        db.String(20), nullable=False, default=BILLIARDS, server_default=BILLIARDS
+    )
+
     current_king = db.relationship("Player", foreign_keys=[current_king_id], lazy="joined")
 
     def to_dict(self):
         return {
             "table_id": self.table_id,
             "table_name": self.table_name,
+            "league_type": self.league_type,
             "current_king": self.current_king.username if self.current_king else None,
             "current_streak": self.current_streak or 0,
             "table_record_streak": self.table_record_streak or 0,
@@ -262,6 +368,9 @@ class Match(db.Model):
     player_one = db.relationship("Player", foreign_keys=[player_one_id], lazy="joined")
     player_two = db.relationship("Player", foreign_keys=[player_two_id], lazy="joined")
     winner = db.relationship("Player", foreign_keys=[winner_id], lazy="joined")
+    # Not joined: the loser always sat in one of the seats above, so it is
+    # already in the session and loading it costs no query.
+    loser = db.relationship("Player", foreign_keys=[loser_id])
 
     __table_args__ = (
         db.Index("idx_matches_table_status", "table_id", "match_status"),
@@ -312,8 +421,11 @@ class Match(db.Model):
         return self.player_two_id if winner_id == self.player_one_id else self.player_one_id
 
     # --- Serialization: the exact /match/status payloads ---
+    # league_type is the league of this match's table. The frontend sends it
+    # back when reporting the score, so a ping pong game is never scored
+    # with billiards rules because the screen happened to be on billiards.
 
-    def to_playing_dict(self, user_id):
+    def to_playing_dict(self, user_id, league=BILLIARDS):
         """The 'playing' response, byte-for-byte as the frontend expects."""
         opponent = self.player_two if self.player_one_id == user_id else self.player_one
         return {
@@ -322,15 +434,42 @@ class Match(db.Model):
             "opponent_id": self.opponent_of(user_id),
             "match_id": self.match_id,
             "table_id": self.table_id,
+            "league_type": league,
         }
 
-    def to_waiting_dict(self):
+    def to_waiting_dict(self, league=BILLIARDS):
         """The 'waiting_for_challenger' response."""
         return {
             "status": "waiting_for_challenger",
             "match_id": self.match_id,
             "table_id": self.table_id,
+            "league_type": league,
         }
+
+    def to_history_dict(self, league, seconds_ago=None, viewer_id=None):
+        """
+        One finished game for the history feeds.
+
+        seconds_ago is worked out by the database (see match_history.py),
+        for the same reason the queue timer is: a timestamp written by
+        MySQL's clock and read against Python's is off by the difference
+        in their timezones. viewer_id adds "result" from that player's side.
+        """
+        entry = {
+            "match_id": self.match_id,
+            "table_id": self.table_id,
+            "league_type": league,
+            "winner": self.winner.to_card(league) if self.winner else None,
+            "loser": self.loser.to_card(league) if self.loser else None,
+            # None for games recorded before scores were stored.
+            "winner_score": self.balls_for(self.winner_id),
+            "loser_score": self.balls_for(self.loser_id),
+            "elo_change": self.elo_change,
+            "seconds_ago": seconds_ago,
+        }
+        if viewer_id is not None:
+            entry["result"] = "won" if viewer_id == self.winner_id else "lost"
+        return entry
 
     def __repr__(self):
         return (

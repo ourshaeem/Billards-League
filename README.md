@@ -1,6 +1,12 @@
-# Billiards League
+# Billiards & Ping Pong League
 
-Queue up for the pool table, report your score, and track the ladder.
+Queue up for the pool table or the ping pong table, report your score,
+and track each league's ladder.
+
+After signing in, players pick a league for the session. Both leagues run
+the same king-of-the-hill queue: winner stays on, next in line plays
+them. Each league has its own ratings, ranks, ladder, match history and
+colours (billiards: purple, white, gray; ping pong: white, purple, gray).
 
 Stack: **MySQL + Python/Flask + React (Vite)**. Kept deliberately plain so
 the app can be ported to React Native later.
@@ -26,8 +32,14 @@ There is no SQL to run by hand. On startup `ensure_schema()` (in
 `ensure_schema()` only ever adds - no column or table is dropped - and
 it is safe to run on every start. It:
 
-- adds `Queue.joined_at` if missing (the leave-queue timer),
+- adds any missing column the app has gained since the database was
+  built (listed in `ADDED_COLUMNS`): `Queue.joined_at` (the leave-queue
+  timer), `Pool_Tables.league_type`, the ping pong ratings and records
+  on `Players`, and each player's `country_flag` and `profile_picture`,
 - adds "Table 1" to `Pool_Tables` if missing (joins fail without it),
+- adds a "Ping Pong Table" if no table belongs to the ping pong league,
+- gives players who have never played ping pong the starting ping pong
+  rank, as registration now does,
 - converts match rows written by the original code, which kept the two
   seats in `winner_id`/`loser_id`, into `king_id`/`challenger_id`,
 - removes duplicate queue entries, then adds the indexes the models
@@ -262,19 +274,31 @@ Backend/
   logic/
     manage_queue.py         joining, leaving, matchmaking (single source of
                             truth), player status, giving up the table
-    record_match.py         reporting results, ELO, king handoff
+    record_match.py         reporting results, score rules and ELO for
+                            both leagues, king handoff
+    tables.py               which league a table is in, and who's at it
+    match_history.py        finished games, per league and per player
+    profile.py              reading a profile, changing flag and picture
+    countries.py            the country list flags are picked from
     auth.py                 registration and login
-    leaderboard.py          top 50
+    leaderboard.py          top 50, per league
   tests/                    ORM tests against in-memory SQLite
 
 Frontend/
   index.html                fonts, title
   src/
     api.js                  ALL backend calls (the React Native port starts here)
-    App.jsx                 session, polling, actions
-    index.css               design tokens and component styles
+    App.jsx                 session, league choice, polling, actions
+    leagues.js              league names, score rules, quick-score buttons
+    flags.js                country code -> flag emoji
+    index.css               design tokens (both league themes) and styles
     components/
       StatusPanel.jsx       the four player states, leave / give-up buttons
+      LeagueSelect.jsx      choosing billiards or ping pong after sign-in
+      ActiveTable.jsx       who is at the table right now
+      MatchHistory.jsx      recent games, everyone's or yours
+      ProfileSettings.jsx   flag, picture, standing in both leagues
+      Player.jsx            avatar, name + flag, hover card (rank, rating)
       Panels.jsx            queue list, ladder
       AuthScreens.jsx       sign in, register
       Feedback.jsx          toasts, offline banner, field errors
@@ -282,8 +306,31 @@ Frontend/
 AGENTS.md                   the six roles and the contracts between them
 ```
 
+## How the two leagues work
+
+A league is a property of a table (`Pool_Tables.league_type`). Queues
+and matches were already keyed on `table_id`, so matchmaking - still
+exactly one implementation, `attempt_matchmaking()` - serves both
+leagues without knowing either exists. A match's league is its table's.
+
+- **Billiards** ratings are the original `elo_rating` / `rank_id`
+  columns. The model also calls them `billiards_elo` /
+  `billiards_rank_id`; those are aliases, not second copies.
+- **Ping pong** has its own `ping_pong_elo`, `ping_pong_rank_id`,
+  `ping_pong_wins`, `ping_pong_losses`. Both leagues share the `Ranks`
+  tiers.
+- **Scores** are judged by the rules of the game's own league, whatever
+  league the request claims: billiards 0-8, no tie; ping pong one game to
+  11, won by two (11-9, 12-10). A report sent with the wrong
+  `league_type` is refused (409) and nothing is saved.
+- **Ping pong ELO** uses the standard Elo expectation with tiered
+  K-factors - 40 for a player's first 10 games, 24 after that, 16 from a
+  rating of 1200 - averaged between the two players so the ladder stays
+  zero-sum. A lopsided game moves up to 50% more than a close one (11-0
+  vs 11-9 or a deuce game). Billiards keeps its flat K of 32.
+
 ## Next steps
 
-`AGENTS.md` lists candidates. The most valuable is probably **multiple
-tables**: the backend already keys everything on `table_id`, but the UI
-hardcodes table 1, so it's mostly a frontend job.
+`AGENTS.md` lists candidates. With two leagues on two tables, **more
+tables per league** is mostly a frontend job now: the backend already
+accepts any `table_id`, and the UI uses each league's first table.

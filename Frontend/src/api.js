@@ -24,6 +24,9 @@ const API_BASE =
 const REQUEST_TIMEOUT_MS = 10000;
 
 export const TOKEN_KEY = 'token';
+// Which league the player chose for this session. Kept beside the token so
+// a refresh returns them to the same league, and cleared with it at sign-out.
+const LEAGUE_KEY = 'league';
 
 // A message longer than this, or one that looks like the inside of the
 // server, is swapped for a plain sentence. The backend no longer sends
@@ -73,8 +76,27 @@ export function clearSession() {
     localStorage.removeItem(TOKEN_KEY);
     localStorage.removeItem('user_id');
     localStorage.removeItem('username');
+    localStorage.removeItem(LEAGUE_KEY);
   } catch {
     /* nothing useful to do */
+  }
+}
+
+export function getStoredLeague() {
+  try {
+    return localStorage.getItem(LEAGUE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+/** Pass null to forget the choice, so the next sign-in asks again. */
+export function setStoredLeague(league) {
+  try {
+    if (league) localStorage.setItem(LEAGUE_KEY, league);
+    else localStorage.removeItem(LEAGUE_KEY);
+  } catch {
+    // Not fatal - the choice just won't survive a refresh.
   }
 }
 
@@ -200,11 +222,39 @@ async function request(path, { method = 'GET', body, auth = false, signal } = {}
   };
 }
 
+/** A path with a query string, leaving out anything undefined or null. */
+function withQuery(path, params) {
+  const query = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null) query.set(key, String(value));
+  });
+  const text = query.toString();
+  return text ? `${path}?${text}` : path;
+}
+
 // --- Public data ---
 
-export const getLeaderboard = (signal) => request('/leaderboard', { signal });
+/** Each league and the table it plays on: { leagues: [{league_type, name, table_id, table_name}] } */
+export const getLeagues = (signal) => request('/leagues', { signal });
+
+export const getLeaderboard = (league, signal) =>
+  request(withQuery('/leaderboard', { league_type: league }), { signal });
 
 export const getQueue = (tableId = 1, signal) => request(`/queue/${tableId}`, { signal });
+
+/** Who is at a table right now, as player cards: { table: {state, king, challenger, ...} } */
+export const getTable = (tableId, signal) => request(`/table/${tableId}`, { signal });
+
+/** The latest finished games in a league: { league_type, matches: [...] } */
+export const getMatchHistory = (league, { limit } = {}, signal) =>
+  request(withQuery('/matches/history', { league_type: league, limit }), { signal });
+
+/** One player's finished games in a league, each with result "won" or "lost". */
+export const getPlayerMatches = (userId, league, { limit } = {}, signal) =>
+  request(withQuery(`/players/${userId}/matches`, { league_type: league, limit }), { signal });
+
+/** Country codes and names for the flag picker: { countries: [{code, name}] } */
+export const getCountries = (signal) => request('/countries', { signal });
 
 export const checkHealth = (signal) => request('/health', { signal });
 
@@ -216,27 +266,57 @@ export const login = (username, password) =>
 export const register = (payload) =>
   request('/register', { method: 'POST', body: payload });
 
+// --- Profile ---
+
+/** The signed-in player's profile, with their standing in both leagues. */
+export const getProfile = (signal) => request('/profile', { auth: true, signal });
+
+/**
+ * changes: { country_flag?, profile_picture? } - null or '' clears one.
+ * A refusal carries data.field, naming the field the message is about.
+ */
+export const updateProfile = (changes) =>
+  request('/profile', { method: 'PATCH', auth: true, body: changes });
+
 // --- Match / queue actions ---
+// tableId says which table; league is sent alongside so the server can
+// refuse a request whose table and league disagree.
 
 export const getMatchStatus = (tableId = 1, signal) =>
   request(`/match/status?table_id=${tableId}`, { auth: true, signal });
 
-export const joinQueue = (tableId = 1) =>
-  request('/queue/join', { method: 'POST', auth: true, body: { table_id: tableId } });
+export const joinQueue = (tableId = 1, league) =>
+  request('/queue/join', {
+    method: 'POST',
+    auth: true,
+    body: { table_id: tableId, league_type: league },
+  });
 
-export const leaveQueue = (tableId = 1) =>
-  request('/queue/leave', { method: 'POST', auth: true, body: { table_id: tableId } });
+export const leaveQueue = (tableId = 1, league) =>
+  request('/queue/leave', {
+    method: 'POST',
+    auth: true,
+    body: { table_id: tableId, league_type: league },
+  });
 
 /**
  * matchId is the game the player saw when they filled in the score. The
  * server refuses the report (409) if that game was already recorded -
  * otherwise a late second report would land on the player's next game.
+ *
+ * league is the league of that game (the status payload's league_type).
+ * Scores are in the game's own units: balls sunk, or points in ping pong.
  */
-export const recordMatch = (myBalls, oppBalls, matchId) =>
+export const recordMatch = (myScore, oppScore, matchId, league) =>
   request('/match/record', {
     method: 'POST',
     auth: true,
-    body: { my_balls: Number(myBalls), opp_balls: Number(oppBalls), match_id: matchId },
+    body: {
+      my_balls: Number(myScore),
+      opp_balls: Number(oppScore),
+      match_id: matchId,
+      league_type: league,
+    },
   });
 
 /** A king with no challenger gives up the table. */

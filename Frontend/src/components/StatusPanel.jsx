@@ -13,21 +13,37 @@
  *
  * Until the first answer arrives, status is null and the panel says it's
  * checking - rather than guessing "idle" and offering that same button.
+ *
+ * `league` is the league on screen. A game or a held table is reported
+ * with its own league_type, which can be the other league - one person
+ * plays one game at a time, whichever screen they're looking at. The
+ * scorecard always follows the game's league, never the screen's.
  */
 import React, { useEffect, useState } from 'react';
 import { Swords, Users, Clock, Crown, LoaderCircle } from 'lucide-react';
 
+import { leagueInfo } from '../leagues.js';
+
 export function StatusPanel({
   status,
   problem,
+  league,
+  tableName,
   queueLength,
   onJoin,
   onLeave,
   onRecord,
   onStepDown,
+  onSwitchLeague,
   busy,
 }) {
   const state = status ? status.status || 'idle' : 'loading';
+  const elsewhere =
+    (state === 'playing' || state === 'waiting_for_challenger') &&
+    status.league_type &&
+    status.league_type !== league
+      ? status.league_type
+      : null;
 
   return (
     <section
@@ -42,11 +58,20 @@ export function StatusPanel({
           {problem} The panel below may be out of date - retrying automatically.
         </p>
       )}
+      {elsewhere && (
+        <p className="status-problem status-elsewhere">
+          This is your game in the {leagueInfo(elsewhere).name}.{' '}
+          <button type="button" className="btn-link" onClick={() => onSwitchLeague(elsewhere)}>
+            Switch to that league
+          </button>
+        </p>
+      )}
       {state === 'loading' && <LoadingState />}
       {state === 'playing' && (
         <PlayingState
           key={status.match_id}
           status={status}
+          league={status.league_type || league}
           onRecord={onRecord}
           busy={busy}
         />
@@ -58,7 +83,7 @@ export function StatusPanel({
         <QueuedState status={status} onLeave={onLeave} busy={busy} queueLength={queueLength} />
       )}
       {state === 'idle' && (
-        <IdleState onJoin={onJoin} busy={busy} queueLength={queueLength} />
+        <IdleState onJoin={onJoin} busy={busy} queueLength={queueLength} tableName={tableName} />
       )}
     </section>
   );
@@ -78,11 +103,11 @@ function LoadingState() {
   );
 }
 
-function IdleState({ onJoin, busy, queueLength }) {
+function IdleState({ onJoin, busy, queueLength, tableName }) {
   return (
     <>
       <h2 className="status-headline" id="status-headline">
-        Table&nbsp;1 is open to you
+        {tableName || 'The table'} is open to you
       </h2>
       <p className="status-sub">
         {queueLength === 0
@@ -209,9 +234,11 @@ function HoldingTableState({ queueLength, onStepDown, busy }) {
   );
 }
 
-function PlayingState({ status, onRecord, busy }) {
+function PlayingState({ status, league, onRecord, busy }) {
   const [scores, setScores] = useState({ mine: '', theirs: '' });
   const [error, setError] = useState(null);
+  const info = leagueInfo(league);
+  const unit = info.scoreUnit;
 
   // Note: a new match gets a clean scorecard because the parent gives
   // this component key={status.match_id}, so React remounts it with fresh
@@ -238,19 +265,17 @@ function PlayingState({ status, onRecord, busy }) {
       setError('Scores need to be whole numbers.');
       return;
     }
-    if (mine === theirs) {
-      setError("Scores can't be a tie - somebody sank the 8.");
-      return;
-    }
-    if (mine < 0 || theirs < 0 || mine > 8 || theirs > 8) {
-      setError('Scores run from 0 to 8.');
+    const problem = info.scoreProblem(mine, theirs);
+    if (problem) {
+      setError(problem);
       return;
     }
 
     // The match id says which game this score is for. If the opponent has
     // already reported it, the server refuses rather than filing this
-    // score against the next game.
-    onRecord(mine, theirs, status.match_id);
+    // score against the next game. The league lets the server refuse a
+    // score sent under the wrong league's rules.
+    onRecord(mine, theirs, status.match_id, league);
   };
 
   return (
@@ -260,20 +285,23 @@ function PlayingState({ status, onRecord, busy }) {
         You're playing {status.opponent}
       </h2>
       <p className="status-sub">
-        Table {status.table_id}. When the game is done, put the balls each of you
-        sank below and the ladder updates for both of you.
+        {info.name}, table {status.table_id}. When the game is done,{' '}
+        {unit === 'points'
+          ? 'put the points each of you scored below'
+          : 'put the balls each of you sank below'}{' '}
+        and the ladder updates for both of you.
       </p>
 
       <form onSubmit={submit} noValidate>
         <div className="score-grid">
           <div className="field field-flush">
-            <label htmlFor="score-mine">Your balls</label>
+            <label htmlFor="score-mine">Your {unit}</label>
             <input
               id="score-mine"
               className="score-input"
               type="number"
               min="0"
-              max="8"
+              max={info.maxScore}
               inputMode="numeric"
               value={scores.mine}
               onChange={(e) => {
@@ -283,13 +311,15 @@ function PlayingState({ status, onRecord, busy }) {
             />
           </div>
           <div className="field field-flush">
-            <label htmlFor="score-theirs">{status.opponent}&rsquo;s balls</label>
+            <label htmlFor="score-theirs">
+              {status.opponent}&rsquo;s {unit}
+            </label>
             <input
               id="score-theirs"
               className="score-input"
               type="number"
               min="0"
-              max="8"
+              max={info.maxScore}
               inputMode="numeric"
               value={scores.theirs}
               onChange={(e) => {
@@ -301,18 +331,19 @@ function PlayingState({ status, onRecord, busy }) {
         </div>
 
         <div className="quick-scores">
-          <button type="button" className="btn btn-score btn-win" onClick={() => setBoth(8, 0)}>
-            Won 8&ndash;0
-          </button>
-          <button type="button" className="btn btn-score btn-win" onClick={() => setBoth(8, 4)}>
-            Won 8&ndash;4
-          </button>
-          <button type="button" className="btn btn-score btn-loss" onClick={() => setBoth(0, 8)}>
-            Lost 0&ndash;8
-          </button>
-          <button type="button" className="btn btn-score btn-loss" onClick={() => setBoth(4, 8)}>
-            Lost 4&ndash;8
-          </button>
+          {info.quickScores.map(({ mine, theirs }) => {
+            const won = mine > theirs;
+            return (
+              <button
+                key={`${mine}-${theirs}`}
+                type="button"
+                className={`btn btn-score ${won ? 'btn-win' : 'btn-loss'}`}
+                onClick={() => setBoth(mine, theirs)}
+              >
+                {won ? 'Won' : 'Lost'} {mine}&ndash;{theirs}
+              </button>
+            );
+          })}
         </div>
 
         {error && (

@@ -13,7 +13,7 @@ from tests.conftest_base import BaseTestCase
 from sqlalchemy.exc import DBAPIError, InternalError
 
 from database import MYSQL_DEADLOCK, check_schema, ensure_schema, retry_on_deadlock
-from models import Match, PoolTable, QueueEntry, db
+from models import PING_PONG, Match, Player, PoolTable, QueueEntry, db
 
 
 class EnsureSchemaTests(BaseTestCase):
@@ -105,6 +105,51 @@ class EnsureSchemaTests(BaseTestCase):
         ensure_schema()
 
         self.assertIsNotNone(db.session.get(PoolTable, 1))
+
+    def test_columns_added_since_are_added_to_an_older_database(self):
+        """A database from before profiles and ping pong gains the columns."""
+        for table, column in (
+            ("Players", "profile_picture"),
+            ("Players", "country_flag"),
+            ("Players", "ping_pong_wins"),
+            ("Pool_Tables", "league_type"),
+        ):
+            db.session.execute(db.text(f"ALTER TABLE {table} DROP COLUMN {column}"))
+        db.session.commit()
+        self.assertFalse(check_schema())
+
+        ensure_schema()
+
+        self.assertTrue(check_schema())
+        db.session.expire_all()
+        self.assertEqual(db.session.get(PoolTable, 1).league_type, "billiards",
+                         "an existing table is a pool table")
+        self.assertEqual(db.session.get(Player, self.alice).ping_pong_wins, 0)
+
+    def test_adds_a_ping_pong_table_when_there_is_none(self):
+        db.session.execute(db.delete(PoolTable).where(PoolTable.league_type == PING_PONG))
+        db.session.commit()
+
+        ensure_schema()
+        ensure_schema()
+
+        tables = list(db.session.scalars(db.select(PoolTable).where(PoolTable.league_type == PING_PONG)))
+        self.assertEqual(len(tables), 1, "added once, however many times it runs")
+
+    def test_players_new_to_ping_pong_get_the_starting_rank(self):
+        newcomer = self.add_player("dave", ping_pong_elo=0)
+        veteran = self.add_player("erin", ping_pong_elo=0)
+        db.session.get(Player, veteran).ping_pong_losses = 3
+        db.session.commit()
+
+        ensure_schema()
+
+        db.session.expire_all()
+        self.assertEqual(db.session.get(Player, newcomer).ping_pong_rank.rank_name, "Bronze")
+        self.assertIsNone(
+            db.session.get(Player, veteran).ping_pong_rank_id,
+            "a rank that play produced is left alone",
+        )
 
     def test_duplicate_queue_entries_are_removed_and_the_unique_index_restored(self):
         db.session.execute(db.text("DROP INDEX uq_queue_user_table"))
