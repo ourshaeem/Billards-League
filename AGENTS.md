@@ -71,17 +71,30 @@ a Backend 1 job, not a Backend 3 job.
 ## Backend 2 - logistics and data
 
 **Owns:** the database itself, configuration, dependencies, and how the
-app gets run.
+app gets run - locally and in production.
 
 **Files:** `Backend/database.py`, `Backend/requirements.txt`,
-`Backend/.env.example`, `.gitignore`, schema.
+`Backend/.env.example`, `.gitignore`, `Backend/Dockerfile`,
+`Backend/.dockerignore`, `Backend/gunicorn.conf.py`, schema.
 
 **Standing responsibilities**
 - Schema migrations are additive and idempotent, in `ensure_schema()`.
 - Secrets live in `Backend/.env`, never in source. (The old MySQL
   password and JWT key are still in this repo's git history - both should
   be rotated. Steps are in `Backend/.env.example`.)
-- Dependencies stay pinned in `requirements.txt`.
+- Dependencies stay pinned in `requirements.txt`. The MySQL driver is
+  PyMySQL (`mysql+pymysql://`), locally and in production; anything that
+  reads a MySQL error code goes through `mysql_error_code()`, because
+  PyMySQL keeps it somewhere other drivers don't.
+- Production configuration comes only from environment variables. The
+  image sets `APP_ENV=production`, which turns a missing `DATABASE_URL`
+  or `JWT_SECRET_KEY` into a refusal to start - never a quiet fallback to
+  the local defaults. `ensure_schema()` runs once per start, via
+  `flask prepare-db` in a separate process gunicorn launches before its
+  workers - never per worker, and never inside gunicorn's master: workers
+  are forks of the master, and a master that has opened a database
+  connection makes them crash (seen on macOS). It must be able to build
+  an empty database from nothing.
 - Query performance: queue and match lookups filter on `table_id`,
   `user_id` and `match_status`. The indexes are declared on the models
   and `ensure_schema()` creates any that are missing.

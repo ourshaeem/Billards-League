@@ -15,9 +15,17 @@ bcrypt==5.0.0
 Flask-SQLAlchemy==3.1.1
 SQLAlchemy==2.0.36
 
-# Still required: SQLAlchemy doesn't talk to MySQL itself, it drives this
-# connector underneath (mysql+mysqlconnector:// in the connection URI).
-mysql-connector-python==9.5.0
+# The MySQL driver SQLAlchemy runs on (mysql+pymysql:// in the connection
+# URI), locally and on AWS RDS alike. Pure Python, so the container needs
+# no compiler or MySQL client libraries.
+PyMySQL==1.2.3
+# PyMySQL needs this to sign in to MySQL 8's default authentication
+# (caching_sha2_password) over a connection that isn't encrypted.
+cryptography==50.0.1
+
+# Serves the app in production (see gunicorn.conf.py). `python app.py`
+# is Flask's development server and isn't meant for the internet.
+gunicorn==26.2.0
 
 # Optional: lets Backend/.env be loaded automatically. Without it the app
 # still runs and falls back to the defaults in database.py, so it's safe

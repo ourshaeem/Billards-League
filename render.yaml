@@ -1,0 +1,32 @@
+# Render Blueprint for the backend API.
+#
+# In Render: New -> Blueprint -> connect this repository and choose the
+# branch below. Render reads this file, asks for DATABASE_URL, and
+# generates JWT_SECRET_KEY by itself - a random 256-bit key nobody has to
+# type or share. Every push to the branch that touches Backend/ redeploys.
+services:
+  - type: web
+    name: league-api
+    runtime: docker
+    # Beside the AWS RDS database, which is in us-east-1 (N. Virginia).
+    region: virginia
+    # Sleeps after ~15 idle minutes; the first request after that takes up
+    # to a minute. Change to starter to keep it awake.
+    plan: free
+    # The deployment code lives here; change to main once it's merged.
+    branch: prebackend
+    dockerfilePath: ./Backend/Dockerfile
+    dockerContext: ./Backend
+    healthCheckPath: /health
+    # Frontend-only changes don't rebuild the API.
+    buildFilter:
+      paths:
+        - Backend/**
+    envVars:
+      # mysql+pymysql://admin:PASSWORD@ENDPOINT:3306/league?ssl_ca=/app/certs/rds-global-bundle.pem
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: CORS_ORIGINS
+        value: "*"

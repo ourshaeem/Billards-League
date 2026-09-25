@@ -27,11 +27,15 @@ python app.py             # http://localhost:5000
 ```
 
 There is no SQL to run by hand. On startup `ensure_schema()` (in
-`Backend/database.py`) brings an existing database up to date, and
-`check_schema()` then reports anything still missing in plain words.
-`ensure_schema()` only ever adds - no column or table is dropped - and
-it is safe to run on every start. It:
+`Backend/database.py`) builds an empty database or brings an existing one
+up to date, and `check_schema()` then reports anything still missing in
+plain words. `ensure_schema()` only ever adds - no column or table is
+dropped - and it is safe to run on every start. It:
 
+- creates any table the models map that doesn't exist yet (on a brand-new
+  database, all of them), and fills an empty `Ranks` table with the
+  league's tiers (Unranked 0, Bronze 200, Silver 500, Gold 800,
+  Platinum 1200),
 - adds any missing column the app has gained since the database was
   built (listed in `ADDED_COLUMNS`): `Queue.joined_at` (the leave-queue
   timer), `Pool_Tables.league_type`, the ping pong ratings and records
@@ -67,6 +71,46 @@ on the same wifi, where `localhost` means the phone itself), create
 ```
 VITE_API_BASE=http://192.168.1.50:5000
 ```
+
+### Deploying
+
+The backend ships as a Docker image (`Backend/Dockerfile`) served by
+gunicorn, for any host that runs containers - Render, Railway, AWS. It
+reads everything from environment variables; `Backend/.env.example`
+lists them. Two are required:
+
+- `DATABASE_URL` - e.g. an AWS RDS MySQL endpoint:
+  `mysql+pymysql://USER:PASSWORD@ENDPOINT:3306/DB_NAME?ssl_ca=/app/certs/rds-global-bundle.pem`
+  (`ssl_ca` encrypts the connection, using Amazon's certificates baked
+  into the image).
+- `JWT_SECRET_KEY` - a long random string.
+
+On each start gunicorn first runs `flask prepare-db` (which runs
+`ensure_schema()`) as a separate process, before any worker takes a
+request, so a fresh database needs no setup. You can also run it by hand
+from `Backend/`: `flask --app app prepare-db`.
+If the database can't be reached, or `JWT_SECRET_KEY` is missing, the
+start fails with the reason in the host's log rather than running
+broken. Health check path: `/health`.
+
+On Render, `render.yaml` at the repository root describes the whole
+service: New -> Blueprint, pick this repo, paste `DATABASE_URL` when
+asked. Render generates `JWT_SECRET_KEY` itself.
+
+To try the image locally:
+
+```bash
+docker build -t league-api Backend
+docker run --rm -p 5000:5000 --env-file Backend/.env league-api
+```
+
+(`--env-file` passes your settings in; inside a container, a database on
+your own machine is `host.docker.internal`, not `127.0.0.1`.)
+
+CORS currently allows any origin (`CORS_ORIGINS=*`), for the React Native
+work. Sign-in uses the Authorization header, not cookies, so this doesn't
+let other sites act as a player; narrow it once the web frontend has an
+address.
 
 ### Tests
 
@@ -270,7 +314,9 @@ Backend/
   app.py                    HTTP routes (app factory: create_app)
   models.py                 SQLAlchemy models + API serializers
   database.py               connection URI, ensure_schema, check_schema,
-                            deadlock retry
+                            prepare_database, deadlock retry
+  Dockerfile                production image (gunicorn, non-root user)
+  gunicorn.conf.py          workers, port, and the one-per-start schema run
   logic/
     manage_queue.py         joining, leaving, matchmaking (single source of
                             truth), player status, giving up the table
@@ -304,6 +350,7 @@ Frontend/
       Feedback.jsx          toasts, offline banner, field errors
 
 AGENTS.md                   the six roles and the contracts between them
+render.yaml                 Render Blueprint: deploys Backend/ as a Docker service
 ```
 
 ## How the two leagues work

@@ -11,6 +11,7 @@ import logging
 import os
 from datetime import timedelta
 
+import click
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from flask_jwt_extended import (
@@ -21,7 +22,7 @@ from flask_jwt_extended import (
 )
 from werkzeug.exceptions import HTTPException
 
-from database import check_schema, configure_app, ensure_schema, reset_session
+from database import configure_app, is_production, prepare_database, reset_session
 from logic.auth import login_user, register_user
 from logic.countries import country_list
 from logic.leaderboard import top50_leaderboard
@@ -55,6 +56,13 @@ from logic.record_match import (
 log = logging.getLogger("billiards")
 
 GENERIC_ERROR = "Something went wrong on our side. Please try again in a moment."
+
+# Signs login tokens when JWT_SECRET_KEY isn't set - local development
+# only. It is in this repo's history, so anyone could forge a login with
+# it; a production start without a real key is refused (see create_app).
+DEV_JWT_SECRET = "super-secret-pool-key-change-in-production"
+# HS256 wants a key at least as long as its 256-bit output.
+MIN_JWT_SECRET_LENGTH = 32
 UNKNOWN_LEAGUE = "league_type must be 'billiards' or 'ping_pong'."
 ACCOUNT_GONE = "We couldn't find your account. Please sign in again."
 
@@ -69,24 +77,81 @@ def create_app():
     """
     app = Flask(__name__)
 
-    app.config["JWT_SECRET_KEY"] = os.environ.get(
-        "JWT_SECRET_KEY", "super-secret-pool-key-change-in-production"
-    )
-    if app.config["JWT_SECRET_KEY"] == "super-secret-pool-key-change-in-production":
-        print(
-            "WARNING: JWT_SECRET_KEY is using the default baked into app.py. "
-            "Set a real one in Backend/.env (see Backend/.env.example)."
-        )
+    app.config["JWT_SECRET_KEY"] = jwt_secret()
     app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=24)
 
     register_jwt_errors(JWTManager(app))
-    CORS(app, origins=["http://localhost:5173", "http://127.0.0.1:5173"])
+    CORS(app, origins=cors_origins())
 
     configure_app(app)
     register_error_handlers(app)
     register_routes(app)
+    register_commands(app)
 
     return app
+
+
+def jwt_secret():
+    """
+    The key login tokens are signed with. In production a missing, known
+    or short key stops the app starting: with the development key anyone
+    could sign in as anyone, and a warning in a host's log is too easy to
+    scroll past.
+    """
+    secret = os.environ.get("JWT_SECRET_KEY", "").strip()
+    if is_production():
+        if not secret or secret == DEV_JWT_SECRET or len(secret) < MIN_JWT_SECRET_LENGTH:
+            raise RuntimeError(
+                f"APP_ENV is production, so JWT_SECRET_KEY must be set to a random "
+                f"string of at least {MIN_JWT_SECRET_LENGTH} characters "
+                "(see Backend/.env.example)."
+            )
+        return secret
+    if not secret:
+        print(
+            "WARNING: JWT_SECRET_KEY is using the default baked into app.py. "
+            "Set a real one in Backend/.env (see Backend/.env.example)."
+        )
+        return DEV_JWT_SECRET
+    return secret
+
+
+def cors_origins():
+    """
+    Which websites' pages may call this API from a browser, from
+    CORS_ORIGINS: "*" (any - the default for now) or a comma-separated
+    list such as "https://league.example.com,http://localhost:5173".
+
+    "*" is tolerable here because sign-in travels in the Authorization
+    header, never a cookie: a page on another site can't make a player's
+    browser send their token, so it can't act as them. Native mobile apps
+    don't use CORS at all; this only matters to browsers, including the
+    React Native app when run as a web page. Narrow it to the web
+    frontend's address once that has one.
+    """
+    raw = os.environ.get("CORS_ORIGINS", "*").strip()
+    if not raw or raw == "*":
+        return "*"
+    return [origin.strip() for origin in raw.split(",") if origin.strip()]
+
+
+def register_commands(app):
+    """Commands run with `flask --app app <command>` from Backend/."""
+
+    @app.cli.command("prepare-db")
+    def prepare_db_command():
+        """
+        Create or update the database's tables, then check them.
+
+        gunicorn runs this before starting its workers. It's safe to run
+        by hand at any time: every step checks before changing anything.
+        Exits with an error if the database can't be reached.
+        """
+        logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(name)s: %(message)s")
+        try:
+            prepare_database(app, require_connection=True)
+        except RuntimeError as e:
+            raise click.ClickException(str(e))
 
 
 def error(message, status, **extra):
@@ -608,12 +673,12 @@ def register_routes(app):
 
 app = create_app()
 
+# Local development: `python app.py`. The container runs gunicorn
+# instead (see gunicorn.conf.py), which prepares the database itself.
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(name)s: %(message)s")
 
-    with app.app_context():
-        ensure_schema()
-        check_schema()
+    prepare_database(app)
 
     debug_mode = os.environ.get("FLASK_DEBUG", "1") == "1"
     app.run(debug=debug_mode, port=int(os.environ.get("PORT", 5000)))

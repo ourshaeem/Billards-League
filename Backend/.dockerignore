@@ -1,0 +1,18 @@
+# Only what the server runs goes into the image.
+
+# Local environment and secrets - configure the host's variables instead.
+.env
+.env.*
+venv/
+.venv/
+
+# Not needed to serve requests.
+tests/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.db
+*.sqlite3
+.DS_Store
+Dockerfile
+.dockerignore

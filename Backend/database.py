@@ -3,19 +3,24 @@ Database configuration and startup checks.
 
 SQLAlchemy replaces the hand-rolled connection helper, so this module no
 longer opens connections itself - it builds the connection URI and holds
-the startup work: ensure_schema() (idempotent, additive fixes to an
-existing database) and check_schema() (a read-only report of anything
-still missing).
+the startup work: ensure_schema() (idempotent, additive: builds an empty
+database, fixes up an existing one) and check_schema() (a read-only
+report of anything still missing). prepare_database() runs both, once
+per start.
 """
 import functools
+import logging
 import os
 import random
 import time
 
 from sqlalchemy import func, inspect, text
+from sqlalchemy.engine import URL, make_url
 from sqlalchemy.exc import DBAPIError
 
 from models import db
+
+log = logging.getLogger(__name__)
 
 # Load Backend/.env if python-dotenv is installed. Optional on purpose: if
 # it isn't there, everything falls back to the values below, so this can't
@@ -27,39 +32,92 @@ try:
 except ImportError:
     pass
 
-DB_HOST = os.environ.get("DB_HOST", "127.0.0.1")
-DB_USER = os.environ.get("DB_USER", "root")
-DB_PASSWORD = os.environ.get("DB_PASSWORD", "Skythekidrs679op")
-DB_NAME = os.environ.get("DB_NAME", "ranked_billards")
-DB_PORT = os.environ.get("DB_PORT", "3306")
-
-# The fallback password above is the one that was already hardcoded here,
-# kept so a machine without a .env carries on working. It is not a safe
+# This machine's MySQL, for local development when nothing else is set.
+# The password is the one that was already hardcoded here, kept so a
+# machine without a .env carries on working. It is not a safe
 # Shaeem reminder long-term: that string is in this repo's git history and the repo
 # is on GitHub. Set DB_PASSWORD in Backend/.env and rotate the password on
 # the database itself.
-if "DB_PASSWORD" not in os.environ:
-    print(
-        "WARNING: DB_PASSWORD isn't set, so the password committed in "
-        "database.py is being used. Set it in Backend/.env (see .env.example)."
-    )
+LOCAL_DEFAULTS = {
+    "DB_HOST": "127.0.0.1",
+    "DB_USER": "root",
+    "DB_PASSWORD": "Skythekidrs679op",
+    "DB_NAME": "ranked_billards",
+    "DB_PORT": "3306",
+}
+
+# The driver SQLAlchemy talks to MySQL through. PyMySQL is pure Python,
+# so the container needs no compiler and no MySQL client libraries.
+MYSQL_DRIVER = "mysql+pymysql"
+
+
+def is_production():
+    """True in the deployed container, which sets APP_ENV=production."""
+    return os.environ.get("APP_ENV", "").strip().lower() == "production"
+
+
+def normalize_database_url(url):
+    """
+    A plain mysql:// URL - what Railway and most guides hand out - means
+    SQLAlchemy's default MySQL driver, mysqlclient, which isn't installed.
+    Point it at PyMySQL. A URL naming its driver is left alone.
+    """
+    if url.startswith("mysql://"):
+        return MYSQL_DRIVER + url[len("mysql"):]
+    return url
 
 
 def get_database_uri():
     """
-    The SQLAlchemy connection string.
+    The SQLAlchemy connection string, from the first of:
 
-    DATABASE_URL wins if it's set, which is how the tests point everything
-    at in-memory SQLite without touching MySQL.
+      1. DATABASE_URL - the whole string, the way a host such as Render,
+         Railway or AWS RDS is usually configured. It's also how the
+         tests point everything at in-memory SQLite.
+      2. DB_HOST / DB_USER / DB_PASSWORD / DB_NAME / DB_PORT - the pieces,
+         for local development. Anything missing falls back to this
+         machine's MySQL.
+
+    The pieces are assembled by SQLAlchemy rather than pasted into a
+    string, so a password containing @, / or # still works.
+
+    In production the local fallback is refused. A container quietly
+    aiming at its own 127.0.0.1 would fail every request with a
+    connection error, instead of failing once, at startup, with a reason.
     """
-    override = os.environ.get("DATABASE_URL")
+    override = os.environ.get("DATABASE_URL", "").strip()
     if override:
-        return override
+        return normalize_database_url(override)
 
-    return (
-        f"mysql+mysqlconnector://{DB_USER}:{DB_PASSWORD}"
-        f"@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-    )
+    if is_production() and not all(key in os.environ for key in ("DB_HOST", "DB_PASSWORD")):
+        raise RuntimeError(
+            "APP_ENV is production but no database is configured. Set DATABASE_URL "
+            "(see Backend/.env.example), or DB_HOST and DB_PASSWORD."
+        )
+
+    settings = {key: os.environ.get(key, default) for key, default in LOCAL_DEFAULTS.items()}
+    if "DB_PASSWORD" not in os.environ:
+        print(
+            "WARNING: DB_PASSWORD isn't set, so the password committed in "
+            "database.py is being used. Set it in Backend/.env (see .env.example)."
+        )
+
+    return URL.create(
+        MYSQL_DRIVER,
+        username=settings["DB_USER"],
+        password=settings["DB_PASSWORD"],
+        host=settings["DB_HOST"],
+        port=int(settings["DB_PORT"]),
+        database=settings["DB_NAME"],
+    ).render_as_string(hide_password=False)
+
+
+def describe_database(uri):
+    """Where a connection string points, safe to print: no password."""
+    url = make_url(uri)
+    if url.get_backend_name() == "sqlite":
+        return url.render_as_string(hide_password=True)
+    return f"{url.host}:{url.port or 3306}/{url.database}"
 
 
 def configure_app(app):
@@ -144,29 +202,45 @@ ADDED_COLUMNS = [
 # The name ping pong's first table is given when ensure_schema creates it.
 PING_PONG_TABLE_NAME = "Ping Pong Table"
 
+# The tiers a brand-new database starts with: the ones the league has
+# always used, as (rank_name, min_elo). Only ever written into an empty
+# Ranks table, so tiers someone has edited are never overwritten.
+DEFAULT_RANKS = [
+    ("Unranked", 0),
+    ("Bronze", 200),
+    ("Silver", 500),
+    ("Gold", 800),
+    ("Platinum", 1200),
+]
+
 
 def ensure_schema():
     """
-    Bring an existing database up to what the app needs. Safe to run on
+    Bring a database up to what the app needs - an existing one, or a
+    brand-new empty one such as a fresh AWS RDS instance. Safe to run on
     every startup: each step checks before it changes anything, and only
     ever adds - no column or table is dropped.
 
     Steps:
-      1. Every column in ADDED_COLUMNS exists: the leave-queue timer, each
+      1. Every table the models map exists. On an empty database this
+         builds them all; on an existing one it creates only what's
+         missing and touches nothing else.
+      2. Every column in ADDED_COLUMNS exists: the leave-queue timer, each
          table's league, the ping pong ratings, and profile flag/picture.
          Players.ping_pong_rank_id also gets its foreign key to Ranks.
-      2. Table 1 exists in Pool_Tables. The UI plays on table 1, and Queue
+      3. An empty Ranks table gets the DEFAULT_RANKS tiers.
+      4. Table 1 exists in Pool_Tables. The UI plays on table 1, and Queue
          and Matches both have foreign keys to it, so without the row
          every join fails.
-      3. The ping pong league has a table. Without one, nobody could join
+      5. The ping pong league has a table. Without one, nobody could join
          its queue.
-      4. Players who have never played ping pong start in the rank a
+      6. Players who have never played ping pong start in the rank a
          rating of 0 earns, exactly as a newly registered player would.
-      5. Old-style Matches rows are converted. The original code kept the
+      7. Old-style Matches rows are converted. The original code kept the
          two seats in winner_id/loser_id during a game; the app now keeps
          them in king_id/challenger_id. Left unconverted, an old Active
          row is a king nobody can see or play.
-      6. Duplicate queue entries are removed, then every index the models
+      8. Duplicate queue entries are removed, then every index the models
          declare is created if missing - including the unique index that
          stops a double-tapped Join queueing someone twice.
 
@@ -185,6 +259,22 @@ def ensure_schema():
         except Exception as e:
             db.session.rollback()
             print(f"[schema] {label} - skipped, couldn't apply it: {e}")
+
+    def create_missing_tables():
+        existing = {name.lower() for name in inspect(db.engine).get_table_names()}
+        missing = [t for t in db.metadata.sorted_tables if t.name.lower() not in existing]
+        if not missing:
+            return None
+        # Only the missing ones, in foreign-key order. Also creates the
+        # indexes the models declare on them.
+        db.metadata.create_all(bind=db.session.connection(), tables=missing)
+        return f"created {', '.join(t.name for t in missing)}"
+
+    def seed_ranks():
+        if db.session.scalar(db.select(Rank.rank_id).limit(1)) is not None:
+            return None
+        db.session.add_all(Rank(rank_name=name, min_elo=elo) for name, elo in DEFAULT_RANKS)
+        return f"added the {len(DEFAULT_RANKS)} rank tiers ({', '.join(n for n, _ in DEFAULT_RANKS)})"
 
     def add_columns():
         added = []
@@ -308,9 +398,12 @@ def ensure_schema():
                     added.append(index.name)
         return f"added index(es) {', '.join(added)}" if added else None
 
-    # Columns first: every later step reads models that map them.
+    # Tables and columns first: every later step reads models that map them.
+    step("Missing tables", create_missing_tables)
     step("New columns", add_columns)
     step("Ping pong rank key", add_ping_pong_rank_key)
+    # Before anything that looks a rank up by rating.
+    step("Rank tiers", seed_ranks)
     step("Table 1", add_table_one)
     step("Ping pong table", add_ping_pong_table)
     step("Ping pong ranks", seed_ping_pong_ranks)
@@ -343,6 +436,20 @@ def seconds_since(column):
 MYSQL_DEADLOCK = 1213
 
 
+def mysql_error_code(error):
+    """
+    The MySQL error number inside a SQLAlchemy DBAPIError, whichever
+    driver raised it. mysql-connector keeps it in .errno; PyMySQL keeps
+    it as the first of .args and has no .errno at all. Reading only
+    .errno would quietly stop deadlocks being retried under PyMySQL.
+    """
+    orig = getattr(error, "orig", None)
+    code = getattr(orig, "errno", None)
+    if code is None and getattr(orig, "args", None) and isinstance(orig.args[0], int):
+        code = orig.args[0]
+    return code
+
+
 def retry_on_deadlock(fn, attempts=3):
     """
     Re-run a function whose transaction MySQL cancelled as a deadlock.
@@ -358,13 +465,50 @@ def retry_on_deadlock(fn, attempts=3):
             try:
                 return fn(*args, **kwargs)
             except DBAPIError as e:
-                if getattr(e.orig, "errno", None) != MYSQL_DEADLOCK or attempt == attempts:
+                if mysql_error_code(e) != MYSQL_DEADLOCK or attempt == attempts:
                     raise
                 db.session.rollback()
                 # A little jitter so the retries don't collide again.
                 time.sleep(random.uniform(0.01, 0.05) * attempt)
 
     return wrapper
+
+
+def prepare_database(app, require_connection=False):
+    """
+    Everything the database needs before the app takes requests:
+    ensure_schema(), then check_schema(). Returns check_schema()'s answer.
+
+    Run once per start - by `python app.py` locally, and in the container
+    by `flask prepare-db`, which gunicorn runs before starting any worker
+    (see gunicorn.conf.py) - rather than once per worker, so two workers
+    never race to ALTER the same table.
+
+    require_connection makes an unreachable database an error rather than
+    a warning. The container uses it: a deploy that can't see its database
+    should fail where the log says why, not start and answer every request
+    with "something went wrong".
+    """
+    with app.app_context():
+        where = describe_database(app.config["SQLALCHEMY_DATABASE_URI"])
+        if require_connection:
+            try:
+                db.session.execute(text("SELECT 1"))
+                db.session.rollback()
+            except Exception as e:
+                db.session.rollback()
+                log.error("can't reach the database at %s: %s", where, e)
+                raise RuntimeError(
+                    f"Can't reach the database at {where}. Check DATABASE_URL, that the "
+                    "database accepts connections from this server (security group, "
+                    "public access), and the username and password."
+                ) from None
+
+        print(f"[schema] Database: {where}")
+        ensure_schema()
+        ok = check_schema()
+        db.session.remove()
+    return ok
 
 
 def reset_session():
