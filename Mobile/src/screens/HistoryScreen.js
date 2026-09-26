@@ -1,0 +1,234 @@
+/**
+ * The Games tab: finished games in this league, newest first -
+ * everyone's, or just yours. Port of MatchHistory.jsx.
+ *
+ * Fetched while the tab is on screen: every 15 seconds, and straight
+ * away when LiveContext sees a game end (gamesVersion).
+ */
+import React, { useCallback, useState } from 'react';
+import { StyleSheet, Text, View } from 'react-native';
+import { useIsFocused } from '@react-navigation/native';
+
+import * as api from '../api';
+import { HISTORY_LIMIT, SLOW_POLL_INTERVAL_MS } from '../config';
+import { PlayerChip } from '../components/Player';
+import { Card, Screen, Segmented, Txt } from '../components/ui';
+import { useAppActive } from '../hooks/useAppActive';
+import { usePolling } from '../hooks/usePolling';
+import { useLeague } from '../state/LeagueContext';
+import { useLive } from '../state/LiveContext';
+import { useSession } from '../state/SessionContext';
+import { fonts, palette, radius, type } from '../theme';
+
+const SCOPES = [
+  { value: 'all', label: 'Everyone' },
+  { value: 'mine', label: 'Your games' },
+];
+
+/**
+ * "5m ago" from a count of seconds. The server works the seconds out
+ * with its own clock, so a phone whose clock or timezone is off still
+ * shows the right answer.
+ */
+function timeAgo(seconds) {
+  if (typeof seconds !== 'number') return '';
+  if (seconds < 60) return 'just now';
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  if (seconds < 7 * 86400) return `${Math.floor(seconds / 86400)}d ago`;
+  return new Date(Date.now() - seconds * 1000).toLocaleDateString();
+}
+
+function emptyFor(key) {
+  return { key, all: [], mine: [], loaded: false, problem: null };
+}
+
+export function HistoryScreen() {
+  const { league } = useLeague();
+  const { user } = useSession();
+  const { gamesVersion } = useLive();
+  const focused = useIsFocused();
+  const active = useAppActive();
+  const [scope, setScope] = useState('all');
+  const [refreshing, setRefreshing] = useState(false);
+
+  // Games belong to one player in one league; switching either drops
+  // the old list at once rather than showing it under the new name.
+  const key = `${user?.user_id}:${league}`;
+  const [data, setData] = useState(() => emptyFor(key));
+  if (data.key !== key) setData(emptyFor(key));
+
+  const userId = user?.user_id;
+  const load = useCallback(
+    async (signal) => {
+      const [allRes, mineRes] = await Promise.all([
+        api.getMatchHistory(league, { limit: HISTORY_LIMIT }, signal),
+        userId ? api.getPlayerMatches(userId, league, { limit: HISTORY_LIMIT }, signal) : null,
+      ]);
+      if (signal?.aborted || allRes.aborted) return;
+      setData((current) => {
+        if (current.key !== key) return current;
+        if (!allRes.ok) {
+          // Keep showing what loaded before; only an empty screen needs
+          // to explain itself.
+          return current.loaded ? current : { ...current, problem: allRes.message };
+        }
+        return {
+          key,
+          all: allRes.data?.matches ?? [],
+          mine: mineRes?.ok ? (mineRes.data?.matches ?? []) : current.mine,
+          loaded: true,
+          problem: null,
+        };
+      });
+    },
+    // gamesVersion isn't read inside, but a new value means a game just
+    // ended: fetch again now rather than at the next tick.
+    [key, league, userId, gamesVersion],
+  );
+
+  usePolling(load, SLOW_POLL_INTERVAL_MS, focused && active && Boolean(league));
+
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await load();
+    setRefreshing(false);
+  };
+
+  const matches = scope === 'mine' ? data.mine : data.all;
+
+  return (
+    <Screen onRefresh={onRefresh} refreshing={refreshing}>
+      <Card
+        title="Recent games"
+        icon="clock"
+        right={
+          <Segmented
+            options={SCOPES}
+            value={scope}
+            onChange={setScope}
+            accessibilityLabel="Whose games to show"
+          />
+        }
+        footer={data.loaded && matches.length > 0 ? 'Tap a player to see their rank and rating.' : null}
+      >
+        {!data.loaded ? (
+          <Txt muted style={styles.empty}>
+            {data.problem ? `${data.problem} Retrying automatically.` : 'Loading recent games...'}
+          </Txt>
+        ) : null}
+
+        {data.loaded && matches.length === 0 ? (
+          <Txt muted style={styles.empty}>
+            {scope === 'mine'
+              ? "You haven't finished a game in this league yet."
+              : 'No games finished yet. The first result shows up here.'}
+          </Txt>
+        ) : null}
+
+        {data.loaded &&
+          matches.map((match, index) => (
+            <HistoryRow
+              key={match.match_id}
+              match={match}
+              league={league}
+              currentUserId={user?.user_id}
+              last={index === matches.length - 1}
+            />
+          ))}
+      </Card>
+    </Screen>
+  );
+}
+
+function HistoryRow({ match, league, currentUserId, last }) {
+  const { winner, loser, winner_score: won, loser_score: lost, result } = match;
+  const hasScore = typeof won === 'number' && typeof lost === 'number';
+  const change = match.elo_change;
+
+  return (
+    <View style={[styles.row, !last && styles.rowDivider]}>
+      <View style={styles.players}>
+        <View style={styles.side}>
+          <PlayerChip player={winner} league={league} size="sm" isYou={winner?.user_id === currentUserId} />
+          <ResultTag win />
+        </View>
+
+        <Text
+          style={styles.score}
+          accessibilityLabel={hasScore ? `Score ${won} to ${lost}` : 'No score recorded'}
+        >
+          {hasScore ? (
+            <>
+              <Text style={styles.scoreWin}>{won}</Text>–{lost}
+            </>
+          ) : (
+            '—'
+          )}
+        </Text>
+
+        <View style={[styles.side, styles.sideEnd]}>
+          <PlayerChip
+            player={loser}
+            league={league}
+            size="sm"
+            align="end"
+            isYou={loser?.user_id === currentUserId}
+          />
+          <ResultTag />
+        </View>
+      </View>
+
+      <View style={styles.meta}>
+        {result ? (
+          <Text style={[styles.metaText, styles.outcome, result === 'won' ? styles.outcomeWon : styles.outcomeLost]}>
+            {result === 'won' ? 'You won' : 'You lost'}
+            {typeof change === 'number' ? ` ${result === 'won' ? '+' : '−'}${change}` : ''}
+          </Text>
+        ) : typeof change === 'number' ? (
+          <Text style={styles.metaText}>±{change} points</Text>
+        ) : null}
+        <Text style={styles.metaText}>{timeAgo(match.seconds_ago)}</Text>
+      </View>
+    </View>
+  );
+}
+
+function ResultTag({ win = false }) {
+  return (
+    <View style={[styles.tag, win ? styles.tagWin : styles.tagLoss]}>
+      <Text style={[styles.tagText, win ? styles.tagTextWin : styles.tagTextLoss]}>
+        {win ? 'WINNER' : 'LOSER'}
+      </Text>
+    </View>
+  );
+}
+
+// Win in purple, loss in gray - the same in both leagues.
+const styles = StyleSheet.create({
+  empty: { paddingVertical: 12 },
+  row: { paddingVertical: 12 },
+  rowDivider: { borderBottomWidth: 1, borderBottomColor: palette.gray100 },
+  players: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  side: { flex: 1, minWidth: 0, alignItems: 'flex-start', gap: 4 },
+  sideEnd: { alignItems: 'flex-end' },
+  score: {
+    fontFamily: fonts.bold,
+    fontSize: type.large,
+    color: palette.gray500,
+    fontVariant: ['tabular-nums'],
+    paddingHorizontal: 4,
+  },
+  scoreWin: { color: palette.purple700 },
+  tag: { paddingHorizontal: 7, paddingVertical: 1, borderRadius: radius.pill },
+  tagWin: { backgroundColor: palette.purple100 },
+  tagLoss: { backgroundColor: palette.gray100 },
+  tagText: { fontFamily: fonts.bold, fontSize: 10.5, letterSpacing: 0.5 },
+  tagTextWin: { color: palette.purple700 },
+  tagTextLoss: { color: palette.gray500 },
+  meta: { flexDirection: 'row', justifyContent: 'center', flexWrap: 'wrap', gap: 12, marginTop: 6 },
+  metaText: { fontFamily: fonts.regular, fontSize: 12.5, color: palette.gray500, fontVariant: ['tabular-nums'] },
+  outcome: { fontFamily: fonts.bold },
+  outcomeWon: { color: palette.purple700 },
+  outcomeLost: { color: palette.gray700 },
+});

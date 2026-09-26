@@ -18,10 +18,15 @@ is what keeps the seams from splitting.
 
 1. **Tech stack is fixed:** MySQL, Python/Flask, React. No swapping in an
    ORM, a different database, or a new framework without agreement.
-2. **A mobile port with React Native is coming.** Business rules live in
-   the backend; the frontend's HTTP knowledge is confined to
-   `Frontend/src/api.js`. Nothing else in the UI should call `fetch`.
-   When the React Native app happens, that one file is the port.
+2. **Two clients, one backend.** The web app (`Frontend/`, Vite + React)
+   and the mobile app (`Mobile/`, Expo + React Native) share no code at
+   runtime but follow the same rules. Business rules live in the backend;
+   each client's HTTP knowledge is confined to its `src/api.js`, and
+   nothing else in either UI calls `fetch`. The two `api.js` files expose
+   the same functions and result shapes: a contract change updates both,
+   in the same commit. `src/leagues.js` and `src/flags.js` are copied
+   between the two apps - a change to one is a change to both. The mobile
+   app keeps its login token in Expo SecureStore, never plain storage.
 3. **Run the backend tests before and after any change:**
    ```
    cd Backend && python -m unittest discover -s tests -t .

@@ -112,6 +112,27 @@ work. Sign-in uses the Authorization header, not cookies, so this doesn't
 let other sites act as a player; narrow it once the web frontend has an
 address.
 
+### Mobile app
+
+`Mobile/` is the iOS and Android app, built with Expo (SDK 57) and React
+Native, talking to the live backend on Render. Install **Expo Go** from
+the App Store or Play Store on your phone, then:
+
+```bash
+cd Mobile
+npm install
+npx expo start            # scan the QR code with your phone's camera (iOS)
+                          # or from inside Expo Go (Android)
+```
+
+To point it at a backend on your own computer instead, see
+`Mobile/.env.example`, and restart with `npx expo start --clear` - Expo
+caches the address. Sign-in tokens are kept in Expo SecureStore (the iOS
+Keychain / Android Keystore), not plain storage.
+
+`npx expo start --web` runs the same app in a browser, which is handy for
+a quick look but isn't what ships to phones.
+
 ### Tests
 
 ```bash
@@ -348,6 +369,21 @@ Frontend/
       Panels.jsx            queue list, ladder
       AuthScreens.jsx       sign in, register
       Feedback.jsx          toasts, offline banner, field errors
+
+Mobile/                     the Expo / React Native app
+  App.js                    fonts and providers, then the navigator
+  src/
+    api.js                  ALL backend calls - the twin of Frontend/src/api.js
+    config.js               server address (live Render by default), polling pace
+    storage.js              session in SecureStore
+    theme.js                design tokens, both league themes
+    leagues.js, flags.js    copied from Frontend/src - keep in step
+    state/                  session, league, live queue/table data, toasts
+    navigation/             sign-in stack -> league picker -> tabs
+    screens/                sign in, register, league picker, Play, Games,
+                            Ladder, Profile
+    components/             status panel, table and queue cards, player
+                            chip and card, flag picker, buttons and fields
 
 AGENTS.md                   the six roles and the contracts between them
 render.yaml                 Render Blueprint: deploys Backend/ as a Docker service
