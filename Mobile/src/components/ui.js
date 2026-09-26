@@ -120,7 +120,9 @@ export function Button({
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel ?? title}
       accessibilityHint={accessibilityHint}
-      accessibilityState={{ disabled: inactive, busy }}
+      // busy only when true: Android announces "busy" whenever the key
+      // is present, even set to false.
+      accessibilityState={busy ? { disabled: true, busy: true } : { disabled: inactive }}
       hitSlop={isLink ? 8 : undefined}
       style={({ pressed }) => [
         styles.button,
@@ -362,7 +364,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   buttonText: { fontFamily: fonts.semibold, textAlign: 'center' },
-  linkButton: { minHeight: 32, paddingHorizontal: 4 },
+  linkButton: { minHeight: 32, paddingHorizontal: 4, borderWidth: 0 },
   linkText: { textDecorationLine: 'underline' },
   disabled: { opacity: 0.5 },
   waiting: { borderStyle: 'dashed', backgroundColor: 'transparent' },
@@ -403,8 +405,14 @@ const styles = StyleSheet.create({
     minHeight: 48,
     borderWidth: 1,
     borderRadius: radius.sm,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+    // Spelled out side by side on purpose: on Android, a text input
+    // ignores the paddingHorizontal / paddingVertical shorthands and
+    // falls back to the system's own padding, putting the text almost
+    // against the border. (Seen on the Android emulator, API 36.)
+    paddingLeft: 14,
+    paddingRight: 14,
+    paddingTop: 12,
+    paddingBottom: 12,
     fontFamily: fonts.regular,
     fontSize: type.body,
   },

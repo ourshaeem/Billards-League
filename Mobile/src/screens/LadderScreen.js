@@ -15,6 +15,7 @@ import { usePolling } from '../hooks/usePolling';
 import { useLeague } from '../state/LeagueContext';
 import { useLive } from '../state/LiveContext';
 import { useSession } from '../state/SessionContext';
+import { pointsText } from '../format';
 import { fonts, type } from '../theme';
 
 export function LadderScreen() {
@@ -85,7 +86,7 @@ export function LadderScreen() {
                 <View
                   key={player.username}
                   accessible
-                  accessibilityLabel={`${index + 1}, ${player.username}${isYou ? ', you' : ''}, ${player.rank_name || 'Unranked'}, ${player.elo_rating} points, ${player.total_wins} won, ${player.total_losses} lost`}
+                  accessibilityLabel={`${index + 1}, ${player.username}${isYou ? ', you' : ''}, ${player.rank_name || 'Unranked'}, ${pointsText(player.elo_rating)}, ${player.total_wins} won, ${player.total_losses} lost`}
                   style={[
                     styles.row,
                     { borderBottomColor: theme.lineSoft },

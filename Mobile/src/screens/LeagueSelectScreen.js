@@ -18,6 +18,7 @@ import { LeagueBall } from '../components/Wordmark';
 import { LEAGUE_ORDER, LEAGUES } from '../leagues';
 import { useLeague } from '../state/LeagueContext';
 import { useSession } from '../state/SessionContext';
+import { pointsText } from '../format';
 import { fonts, radius, themeFor, type } from '../theme';
 
 export function LeagueSelectScreen({ navigation, route }) {
@@ -91,7 +92,7 @@ export function LeagueSelectScreen({ navigation, route }) {
             {standing ? (
               <View style={styles.standing}>
                 <Text style={[styles.standingStrong, { color: textColor }]}>{standing.rank_name}</Text>
-                <Text style={[styles.standingText, { color: dim }]}>{standing.elo} points</Text>
+                <Text style={[styles.standingText, { color: dim }]}>{pointsText(standing.elo)}</Text>
                 <Text style={[styles.standingText, { color: dim }]}>
                   {standing.wins}–{standing.losses}
                 </Text>

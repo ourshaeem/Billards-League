@@ -20,6 +20,7 @@ import { useLeague } from '../state/LeagueContext';
 import { useLive } from '../state/LiveContext';
 import { useSession } from '../state/SessionContext';
 import { useToast } from '../state/ToastContext';
+import { pointsText } from '../format';
 import { fonts, radius, type } from '../theme';
 
 // The database column's limit; the server enforces it too.
@@ -236,7 +237,7 @@ function Standing({ profile }) {
           <View
             key={key}
             accessible
-            accessibilityLabel={`${LEAGUES[key].name}: ${standing?.rank_name ?? 'Unranked'}, ${standing?.elo ?? 0} points, ${standing?.wins ?? 0} won, ${standing?.losses ?? 0} lost`}
+            accessibilityLabel={`${LEAGUES[key].name}: ${standing?.rank_name ?? 'Unranked'}, ${pointsText(standing?.elo)}, ${standing?.wins ?? 0} won, ${standing?.losses ?? 0} lost`}
             style={[
               styles.standingRow,
               index < LEAGUE_ORDER.length - 1 && { borderBottomWidth: 1, borderBottomColor: theme.lineSoft },

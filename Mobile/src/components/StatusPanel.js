@@ -47,8 +47,11 @@ export function StatusPanel({
       : null;
 
   return (
+    // No accessibilityState busy here, though the panel is briefly
+    // loading: Android kept describing it as "busy" long after, because
+    // the description isn't cleared when the state goes away. The loading
+    // text and spinner already tell a screen reader what's happening.
     <View
-      accessibilityState={{ busy: state === 'loading' }}
       style={[
         styles.panel,
         {

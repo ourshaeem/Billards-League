@@ -119,14 +119,20 @@ function PlayerCard({ player, league, visible, onClose }) {
       animationType={reducedMotion ? 'none' : 'fade'}
       onRequestClose={onClose}
     >
-      <Pressable
-        style={styles.backdrop}
-        onPress={onClose}
-        accessibilityRole="button"
-        accessibilityLabel="Close"
-      >
-        {/* Taps on the card itself don't close it. */}
-        <Pressable style={styles.card} onPress={() => {}} accessible={false}>
+      {/* The dimmed background and the card are siblings, not one inside
+          the other. A tap on the background closes the card, but screen
+          readers never see it: had the card sat inside a "Close" button,
+          VoiceOver would have read that one button and nothing on the
+          card. Screen reader users close it with the Close button, the
+          Android back button, or the iOS escape gesture. */}
+      <View style={styles.backdrop}>
+        <Pressable
+          style={StyleSheet.absoluteFill}
+          onPress={onClose}
+          accessible={false}
+          importantForAccessibility="no"
+        />
+        <View style={styles.card} accessibilityViewIsModal onAccessibilityEscape={onClose}>
           <Text style={styles.cardLeague}>{leagueInfo(league).name.toUpperCase()}</Text>
           <View style={styles.cardHead}>
             <Avatar player={player} size="lg" />
@@ -136,7 +142,8 @@ function PlayerCard({ player, league, visible, onClose }) {
           </View>
           <Text style={styles.cardRank}>{player.rank_name || 'Unranked'}</Text>
           <Text style={styles.cardElo}>
-            <Text style={styles.cardEloNumber}>{player.elo ?? 0}</Text> points
+            <Text style={styles.cardEloNumber}>{player.elo ?? 0}</Text>{' '}
+            {Math.abs(player.elo ?? 0) === 1 ? 'point' : 'points'}
           </Text>
           <Text style={styles.cardRecord}>
             {player.wins ?? 0} won · {player.losses ?? 0} lost
@@ -148,8 +155,8 @@ function PlayerCard({ player, league, visible, onClose }) {
           >
             <Text style={styles.cardCloseText}>Close</Text>
           </Pressable>
-        </Pressable>
-      </Pressable>
+        </View>
+      </View>
     </Modal>
   );
 }
