@@ -142,8 +142,18 @@ class DatabaseUrl(unittest.TestCase):
         self.assertEqual((url.host, url.username, url.password), ("db.example.com", "admin", "p@ss/w#rd:1"))
 
     def test_local_development_falls_back_to_this_machines_mysql(self):
-        url = make_url(self.uri({}))
+        url = make_url(self.uri({"DB_PASSWORD": "from-dot-env"}))
         self.assertEqual((url.host, url.port, url.database), ("127.0.0.1", 3306, "ranked_billards"))
+        self.assertEqual(url.password, "from-dot-env")
+
+    def test_no_password_is_written_into_the_code(self):
+        """Without DB_PASSWORD (from Backend/.env) there's nothing to fall back to."""
+        with self.assertRaises(RuntimeError) as caught:
+            self.uri({})
+        self.assertIn("Backend/.env", str(caught.exception))
+
+    def test_an_empty_password_is_allowed_for_a_passwordless_mysql(self):
+        self.assertEqual(make_url(self.uri({"DB_PASSWORD": ""})).password, "")
 
     def test_production_refuses_to_guess_a_database(self):
         with self.assertRaises(RuntimeError) as caught:

@@ -33,15 +33,14 @@ except ImportError:
     pass
 
 # This machine's MySQL, for local development when nothing else is set.
-# The password is the one that was already hardcoded here, kept so a
-# machine without a .env carries on working. It is not a safe
-# Shaeem reminder long-term: that string is in this repo's git history and the repo
-# is on GitHub. Set DB_PASSWORD in Backend/.env and rotate the password on
-# the database itself.
+# There is deliberately no password here: it comes from DB_PASSWORD in
+# Backend/.env, which git ignores.
+# Shaeem reminder: the password that used to be written here is still in
+# this repo's git history, and the repo is on GitHub - change it on your
+# local MySQL too.
 LOCAL_DEFAULTS = {
     "DB_HOST": "127.0.0.1",
     "DB_USER": "root",
-    "DB_PASSWORD": "Skythekidrs679op",
     "DB_NAME": "ranked_billards",
     "DB_PORT": "3306",
 }
@@ -75,8 +74,9 @@ def get_database_uri():
          Railway or AWS RDS is usually configured. It's also how the
          tests point everything at in-memory SQLite.
       2. DB_HOST / DB_USER / DB_PASSWORD / DB_NAME / DB_PORT - the pieces,
-         for local development. Anything missing falls back to this
-         machine's MySQL.
+         for local development, normally from Backend/.env. DB_PASSWORD is
+         required (it may be empty, for a MySQL with no password); the
+         others fall back to this machine's MySQL.
 
     The pieces are assembled by SQLAlchemy rather than pasted into a
     string, so a password containing @, / or # still works.
@@ -95,17 +95,17 @@ def get_database_uri():
             "(see Backend/.env.example), or DB_HOST and DB_PASSWORD."
         )
 
-    settings = {key: os.environ.get(key, default) for key, default in LOCAL_DEFAULTS.items()}
     if "DB_PASSWORD" not in os.environ:
-        print(
-            "WARNING: DB_PASSWORD isn't set, so the password committed in "
-            "database.py is being used. Set it in Backend/.env (see .env.example)."
+        raise RuntimeError(
+            "No database password is set. Copy Backend/.env.example to "
+            "Backend/.env and fill in DB_PASSWORD (or set DATABASE_URL)."
         )
 
+    settings = {key: os.environ.get(key, default) for key, default in LOCAL_DEFAULTS.items()}
     return URL.create(
         MYSQL_DRIVER,
         username=settings["DB_USER"],
-        password=settings["DB_PASSWORD"],
+        password=os.environ["DB_PASSWORD"],
         host=settings["DB_HOST"],
         port=int(settings["DB_PORT"]),
         database=settings["DB_NAME"],

@@ -52,9 +52,10 @@ dropped - and it is safe to run on every start. It:
 
 Each step prints a `[schema]` line when it changes something.
 
-The `.env` file is optional. Without it the app falls back to the values
-that were previously hardcoded, so an already-working machine keeps
-working - but see the security note below.
+`Backend/.env` holds your local database password (`DB_PASSWORD`); no
+password is written in the code. Git ignores the file. Without it the app
+stops at startup and says what to do. The live server doesn't use it -
+its settings are Render's environment variables.
 
 ### Frontend
 
