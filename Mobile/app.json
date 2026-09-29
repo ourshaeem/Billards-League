@@ -7,15 +7,17 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.yungmetronome.billiardspingpong"
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
+        "backgroundColor": "#F1ECFE",
         "foregroundImage": "./assets/android-icon-foreground.png",
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
-      }
+      },
+      "package": "com.yungmetronome.billiardspingpong"
     },
     "web": {
       "favicon": "./assets/favicon.png",
@@ -25,6 +27,12 @@
       "expo-secure-store",
       "expo-font"
     ],
-    "description": "Queue up for the pool or ping pong table, report your score, and track the ladder."
+    "description": "Queue up for the pool or ping pong table, report your score, and track the ladder.",
+    "extra": {
+      "eas": {
+        "projectId": "b793fc10-6e95-451b-9312-90a2e423e962"
+      }
+    },
+    "owner": "yungmetronome"
   }
 }
