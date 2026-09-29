@@ -108,6 +108,11 @@ docker run --rm -p 5000:5000 --env-file Backend/.env league-api
 (`--env-file` passes your settings in; inside a container, a database on
 your own machine is `host.docker.internal`, not `127.0.0.1`.)
 
+The privacy policy the app stores ask for is served at `/privacy` on the
+backend. Set `PRIVACY_CONTACT_EMAIL` on the host so it shows a contact
+address. Players can delete their accounts from Profile in either app
+(`POST /profile/delete`), which both stores require.
+
 CORS currently allows any origin (`CORS_ORIGINS=*`), for the React Native
 work. Sign-in uses the Authorization header, not cookies, so this doesn't
 let other sites act as a player; narrow it once the web frontend has an

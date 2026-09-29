@@ -88,6 +88,7 @@
 
   /* Only for things going wrong */
   --danger: #b42318;
+  --danger-pressed: #912018;
   --danger-soft: #fef3f2;
   --danger-line: #fecdca;
   --danger-on-dark: #fda29b;
@@ -1589,4 +1590,46 @@ select[aria-invalid='true'] {
   .league-option {
     min-height: 0;
   }
+}
+
+/* --- Deleting an account: the one place red is used for an action --- */
+
+.btn-danger {
+  background: var(--danger);
+  color: var(--on-accent);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: var(--danger-pressed);
+}
+
+.btn-danger-quiet {
+  background: transparent;
+  border-color: var(--danger-line);
+  color: var(--danger);
+}
+
+.btn-danger-quiet:hover:not(:disabled) {
+  background: var(--danger-soft);
+}
+
+.danger-zone-title {
+  font-family: var(--font-display);
+  font-size: var(--step-2);
+  color: var(--danger);
+  margin-bottom: 8px;
+}
+
+.danger-zone-text {
+  margin-bottom: 16px;
+}
+
+.danger-zone-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.profile-privacy {
+  text-align: center;
 }

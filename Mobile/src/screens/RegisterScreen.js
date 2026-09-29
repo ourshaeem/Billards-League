@@ -4,7 +4,7 @@
  * its wording is shown when it refuses.
  */
 import React, { useRef, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { Linking, StyleSheet, View } from 'react-native';
 
 import * as api from '../api';
 import { Button, Field, Txt } from '../components/ui';
@@ -138,6 +138,18 @@ export function RegisterScreen({ navigation }) {
         busy={busy}
         style={styles.submit}
       />
+      <View style={styles.switchRow}>
+        <Txt variant="small" muted>
+          How we handle your details:
+        </Txt>
+        <Button
+          variant="link"
+          size="sm"
+          title="Privacy policy"
+          accessibilityHint="Opens in your browser"
+          onPress={() => Linking.openURL(api.PRIVACY_POLICY_URL)}
+        />
+      </View>
       <View style={styles.switchRow}>
         <Txt variant="small" muted>
           Already playing?

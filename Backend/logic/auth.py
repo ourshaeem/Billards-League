@@ -105,9 +105,21 @@ def login_user(username, password_text):
         db.select(Player).where(Player.username == (username or "").strip())
     ).first()
 
-    if player is None:
+    # A deleted account can't sign in. (Its name and password are wiped
+    # too, so this is belt and braces.)
+    if player is None or player.is_deleted:
         return None
 
+    if password_matches(player, password_text):
+        return {"user_id": player.user_id, "username": player.username}
+    return None
+
+
+def password_matches(player, password_text):
+    """
+    Whether password_text is this player's password. Used by sign-in and
+    by account deletion, which asks for the password again.
+    """
     stored_hash = player.password_hash
     # MySQL hands this back as str or bytes depending on the column type.
     # The old code assumed str and called .encode() on it, raising
@@ -120,15 +132,12 @@ def login_user(username, password_text):
     if len(password_bytes) > MAX_PASSWORD_BYTES:
         # Registration never allows one this long, so it can't match - and
         # bcrypt 5 raises rather than answering.
-        return None
+        return False
 
     try:
-        if bcrypt.checkpw(password_bytes, stored_hash):
-            return {"user_id": player.user_id, "username": player.username}
+        return bcrypt.checkpw(password_bytes, stored_hash)
     except ValueError as e:
         # The stored value isn't a valid bcrypt hash - e.g. a row created
-        # before hashing existed.
-        log.warning("stored password for %r isn't a valid hash: %s", username, e)
-        return None
-
-    return None
+        # before hashing existed, or a deleted account's wiped password.
+        log.warning("stored password for user %s isn't a valid hash: %s", player.user_id, e)
+        return False

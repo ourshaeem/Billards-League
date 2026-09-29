@@ -5,9 +5,10 @@
  * Problems appear beside the field they concern - both the ones caught
  * here and the ones the server sends back (it names the field).
  */
-import React, { useEffect, useState } from 'react';
-import { ArrowLeft } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { ArrowLeft, Trash2 } from 'lucide-react';
 
+import { PRIVACY_POLICY_URL } from '../api.js';
 import { flagEmoji } from '../flags.js';
 import { LEAGUE_ORDER, LEAGUES } from '../leagues.js';
 import { Avatar } from './Player.jsx';
@@ -29,7 +30,7 @@ function pictureProblem(link) {
   return null;
 }
 
-export function ProfileSettings({ profile, countries, onSave, onBack, busy }) {
+export function ProfileSettings({ profile, countries, onSave, onDeleteAccount, onBack, busy }) {
   const [values, setValues] = useState({
     country_flag: profile.country_flag || '',
     profile_picture: profile.profile_picture || '',
@@ -187,6 +188,109 @@ export function ProfileSettings({ profile, countries, onSave, onBack, busy }) {
           </table>
         </div>
       </section>
+
+      <DeleteAccount onDelete={onDeleteAccount} />
+
+      <p className="small profile-privacy">
+        <a href={PRIVACY_POLICY_URL} target="_blank" rel="noopener noreferrer">
+          Privacy policy
+        </a>
+      </p>
     </main>
+  );
+}
+
+/**
+ * Deleting the account: says what will happen, asks for the password
+ * again, and only then deletes. The confirmation opens in place rather
+ * than in a browser dialog, which would block the tab and can't be styled.
+ */
+function DeleteAccount({ onDelete }) {
+  const [open, setOpen] = useState(false);
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+  const passwordRef = useRef(null);
+
+  useEffect(() => {
+    if (open) passwordRef.current?.focus();
+  }, [open]);
+
+  const cancel = () => {
+    setOpen(false);
+    setPassword('');
+    setError(null);
+  };
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!password) {
+      setError('Enter your password to delete your account.');
+      return;
+    }
+    setDeleting(true);
+    const result = await onDelete(password);
+    // On success the app signs out and this screen goes away.
+    if (result.ok) return;
+    setDeleting(false);
+    if (result.field === 'password') setError(result.message);
+  };
+
+  return (
+    <section className="card danger-zone" aria-labelledby="account-heading">
+      <div className="card-head">
+        <h2 className="card-title" id="account-heading">
+          Your account
+        </h2>
+      </div>
+
+      {!open ? (
+        <>
+          <p className="muted small danger-zone-text">
+            Deleting your account removes your name, flag, picture and password, and takes you
+            off the ladders. Your games stay in other players' history as "Deleted player".
+          </p>
+          <button type="button" className="btn btn-danger-quiet" onClick={() => setOpen(true)}>
+            <Trash2 size={16} aria-hidden="true" />
+            Delete account
+          </button>
+        </>
+      ) : (
+        <form onSubmit={submit} noValidate>
+          <p className="danger-zone-title">Delete your account?</p>
+          <p className="small danger-zone-text">
+            This removes your username, name, flag, picture and password straight away, takes
+            you out of every queue and off the ladders, and signs you out. Games you've played
+            stay in other players' history, shown as "Deleted player" with nothing that
+            identifies you. <strong>This can't be undone.</strong>
+          </p>
+          <div className="field">
+            <label htmlFor="delete-password">Your password</label>
+            <input
+              ref={passwordRef}
+              id="delete-password"
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => {
+                setPassword(e.target.value);
+                setError(null);
+              }}
+              aria-invalid={Boolean(error)}
+              aria-describedby={error ? 'delete-password-error' : undefined}
+            />
+            <FieldError id="delete-password-error" message={error} />
+          </div>
+          <div className="danger-zone-actions">
+            <button type="submit" className="btn btn-danger" disabled={deleting}>
+              {deleting ? 'Deleting...' : 'Delete my account'}
+            </button>
+            <button type="button" className="btn btn-quiet" onClick={cancel} disabled={deleting}>
+              Keep my account
+            </button>
+          </div>
+        </form>
+      )}
+    </section>
   );
 }

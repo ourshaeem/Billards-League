@@ -24,9 +24,12 @@ def top50_leaderboard(league=BILLIARDS):
     wins = getattr(Player, fields["wins"])
 
     stmt = (
+        db.select(Player)
+        # A deleted account keeps its row for other people's history, but
+        # has no place on the ladder.
+        .where(Player.deleted_at.is_(None))
         # Wins then name break ties, so two players on the same rating
         # don't swap places from one poll to the next.
-        db.select(Player)
         .order_by(elo.desc(), wins.desc(), Player.username)
         .limit(50)
     )

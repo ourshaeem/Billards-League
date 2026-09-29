@@ -100,6 +100,23 @@ class Player(db.Model):
     country_flag = db.Column(db.String(2), nullable=True)
     profile_picture = db.Column(db.String(512), nullable=True)
 
+    # When the player deleted their account, or None. The row stays, with
+    # every personal detail wiped (see logic/account.py): the games they
+    # played are other people's history too, and show them as
+    # DELETED_NAME. A deleted player can't sign in, their old login tokens
+    # stop working, and they're left off the ladder.
+    deleted_at = db.Column(db.DateTime, nullable=True)
+    DELETED_NAME = "Deleted player"
+
+    @property
+    def is_deleted(self):
+        return self.deleted_at is not None
+
+    @property
+    def display_name(self):
+        """The name other people see: DELETED_NAME once the account is gone."""
+        return self.DELETED_NAME if self.is_deleted else self.username
+
     # Where each league keeps its numbers, so code that works for either
     # league reads one table instead of branching everywhere.
     LEAGUE_FIELDS = {
@@ -153,7 +170,7 @@ class Player(db.Model):
         """
         return {
             "user_id": self.user_id,
-            "username": self.username,
+            "username": self.display_name,
             "country_flag": self.country_flag,
             "profile_picture": self.profile_picture,
             "league_type": league,

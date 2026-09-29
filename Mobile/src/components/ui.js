@@ -77,6 +77,11 @@ function buttonColors(theme, variant) {
       return { bg: theme.panelFillStrong, pressed: theme.panelFill, border: 'transparent', text: theme.panelText };
     case 'panelLoss':
       return { bg: 'transparent', pressed: theme.panelFill, border: theme.panelLine, text: theme.panelDim };
+    // Red only for the one thing that can't be undone: deleting an account.
+    case 'danger':
+      return { bg: theme.danger, pressed: theme.dangerPressed, border: theme.danger, text: theme.onAccent };
+    case 'dangerQuiet':
+      return { bg: 'transparent', pressed: theme.dangerSoft, border: theme.dangerLine, text: theme.danger };
     default:
       return { bg: theme.accent, pressed: theme.accentPressed, border: theme.accent, text: theme.onAccent };
   }
@@ -90,6 +95,7 @@ const BUTTON_SIZES = {
 
 /**
  * variant: primary | quiet | link | panelPrimary | panelQuiet | panelWin | panelLoss
+ *          | danger | dangerQuiet (deleting an account, nothing else)
  * `waiting` keeps a disabled button fully legible with a dashed edge -
  * for a countdown the player is watching, not a dead control.
  */

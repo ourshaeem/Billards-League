@@ -37,6 +37,7 @@ export const palette = {
   gray900: '#1b1a22',
 
   danger: '#b42318',
+  dangerPressed: '#912018',
   dangerSoft: '#fef3f2',
   dangerLine: '#fecdca',
   dangerOnDark: '#fda29b',
@@ -93,6 +94,7 @@ const shared = {
   inputFocus: p.purple500,
 
   danger: p.danger,
+  dangerPressed: p.dangerPressed,
   dangerSoft: p.dangerSoft,
   dangerLine: p.dangerLine,
   warn: p.warn,

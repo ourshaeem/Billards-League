@@ -12,7 +12,7 @@ import os
 from datetime import timedelta
 
 import click
-from flask import Flask, jsonify, request
+from flask import Flask, Response, jsonify, request
 from flask_cors import CORS
 from flask_jwt_extended import (
     JWTManager,
@@ -27,6 +27,13 @@ from logic.auth import login_user, register_user
 from logic.countries import country_list
 from logic.leaderboard import top50_leaderboard
 from logic.match_history import DEFAULT_LIMIT, MAX_LIMIT, league_history, player_history
+from logic.account import (
+    DELETE_RESULT_DELETED,
+    DELETE_RESULT_IN_GAME,
+    DELETE_RESULT_WRONG_PASSWORD,
+    delete_account,
+)
+from logic.privacy import privacy_policy_html
 from logic.profile import EDITABLE_FIELDS, get_profile, update_profile
 from logic.tables import default_table_for, list_leagues, table_snapshot
 from models import BILLIARDS, LEAGUE_NAMES, LEAGUE_TYPES, Player, db
@@ -177,6 +184,25 @@ def register_jwt_errors(jwt):
     @jwt.expired_token_loader
     def expired_token(_header, _payload):
         return error("Your session expired. Please sign in again.", 401)
+
+    @jwt.token_in_blocklist_loader
+    def account_gone(_header, payload):
+        """
+        A token for an account that has been deleted - or that never
+        existed - is refused at once, rather than honoured until it
+        expires a day later. One lookup by primary key per signed-in
+        request.
+        """
+        try:
+            user_id = int(payload.get("sub"))
+        except (TypeError, ValueError):
+            return True
+        player = db.session.get(Player, user_id)
+        return player is None or player.is_deleted
+
+    @jwt.revoked_token_loader
+    def revoked_token(_header, _payload):
+        return error("Your session isn't valid any more. Please sign in again.", 401)
 
 
 def register_error_handlers(app):
@@ -625,6 +651,42 @@ def register_routes(app):
         if profile is None:
             return error(ACCOUNT_GONE, 404)
         return jsonify({"message": "Profile saved.", "profile": profile})
+
+    # 6g. DELETE YOUR ACCOUNT (Protected)
+    # Asks for the password again. A wrong one is 403, not 401: to the
+    # apps a 401 means "your session ended" and signs the player out.
+    @app.route("/profile/delete", methods=["POST"])
+    @jwt_required()
+    def delete_my_account():
+        user_id = int(get_jwt_identity())
+        password = json_body().get("password")
+
+        if not isinstance(password, str) or not password:
+            return error("Enter your password to delete your account.", 400, field="password")
+
+        try:
+            outcome = delete_account(user_id, password)
+        except Exception:
+            log.exception("deleting account %s failed", user_id)
+            reset_session()
+            return error("Couldn't delete your account just now. Please try again.", 500)
+
+        if outcome == DELETE_RESULT_DELETED:
+            return jsonify({"message": "Your account was deleted."})
+        if outcome == DELETE_RESULT_WRONG_PASSWORD:
+            return error("That password isn't right.", 403, field="password")
+        if outcome == DELETE_RESULT_IN_GAME:
+            return error(
+                "You're in a game right now - report the score first, then delete your account.",
+                409,
+            )
+        return error(ACCOUNT_GONE, 404)
+
+    # 6h. PRIVACY POLICY (Public, a web page)
+    # The app stores link here, and the apps' Profile screens do too.
+    @app.route("/privacy", methods=["GET"])
+    def privacy_policy():
+        return Response(privacy_policy_html(), mimetype="text/html")
 
     # 6f. COUNTRIES FOR THE FLAG PICKER (Public)
     @app.route("/countries", methods=["GET"])

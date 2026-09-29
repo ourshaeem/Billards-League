@@ -196,6 +196,24 @@ def leave_queue(user_id, table_id):
         raise
 
 
+@retry_on_deadlock
+def leave_all_queues(user_id):
+    """
+    Take a player out of every queue at once, with no waiting period.
+    Returns how many entries went. For account deletion: an account that
+    no longer exists must not be pulled into a game.
+    """
+    try:
+        removed = db.session.execute(
+            db.delete(QueueEntry).where(QueueEntry.user_id == user_id)
+        ).rowcount
+        db.session.commit()
+        return removed
+    except Exception:
+        db.session.rollback()
+        raise
+
+
 def get_queue_status(user_id, table_id):
     """
     None if the player isn't queued, otherwise:

@@ -493,6 +493,20 @@ export default function App() {
     return { ok: true };
   };
 
+  /** Returns { ok, field?, message? }; on success the player is signed out. */
+  const handleDeleteAccount = async (password) => {
+    const res = await api.deleteAccount(password);
+    if (!res.ok) {
+      const field = res.data?.field;
+      // A wrong password is shown beside the field; anything else here.
+      if (!field && res.kind !== api.ErrorKind.AUTH) pushToast(res.message, 'error');
+      return { ok: false, field, message: res.message };
+    }
+    signOut();
+    pushToast('Your account was deleted.', 'info');
+    return { ok: true };
+  };
+
   // --- Render ----------------------------------------------------------
 
   // A dashboard with no league chosen can't show anything; ask instead.
@@ -565,6 +579,7 @@ export default function App() {
             profile={profile}
             countries={countries}
             onSave={handleSaveProfile}
+            onDeleteAccount={handleDeleteAccount}
             onBack={() => setView(league ? 'dashboard' : 'league')}
             busy={busy}
           />

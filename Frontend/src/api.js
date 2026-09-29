@@ -319,6 +319,17 @@ export const recordMatch = (myScore, oppScore, matchId, league) =>
     },
   });
 
+/**
+ * Delete the signed-in player's account, confirming with their password.
+ * A wrong password is a 403 with data.field "password" - not a 401,
+ * which would read as "session ended".
+ */
+export const deleteAccount = (password) =>
+  request('/profile/delete', { method: 'POST', auth: true, body: { password } });
+
+/** The privacy policy web page, which the app stores ask to be linked. */
+export const PRIVACY_POLICY_URL = `${API_BASE}/privacy`;
+
 /** A king with no challenger gives up the table. */
 export const stepDown = (tableId = 1) =>
   request('/table/step-down', { method: 'POST', auth: true, body: { table_id: tableId } });

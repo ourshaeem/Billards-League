@@ -197,6 +197,7 @@ ADDED_COLUMNS = [
     ("Players", "ping_pong_rank_id", "INTEGER NULL"),
     ("Players", "country_flag", "VARCHAR(2) NULL"),
     ("Players", "profile_picture", "VARCHAR(512) NULL"),
+    ("Players", "deleted_at", "DATETIME NULL"),
 ]
 
 # The name ping pong's first table is given when ensure_schema creates it.

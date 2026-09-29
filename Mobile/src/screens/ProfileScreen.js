@@ -6,12 +6,13 @@
  * here and the ones the server sends back (it names the field).
  */
 import React, { useCallback, useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Linking, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useIsFocused } from '@react-navigation/native';
 import Feather from '@expo/vector-icons/Feather';
 
 import * as api from '../api';
 import { CountryPicker } from '../components/CountryPicker';
+import { DeleteAccountSheet } from '../components/DeleteAccountSheet';
 import { Avatar } from '../components/Player';
 import { Button, Card, Field, FieldError, Screen, Txt } from '../components/ui';
 import { flagEmoji } from '../flags';
@@ -39,9 +40,18 @@ function pictureProblem(link) {
 export function ProfileScreen() {
   const { signOut } = useSession();
   const { gamesVersion } = useLive();
+  const toast = useToast();
   const focused = useIsFocused();
   const [profile, setProfile] = useState(null);
   const [problem, setProblem] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+
+  const accountDeleted = async () => {
+    setDeleting(false);
+    await signOut();
+    // After signing out, which clears earlier messages.
+    toast.push('Your account was deleted.', 'info');
+  };
 
   // Reloaded whenever the tab comes into view or a game ends, so the
   // standings reflect the games just played.
@@ -71,6 +81,25 @@ export function ProfileScreen() {
       )}
       {profile ? <Standing profile={profile} /> : null}
       <Button variant="quiet" icon="log-out" title="Sign out" onPress={signOut} style={styles.signOut} />
+
+      <Card title="Your account" style={styles.account}>
+        <Txt variant="small" muted style={styles.accountText}>
+          Deleting your account removes your name, flag, picture and password, and takes
+          you off the ladders. Your games stay in other players' history as "Deleted player".
+        </Txt>
+        <Button variant="dangerQuiet" icon="trash-2" title="Delete account" onPress={() => setDeleting(true)} />
+      </Card>
+
+      <Button
+        variant="link"
+        size="sm"
+        title="Privacy policy"
+        accessibilityHint="Opens in your browser"
+        onPress={() => Linking.openURL(api.PRIVACY_POLICY_URL)}
+        style={styles.privacy}
+      />
+
+      <DeleteAccountSheet visible={deleting} onClose={() => setDeleting(false)} onDeleted={accountDeleted} />
     </Screen>
   );
 }
@@ -288,5 +317,8 @@ const styles = StyleSheet.create({
   standingRow: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 56, paddingVertical: 8 },
   standingName: { flex: 1 },
   standingNumber: { fontFamily: fonts.regular, fontSize: type.body, fontVariant: ['tabular-nums'], minWidth: 44, textAlign: 'right' },
-  signOut: { marginTop: 4 },
+  signOut: { marginTop: 4, marginBottom: 16 },
+  account: { marginBottom: 8 },
+  accountText: { marginBottom: 14 },
+  privacy: { alignSelf: 'center' },
 });

@@ -138,6 +138,11 @@ match history and player profiles. Tests: `tests/test_leagues.py`
 `tests/test_match_history.py`, `tests/test_profile.py`, and the
 `ensure_schema` additions in `tests/test_schema.py`.
 
+**Shipped, handed to Backend 1 on 2026-09-29:** account deletion and the
+privacy policy page. Tests: `tests/test_account.py` (`DeleteAccount`,
+`TokensForMissingAccounts`, `PrivacyPolicy`), and `deleted_at` in
+`tests/test_schema.py`.
+
 ---
 
 ## Frontend 1 - connections
@@ -335,6 +340,31 @@ Only those two fields are editable. Both need a login.
 
 `GET /countries` returns `{ countries: [{ code, name }] }`, sorted by
 name - the picker's list, and the only codes `PATCH` accepts.
+
+### `POST /profile/delete`
+
+Deletes the signed-in player's account. Body `{ password }` - asked for
+again. `200 { message }` deleted; `400` no password and `403` wrong
+password, both with `field: "password"` (a 403, never a 401: to the apps
+a 401 means "session ended"); `409` a game in progress - report it first.
+
+Deleting wipes the Players row's personal details (username becomes a
+random placeholder, names, flag, picture, password) and sets
+`deleted_at`; the row stays so other players' history keeps working,
+shown as "Deleted player" (`Player.display_name`). The player leaves
+every queue, gives up a held table and drops off the ladder. Both app
+stores require this, in the app, for any app with sign-up.
+
+A login token for a deleted - or never-existing - account is refused on
+every signed-in route with `401` (`token_in_blocklist_loader` in
+app.py), not honoured until it expires.
+
+### `GET /privacy`
+
+The privacy policy as an HTML page (`logic/privacy.py`), linked from both
+apps and from the store listings. It must describe what the app actually
+stores: a new kind of data collected means an update here. The contact
+address comes from `PRIVACY_CONTACT_EMAIL` in the host's environment.
 
 ### Error response shape
 

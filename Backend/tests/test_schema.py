@@ -112,6 +112,7 @@ class EnsureSchemaTests(BaseTestCase):
             ("Players", "profile_picture"),
             ("Players", "country_flag"),
             ("Players", "ping_pong_wins"),
+            ("Players", "deleted_at"),
             ("Pool_Tables", "league_type"),
         ):
             db.session.execute(db.text(f"ALTER TABLE {table} DROP COLUMN {column}"))
