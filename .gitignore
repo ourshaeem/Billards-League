@@ -19,3 +19,6 @@ build/
 .DS_Store
 .vscode/
 .idea/
+
+# Backups the reset-league command saves (they hold usernames).
+Backend/backups/

@@ -129,7 +129,9 @@ is a contract with the frontend. See *Shared contracts* below.
 
 **Candidate next features:** more than one table per league (the backend
 accepts any `table_id`; the UI uses each league's first table), an admin
-view to clear a stuck table, seasons.
+view to clear a stuck table, seasons (a league can already be reset by
+hand with `flask --app app reset-league <league>`; keeping each season's
+final ladder would be the next step).
 
 **Shipped, handed to Backend 1 on 2026-09-23:** the ping pong league,
 match history and player profiles. Tests: `tests/test_leagues.py`
@@ -137,6 +139,10 @@ match history and player profiles. Tests: `tests/test_leagues.py`
 `PingPongEloTests`, `LeaderboardByLeague`, `TableSnapshotRoute`),
 `tests/test_match_history.py`, `tests/test_profile.py`, and the
 `ensure_schema` additions in `tests/test_schema.py`.
+
+**Shipped, handed to Backend 1 on 2026-10-01:** `reset-league`, the CLI
+command that starts one league over (`logic/seasons.py`). Tests:
+`tests/test_seasons.py` (`ResetLeague`, `ResetLeagueCommand`).
 
 **Shipped, handed to Backend 1 on 2026-09-29:** account deletion and the
 privacy policy page. Tests: `tests/test_account.py` (`DeleteAccount`,

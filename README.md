@@ -139,6 +139,20 @@ Keychain / Android Keystore), not plain storage.
 `npx expo start --web` runs the same app in a browser, which is handy for
 a quick look but isn't what ships to phones.
 
+### Starting a league over (a new season)
+
+Puts every player's rating, record and rank in one league back to a new
+player's, keeps the finished games in the history, and leaves the other
+league alone. Everyone's old numbers are saved to `Backend/backups/`
+(gitignored) first. From `Backend/`, against the live database:
+
+```bash
+DATABASE_URL="<the live DATABASE_URL, with ssl_ca pointing at a downloaded RDS bundle>" \
+  flask --app app reset-league ping_pong      # or billiards
+```
+
+It prints which database and how many players before asking to confirm.
+
 ### Tests
 
 ```bash

@@ -7,9 +7,10 @@ text as-is. Exception details go to the server log, never into a response:
 a SQL statement in a pop-up tells a player nothing, and tells anyone
 probing the server a great deal.
 """
+import json
 import logging
 import os
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 import click
 from flask import Flask, Response, jsonify, request
@@ -22,7 +23,7 @@ from flask_jwt_extended import (
 )
 from werkzeug.exceptions import HTTPException
 
-from database import configure_app, is_production, prepare_database, reset_session
+from database import configure_app, describe_database, is_production, prepare_database, reset_session
 from logic.auth import login_user, register_user
 from logic.countries import country_list
 from logic.leaderboard import top50_leaderboard
@@ -34,6 +35,7 @@ from logic.account import (
     delete_account,
 )
 from logic.privacy import privacy_policy_html
+from logic.seasons import league_standings, reset_league_standings
 from logic.profile import EDITABLE_FIELDS, get_profile, update_profile
 from logic.tables import default_table_for, list_leagues, table_snapshot
 from models import BILLIARDS, LEAGUE_NAMES, LEAGUE_TYPES, Player, db
@@ -159,6 +161,42 @@ def register_commands(app):
             prepare_database(app, require_connection=True)
         except RuntimeError as e:
             raise click.ClickException(str(e))
+
+    @app.cli.command("reset-league")
+    @click.argument("league", type=click.Choice(LEAGUE_TYPES))
+    @click.option("--yes", is_flag=True, help="Don't ask for confirmation.")
+    @click.option(
+        "--backup-dir",
+        default="backups",
+        show_default=True,
+        help="Where to save everyone's numbers before the reset.",
+    )
+    def reset_league_command(league, yes, backup_dir):
+        """
+        Start LEAGUE over: everyone's rating to 0, record to 0-0, rank to
+        the starting rank. Finished games stay in the history; the other
+        league is untouched. Everyone's old numbers are saved to a JSON
+        file in --backup-dir first, so the reset can be undone.
+        """
+        with app.app_context():
+            before = league_standings(league)
+            played = sum(1 for p in before if p["wins"] or p["losses"] or p["elo"])
+            click.echo(
+                f"{LEAGUE_NAMES[league]}: {len(before)} players, {played} with results, "
+                f"on {describe_database(app.config['SQLALCHEMY_DATABASE_URI'])}."
+            )
+            if not yes:
+                click.confirm("Reset everyone's ratings and records in this league?", abort=True)
+
+            os.makedirs(backup_dir, exist_ok=True)
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            backup_path = os.path.join(backup_dir, f"{league}-standings-{stamp}.json")
+            with open(backup_path, "w") as f:
+                json.dump({"league": league, "saved_at": stamp, "players": before}, f, indent=2)
+            click.echo(f"Saved everyone's numbers to {backup_path}")
+
+            count = reset_league_standings(league)
+            click.echo(f"Reset {count} players in the {LEAGUE_NAMES[league]}.")
 
 
 def error(message, status, **extra):
