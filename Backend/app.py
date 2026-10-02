@@ -38,6 +38,7 @@ from logic.cancel_match import (
     keep_playing,
     request_cancel,
 )
+from logic.corrections import GameProblem, game_summary, void_finished_match
 from logic.countries import country_list
 from logic.leaderboard import top50_leaderboard
 from logic.match_history import (
@@ -235,6 +236,68 @@ def register_commands(app):
 
             count = reset_league_standings(league)
             click.echo(f"Reset {count} players in the {LEAGUE_NAMES[league]}.")
+
+    @app.cli.command("void-game")
+    @click.argument("match_id", type=int)
+    @click.option("--yes", is_flag=True, help="Don't ask for confirmation.")
+    @click.option(
+        "--backup-dir",
+        default="backups",
+        show_default=True,
+        help="Where to save the game and both players' numbers first.",
+    )
+    def void_game_command(match_id, yes, backup_dir):
+        """
+        Take back finished game MATCH_ID - one played by accident, say. It
+        leaves the history, the winner gives back the points it gave them,
+        the loser gets back what it cost them, and each loses the game from
+        their record. Games since stay as they were. The game and both
+        players' numbers are saved to a JSON file in --backup-dir first.
+        (The match_id is in GET /matches/history.)
+        """
+        with app.app_context():
+            try:
+                game = game_summary(match_id)
+            except GameProblem as e:
+                raise click.ClickException(str(e))
+
+            winner, loser, change = game["winner"], game["loser"], game["elo_change"]
+            score = "-".join(str(s) for s in game["score"]) if None not in game["score"] else "no score"
+            when = (
+                f"{round(game['seconds_ago'] / 3600, 1)} hours ago"
+                if game["seconds_ago"] is not None
+                else "at an unknown time"
+            )
+            click.echo(
+                f"Game #{match_id}, {game['league_name']}, {when}: {winner['username']} beat "
+                f"{loser['username']} {score}, moving {change} points.\n"
+                f"  {winner['username']}: {winner['elo']} points, {winner['wins']}-{winner['losses']}"
+                f" -> {winner['elo'] - change} points, {max(0, winner['wins'] - 1)}-{winner['losses']}\n"
+                f"  {loser['username']}: {loser['elo']} points, {loser['wins']}-{loser['losses']}"
+                f" -> {loser['elo'] + change} points, {loser['wins']}-{max(0, loser['losses'] - 1)}\n"
+                f"On {describe_database(app.config['SQLALCHEMY_DATABASE_URI'])}."
+            )
+            if not yes:
+                click.confirm("Remove this game and undo its points?", abort=True)
+
+            os.makedirs(backup_dir, exist_ok=True)
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            backup_path = os.path.join(backup_dir, f"voided-game-{match_id}-{stamp}.json")
+            with open(backup_path, "w") as f:
+                json.dump({"voided_at": stamp, "game": game}, f, indent=2)
+            click.echo(f"Saved the game and both players' numbers to {backup_path}")
+
+            try:
+                result = void_finished_match(match_id)
+            except GameProblem as e:
+                raise click.ClickException(str(e))
+            after = result["after"]
+            click.echo(
+                f"Game #{match_id} removed. {after['winner']['username']}: {after['winner']['elo']} "
+                f"points, {after['winner']['wins']}-{after['winner']['losses']}. "
+                f"{after['loser']['username']}: {after['loser']['elo']} points, "
+                f"{after['loser']['wins']}-{after['loser']['losses']}."
+            )
 
 
 def error(message, status, **extra):

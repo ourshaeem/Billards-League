@@ -137,9 +137,10 @@ is a contract with the frontend. See *Shared contracts* below.
 
 **Candidate next features:** more than one table per league (the backend
 accepts any `table_id`; the UI uses each league's first table), an admin
-view to clear a stuck table, seasons (a league can already be reset by
-hand with `flask --app app reset-league <league>`; keeping each season's
-final ladder would be the next step).
+view to clear a stuck table and to void a game from the app (both
+by hand for now: `void-game` takes back a finished game), seasons (a
+league can already be reset by hand with `flask --app app reset-league
+<league>`; keeping each season's final ladder would be the next step).
 
 **Shipped, handed to Backend 1 on 2026-09-23:** the ping pong league,
 match history and player profiles. Tests: `tests/test_leagues.py`
@@ -147,6 +148,12 @@ match history and player profiles. Tests: `tests/test_leagues.py`
 `PingPongEloTests`, `LeaderboardByLeague`, `TableSnapshotRoute`),
 `tests/test_match_history.py`, `tests/test_profile.py`, and the
 `ensure_schema` additions in `tests/test_schema.py`.
+
+**Shipped, handed to Backend 1 on 2026-10-02:** `void-game`, the CLI
+command that takes back a finished game played by accident
+(`logic/corrections.py`) - first used on ping pong game #33. Tests:
+`tests/test_corrections.py` (`VoidingAGame`, `NothingToVoid`,
+`VoidGameCommand`).
 
 **Shipped, handed to Backend 1 on 2026-10-02:** the ready check (a minute
 to say you're here when your turn comes), cancelling a game when both

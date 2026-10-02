@@ -164,6 +164,21 @@ DATABASE_URL="<the live DATABASE_URL, with ssl_ca pointing at a downloaded RDS b
 
 It prints which database and how many players before asking to confirm.
 
+### Taking back a game played by accident
+
+Removes one finished game from the history and undoes exactly what it
+did: the winner gives back the points it gave them, the loser gets back
+what it cost them, and each loses it from their record. Games since stay
+as they were. Find the game's `match_id` in `GET /matches/history`, then
+from `Backend/`, against the live database (as for a reset):
+
+```bash
+DATABASE_URL="<the live DATABASE_URL>" flask --app app void-game 33
+```
+
+It shows the game and both players' numbers before and after, asks
+first, and saves a backup to `Backend/backups/`.
+
 ### Tests
 
 ```bash
