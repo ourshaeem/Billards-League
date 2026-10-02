@@ -424,13 +424,11 @@ export default function App() {
     [league, tableId, userId, pushToast, noticeStatusChange],
   );
 
-  // Polled on the dashboard, and - status only - on the profile pages, so
-  // a player looking at someone's games still hears when it's their turn.
+  // Polled on the dashboard, and - status only - everywhere else a league
+  // is chosen (the profile pages, the league picker), so a player who
+  // wandered off the dashboard still hears when it's their turn.
   const onDashboard = view === 'dashboard' && viewingPlayer === null;
-  const polling =
-    Boolean(userId) &&
-    Boolean(tableId) &&
-    (view === 'dashboard' || view === 'profile' || viewingPlayer !== null);
+  const polling = Boolean(userId) && Boolean(tableId);
 
   useEffect(() => {
     if (!polling) return undefined;

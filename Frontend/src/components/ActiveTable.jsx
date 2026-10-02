@@ -1,7 +1,8 @@
 /**
  * Who is at the table right now - for everyone, not just the two
  * players. The status panel answers "can I play?"; this answers "who's
- * on?", with each player's rank and rating a hover (or tap) away.
+ * on?", with each player's rank and rating a hover away, and their
+ * profile a click.
  */
 import React from 'react';
 import { Crown, Swords } from 'lucide-react';
@@ -70,7 +71,7 @@ export function ActiveTableCard({ table, loaded, league, tableName, currentUserI
 
       {loaded && state && state !== 'free' && (
         <p className="small muted card-foot">
-          Hover over or tap a player to see their rank and rating.
+          Hover over a player for their rank and rating, or click for their profile.
         </p>
       )}
     </section>
