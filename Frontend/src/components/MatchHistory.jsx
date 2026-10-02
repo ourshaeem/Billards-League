@@ -78,7 +78,12 @@ export function MatchHistoryCard({ history, loaded, league, currentUserId }) {
   );
 }
 
-function HistoryRow({ match, league, currentUserId }) {
+/**
+ * One finished game. When the entry carries a "result", it's told from
+ * one player's side: yours by default ("You won"), or `subject`'s when
+ * the list is another player's games ("alice won").
+ */
+export function HistoryRow({ match, league, currentUserId, subject = null }) {
   const { winner, loser, winner_score: won, loser_score: lost, result } = match;
   const hasScore = typeof won === 'number' && typeof lost === 'number';
   const change = match.elo_change;
@@ -129,7 +134,7 @@ function HistoryRow({ match, league, currentUserId }) {
       <p className="history-meta">
         {result && (
           <strong className="history-outcome" data-result={result}>
-            {result === 'won' ? 'You won' : 'You lost'}
+            {subject ?? 'You'} {result === 'won' ? 'won' : 'lost'}
             {typeof change === 'number' && ` ${result === 'won' ? '+' : '−'}${change}`}
           </strong>
         )}

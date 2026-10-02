@@ -3,6 +3,7 @@
  *
  * The providers, outermost first, each needing the ones above it:
  *   SafeAreaProvider  notches, status bar and home indicator
+ *   AppearanceProvider light or dark (saved on the phone)
  *   ToastProvider     short messages over any screen
  *   SessionProvider   who is signed in (token in SecureStore) and their league
  *   LeagueProvider    the league's table and theme
@@ -22,6 +23,7 @@ import { Archivo_700Bold } from '@expo-google-fonts/archivo/700Bold';
 import { Splash } from './src/components/Wordmark';
 import { AppNavigation } from './src/navigation/RootNavigator';
 import { LeagueProvider } from './src/state/LeagueContext';
+import { AppearanceProvider } from './src/state/AppearanceContext';
 import { LiveProvider } from './src/state/LiveContext';
 import { SessionProvider } from './src/state/SessionContext';
 import { ToastProvider } from './src/state/ToastContext';
@@ -40,15 +42,17 @@ export default function App() {
 
   return (
     <SafeAreaProvider>
-      <ToastProvider>
-        <SessionProvider>
-          <LeagueProvider>
-            <LiveProvider>
-              <AppNavigation />
-            </LiveProvider>
-          </LeagueProvider>
-        </SessionProvider>
-      </ToastProvider>
+      <AppearanceProvider>
+        <ToastProvider>
+          <SessionProvider>
+            <LeagueProvider>
+              <LiveProvider>
+                <AppNavigation />
+              </LiveProvider>
+            </LeagueProvider>
+          </SessionProvider>
+        </ToastProvider>
+      </AppearanceProvider>
     </SafeAreaProvider>
   );
 }

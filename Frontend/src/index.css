@@ -18,6 +18,12 @@
    The ping pong theme only redefines tokens; no component knows which
    league it is drawn in.
 
+   Each also comes dark, chosen by <html data-theme="dark"> (see
+   src/theme.js). Dark keeps the same roles on a near-black page: the
+   billiards panel stays its deep purple, and the ping pong panel - white
+   by day - becomes charcoal under its purple band. Again only tokens
+   change.
+
    Colours are defined once, here. Components use the role tokens
    (--text, --accent, --panel-text...) rather than raw values.
    ===================================================================== */
@@ -61,8 +67,30 @@
   /* Text on a purple fill (buttons, badges) */
   --on-accent: var(--white);
 
+  /* Purple as text: headings, wins, your own name, links */
+  --heading: var(--purple-900);
+  --accent-text: var(--purple-700);
+  --accent-line: var(--purple-300);
+  --avatar-text: var(--purple-800);
+
+  /* Quiet controls: outlined buttons, inputs, tracks */
+  --control-line: var(--gray-300);
+  --control-text: var(--gray-700);
+  --fill-soft: var(--gray-100);
+  --input-bg: var(--white);
+  --focus: var(--purple-500);
+  --selection-bg: var(--purple-200);
+  --selection-text: var(--purple-950);
+
   /* The page's backdrop glow */
   --page-glow: var(--accent-soft);
+
+  /* Each league's preview on the league picker. Billiards is the same in
+     both themes; ping pong is white by day. */
+  --preview-pp-bg: linear-gradient(165deg, var(--white) 0%, var(--white) 55%, var(--purple-50) 100%);
+  --preview-pp-text: var(--purple-950);
+  --preview-pp-border: var(--purple-200);
+  --preview-pp-shadow: 0 16px 36px rgba(46, 16, 101, 0.1);
 
   /* Roles on the status panel - billiards: white on deep purple */
   --panel-bg: linear-gradient(155deg, var(--purple-600) 0%, var(--purple-800) 60%, var(--purple-900) 100%);
@@ -88,6 +116,7 @@
 
   /* Only for things going wrong */
   --danger: #b42318;
+  --danger-fill: var(--danger);
   --danger-pressed: #912018;
   --danger-soft: #fef3f2;
   --danger-line: #fecdca;
@@ -113,6 +142,9 @@
   --shadow-card: 0 1px 2px rgba(30, 11, 61, 0.05), 0 4px 16px rgba(30, 11, 61, 0.04);
   --shadow-toast: 0 12px 32px rgba(27, 26, 34, 0.28);
   --shadow-tooltip: 0 10px 28px rgba(27, 26, 34, 0.3);
+  --shadow-raised: 0 1px 3px rgba(30, 11, 61, 0.12);
+  --shadow-button: 0 2px 8px rgba(109, 40, 217, 0.28);
+  --avatar-ring: inset 0 0 0 1px rgba(30, 11, 61, 0.08);
 
   --font-display: 'Instrument Serif', Georgia, 'Times New Roman', serif;
   --font-ui: 'Archivo', system-ui, -apple-system, 'Segoe UI', sans-serif;
@@ -156,6 +188,99 @@
   --panel-error-edge: var(--danger);
 }
 
+/* --- Dark: the same roles on a near-black page ---
+   A touch of purple in the blacks keeps it the league's own dark rather
+   than a generic one. Text sits at 7:1 or better against its card;
+   purple steps lighter wherever it is text, and stays a fill colour
+   where it is a button. */
+:root[data-theme='dark'] {
+  --page: #110e17;
+  --surface: #1a1622;
+  --line: #2d2838;
+  --line-soft: #231f2c;
+  --text: #ecebf3;
+  --text-muted: #a5a2b5;
+  --accent: var(--purple-500);
+  --accent-hover: var(--purple-600);
+  --accent-strong: var(--purple-200);
+  --accent-soft: #2e2249;
+  --accent-wash: #211a31;
+  --on-accent: var(--white);
+
+  --heading: var(--purple-200);
+  --accent-text: var(--purple-300);
+  --accent-line: #5b4a8c;
+  --avatar-text: var(--purple-100);
+
+  --control-line: #3f394c;
+  --control-text: #d5d3df;
+  --fill-soft: #27222f;
+  --input-bg: #15121c;
+  --focus: #a78bfa;
+  --selection-bg: var(--purple-700);
+  --selection-text: var(--white);
+
+  --page-glow: #261c40;
+
+  --preview-pp-bg: linear-gradient(165deg, #1e1b27 0%, #1e1b27 55%, #281e40 100%);
+  --preview-pp-text: #f4f2fa;
+  --preview-pp-border: #3d3060;
+  --preview-pp-shadow: 0 16px 36px rgba(0, 0, 0, 0.4);
+
+  /* The billiards panel keeps its purple; only its shadow deepens. */
+  --panel-shadow: 0 20px 44px rgba(0, 0, 0, 0.5);
+
+  --danger: #f97066;
+  --danger-fill: #d92d20;
+  --danger-pressed: #b42318;
+  --danger-soft: #2c1517;
+  --danger-line: #7a271a;
+  --warn: #fec84b;
+  --warn-soft: #2b2112;
+  --warn-line: #7a5214;
+
+  /* Toasts and hover cards lift off the dark page instead of sinking. */
+  --toast-bg: #2c2839;
+  --toast-text: var(--white);
+  --toast-muted: #bcb9cb;
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 16px rgba(0, 0, 0, 0.25);
+  --shadow-toast: 0 12px 32px rgba(0, 0, 0, 0.55);
+  --shadow-tooltip: 0 10px 28px rgba(0, 0, 0, 0.55);
+  --shadow-raised: 0 1px 3px rgba(0, 0, 0, 0.5);
+  --shadow-button: 0 2px 10px rgba(0, 0, 0, 0.45);
+  --avatar-ring: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+
+  color-scheme: dark;
+}
+
+/* Dark ping pong: the white panel turns charcoal under its purple band,
+   so it still reads as ping pong's - and isn't a floodlight at night. */
+:root[data-theme='dark'][data-league='ping_pong'] {
+  --page-glow: #1e1a28;
+
+  --panel-bg: linear-gradient(165deg, #1e1b27 0%, #1e1b27 55%, #261d3c 100%);
+  --panel-bg-playing: linear-gradient(165deg, #1e1b27 0%, #261d3c 55%, #301f55 100%);
+  --panel-border: #3d3060;
+  --panel-edge: linear-gradient(90deg, var(--purple-500), var(--purple-300));
+  --panel-edge-size: 4px;
+  --panel-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
+  --panel-text: #f4f2fa;
+  --panel-dim: #c9c6d7;
+  --panel-faint: #9f9bb0;
+  --panel-line: #3f394c;
+  --panel-fill: #272231;
+  --panel-fill-hover: #30293f;
+  --panel-fill-strong: #3b3151;
+  --panel-icon: #a78bfa;
+  --panel-focus: #a78bfa;
+  --panel-cta-bg: var(--purple-500);
+  --panel-cta-text: var(--white);
+  --panel-cta-hover: var(--purple-600);
+  --panel-cta-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+  --panel-error-edge: var(--danger);
+}
+
 *,
 *::before,
 *::after {
@@ -187,8 +312,8 @@ body {
 }
 
 ::selection {
-  background: var(--purple-200);
-  color: var(--purple-950);
+  background: var(--selection-bg);
+  color: var(--selection-text);
 }
 
 h1,
@@ -205,7 +330,7 @@ p {
 
 /* --- Keyboard focus must always be visible --- */
 :focus-visible {
-  outline: 2px solid var(--purple-500);
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
   border-radius: var(--radius-sm);
 }
@@ -234,7 +359,7 @@ p {
   font-size: var(--step-3);
   font-weight: 400;
   letter-spacing: 0.01em;
-  color: var(--purple-900);
+  color: var(--heading);
   display: flex;
   align-items: center;
   gap: 12px;
@@ -299,7 +424,7 @@ p {
 
 .masthead-profile:hover,
 .masthead-profile[aria-current='page'] {
-  border-color: var(--purple-300);
+  border-color: var(--accent-line);
   background: var(--accent-wash);
 }
 
@@ -445,17 +570,17 @@ p {
 .btn-primary {
   font-size: var(--step-1);
   padding: 15px 30px;
-  box-shadow: 0 2px 8px rgba(109, 40, 217, 0.28);
+  box-shadow: var(--shadow-button);
 }
 
 .btn-quiet {
   background: transparent;
-  border-color: var(--gray-300);
-  color: var(--gray-700);
+  border-color: var(--control-line);
+  color: var(--control-text);
 }
 
 .btn-quiet:hover:not(:disabled) {
-  background: var(--gray-100);
+  background: var(--fill-soft);
   color: var(--text);
 }
 
@@ -468,7 +593,7 @@ p {
 .btn-link {
   background: none;
   border: none;
-  color: var(--accent-hover);
+  color: var(--accent-text);
   cursor: pointer;
   font: inherit;
   font-weight: 600;
@@ -478,7 +603,7 @@ p {
 }
 
 .btn-link:hover {
-  color: var(--accent-strong);
+  color: var(--heading);
 }
 
 /* On the purple panel the loud button flips to white; on the white
@@ -583,7 +708,7 @@ p {
   padding: 3px 11px;
   border-radius: 999px;
   background: var(--accent-soft);
-  color: var(--purple-700);
+  color: var(--accent-text);
   white-space: nowrap;
 }
 
@@ -612,7 +737,7 @@ p {
   font-size: var(--step--1);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
-  background: var(--gray-100);
+  background: var(--fill-soft);
   color: var(--text-muted);
 }
 
@@ -692,7 +817,7 @@ tbody tr[data-self='true'] td:first-child {
 }
 
 .record-win {
-  color: var(--purple-700);
+  color: var(--accent-text);
   font-weight: 600;
 }
 .record-loss {
@@ -724,7 +849,7 @@ tbody tr[data-self='true'] td:first-child {
   display: block;
   font-size: var(--step--1);
   font-weight: 600;
-  color: var(--gray-700);
+  color: var(--control-text);
   margin-bottom: 6px;
 }
 
@@ -740,8 +865,8 @@ select {
   width: 100%;
   font: inherit;
   color: var(--text);
-  background: var(--white);
-  border: 1px solid var(--gray-300);
+  background: var(--input-bg);
+  border: 1px solid var(--control-line);
   border-radius: var(--radius-sm);
   padding: 12px 14px;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
@@ -753,7 +878,7 @@ input::placeholder {
 
 input:focus,
 select:focus {
-  border-color: var(--purple-500);
+  border-color: var(--focus);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
@@ -1014,11 +1139,11 @@ select[aria-invalid='true'] {
   border-radius: 50%;
   overflow: hidden;
   background: var(--accent-soft);
-  color: var(--purple-800);
+  color: var(--avatar-text);
   font-size: calc(var(--avatar-size) * 0.42);
   font-weight: 700;
   line-height: 1;
-  box-shadow: inset 0 0 0 1px rgba(30, 11, 61, 0.08);
+  box-shadow: var(--avatar-ring);
 }
 
 .avatar[data-size='sm'] {
@@ -1095,7 +1220,7 @@ select[aria-invalid='true'] {
 /* Your own name, marked by colour rather than a "you" pill - there's no
    room for one beside a name in the table and history rows. */
 .player-trigger[data-you='true'] .player-name {
-  color: var(--purple-700);
+  color: var(--accent-text);
 }
 
 .player-tooltip {
@@ -1247,7 +1372,7 @@ select[aria-invalid='true'] {
   display: inline-flex;
   padding: 3px;
   border-radius: 999px;
-  background: var(--gray-100);
+  background: var(--fill-soft);
   flex: none;
 }
 
@@ -1270,8 +1395,8 @@ select[aria-invalid='true'] {
 
 .segmented-option[aria-pressed='true'] {
   background: var(--surface);
-  color: var(--purple-700);
-  box-shadow: 0 1px 3px rgba(30, 11, 61, 0.12);
+  color: var(--accent-text);
+  box-shadow: var(--shadow-raised);
 }
 
 .segmented-option:focus-visible {
@@ -1325,11 +1450,11 @@ select[aria-invalid='true'] {
 
 .result-tag[data-result='win'] {
   background: var(--accent-soft);
-  color: var(--purple-700);
+  color: var(--accent-text);
 }
 
 .result-tag[data-result='loss'] {
-  background: var(--gray-100);
+  background: var(--fill-soft);
   color: var(--text-muted);
 }
 
@@ -1344,7 +1469,7 @@ select[aria-invalid='true'] {
 }
 
 .history-score-win {
-  color: var(--purple-700);
+  color: var(--accent-text);
 }
 
 .history-meta {
@@ -1359,11 +1484,11 @@ select[aria-invalid='true'] {
 }
 
 .history-outcome[data-result='won'] {
-  color: var(--purple-700);
+  color: var(--accent-text);
 }
 
 .history-outcome[data-result='lost'] {
-  color: var(--gray-700);
+  color: var(--control-text);
 }
 
 /* --- Choosing a league --- */
@@ -1382,7 +1507,7 @@ select[aria-invalid='true'] {
   font-family: var(--font-display);
   font-size: clamp(2rem, 5vw, var(--step-4));
   font-weight: 400;
-  color: var(--purple-900);
+  color: var(--heading);
   margin-bottom: 8px;
 }
 
@@ -1431,10 +1556,10 @@ select[aria-invalid='true'] {
 }
 
 .league-option[data-league-option='ping_pong'] {
-  color: var(--purple-950);
-  background: linear-gradient(165deg, var(--white) 0%, var(--white) 55%, var(--purple-50) 100%);
-  border: 1px solid var(--purple-200);
-  box-shadow: 0 16px 36px rgba(46, 16, 101, 0.1);
+  color: var(--preview-pp-text);
+  background: var(--preview-pp-bg);
+  border: 1px solid var(--preview-pp-border);
+  box-shadow: var(--preview-pp-shadow);
 }
 
 .league-option[data-league-option='ping_pong']::before {
@@ -1595,8 +1720,8 @@ select[aria-invalid='true'] {
 /* --- Deleting an account: the one place red is used for an action --- */
 
 .btn-danger {
-  background: var(--danger);
-  color: var(--on-accent);
+  background: var(--danger-fill);
+  color: var(--white);
 }
 
 .btn-danger:hover:not(:disabled) {
@@ -1632,4 +1757,299 @@ select[aria-invalid='true'] {
 
 .profile-privacy {
   text-align: center;
+}
+
+/* --- Your turn: the minute to say you're here --- */
+
+.turn-meter {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 22px;
+  max-width: 460px;
+}
+
+.turn-meter-track {
+  flex: 1;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--panel-fill-hover);
+  overflow: hidden;
+}
+
+/* Drains as the minute runs out. The clock beside it says the same in
+   numbers, so nothing depends on seeing the bar. */
+.turn-meter-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--panel-cta-bg);
+  transition: width 1s linear;
+}
+
+.turn-meter-clock {
+  font-size: var(--step-2);
+  font-weight: 700;
+  color: var(--panel-text);
+  min-width: 3.2ch;
+}
+
+/* A question on the panel that needs an answer: the opponent asking to
+   cancel, or your own request waiting on theirs. */
+.panel-notice {
+  margin: 0 0 20px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  font-size: var(--step--1);
+  background: var(--panel-fill);
+  border: 1px solid var(--panel-line);
+  color: var(--panel-text);
+  max-width: 62ch;
+}
+
+.panel-notice-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.status-note .btn-link {
+  font-size: inherit;
+}
+
+/* Off the dashboard, a turn that comes up still has to be answered. */
+:root {
+  --banner-button-bg: var(--white);
+  --banner-button-text: var(--purple-800);
+}
+
+.turn-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  margin-bottom: 22px;
+  padding: 12px 16px;
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: var(--on-accent);
+  box-shadow: var(--shadow-button);
+}
+
+.turn-banner-icon {
+  flex: none;
+}
+
+.turn-banner-text {
+  flex: 1 1 220px;
+  font-size: var(--step--1);
+}
+
+.turn-banner-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.turn-banner .btn {
+  background: var(--banner-button-bg);
+  color: var(--banner-button-text);
+}
+
+.turn-banner .btn:hover:not(:disabled) {
+  background: var(--accent-wash);
+}
+
+.turn-banner .btn-quiet {
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.55);
+  color: var(--on-accent);
+}
+
+.turn-banner .btn-quiet:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.16);
+  color: var(--on-accent);
+}
+
+.turn-banner :focus-visible {
+  outline-color: var(--on-accent);
+}
+
+/* --- Whose turn it is, in the queue --- */
+
+.queue-tag {
+  flex: none;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 2px 9px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.queue-tag[data-tag='up'] {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.queue-tag[data-tag='here'] {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+/* --- Names that open a profile --- */
+
+.player-link {
+  font: inherit;
+  font-weight: 600;
+  color: inherit;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.player-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.player-link[data-you='true'] {
+  color: var(--accent-text);
+}
+
+.tooltip-hint {
+  margin-top: 4px;
+  font-size: 0.72rem;
+  color: var(--tooltip-muted);
+}
+
+.ladder-player .rank-name {
+  /* Under the name, not under the picture. */
+  padding-left: 38px;
+}
+
+.btn-icon {
+  padding: 8px;
+  width: 36px;
+  height: 36px;
+}
+
+.btn-link-small {
+  font-size: var(--step--1);
+  padding: 0;
+  margin-top: 4px;
+}
+
+/* --- Another player's profile --- */
+
+.profile-shell-wide {
+  max-width: 720px;
+}
+
+.profile-league-switch {
+  justify-self: start;
+}
+
+.h2h-score {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 18px;
+  margin: 4px 0 14px;
+}
+
+.h2h-side {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.h2h-number {
+  font-family: var(--font-display);
+  font-size: var(--step-4);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+
+.h2h-number[data-leading='true'] {
+  color: var(--accent-text);
+}
+
+.h2h-label {
+  max-width: 14ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--step--1);
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.h2h-dash {
+  font-family: var(--font-display);
+  font-size: var(--step-3);
+  line-height: 1.2;
+  color: var(--text-muted);
+}
+
+.opponent-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.opponent-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--line-soft);
+  cursor: pointer;
+}
+
+.opponent-row:hover {
+  background: var(--accent-wash);
+}
+
+.opponent-row[aria-pressed='true'] {
+  background: var(--accent-soft);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.opponent-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+/* --- Uploading a picture --- */
+
+.photo-picker {
+  margin-bottom: 18px;
+}
+
+.photo-picker-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }

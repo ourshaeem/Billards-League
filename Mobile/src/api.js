@@ -15,7 +15,7 @@
  * No CORS handling is needed: CORS is a browser rule, and a native app's
  * requests aren't made by a browser.
  */
-import { API_BASE, REQUEST_TIMEOUT_MS } from './config';
+import { API_BASE, REQUEST_TIMEOUT_MS, UPLOAD_TIMEOUT_MS } from './config';
 
 // A message longer than this, or one that looks like the inside of the
 // server, is swapped for a plain sentence. The backend doesn't send such
@@ -81,7 +81,10 @@ function withQuery(path, params) {
  * `message` is always safe to show a person directly - the backend's own
  * wording when it sent one, otherwise something plain written here.
  */
-async function request(path, { method = 'GET', body, auth = false, signal } = {}) {
+async function request(
+  path,
+  { method = 'GET', body, auth = false, signal, timeoutMs = REQUEST_TIMEOUT_MS } = {},
+) {
   const headers = { Accept: 'application/json' };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
 
@@ -101,7 +104,7 @@ async function request(path, { method = 'GET', body, auth = false, signal } = {}
   // Combine our timeout with any caller-supplied cancellation, so a
   // screen that closes and a slow server are both handled.
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   const forwardAbort = () => controller.abort();
   if (signal) {
     if (signal.aborted) controller.abort();
@@ -192,9 +195,34 @@ export const getTable = (tableId, signal) => request(`/table/${tableId}`, { sign
 export const getMatchHistory = (league, { limit } = {}, signal) =>
   request(withQuery('/matches/history', { league_type: league, limit }), { signal });
 
-/** One player's finished games in a league, each with result "won" or "lost". */
-export const getPlayerMatches = (userId, league, { limit } = {}, signal) =>
-  request(withQuery(`/players/${userId}/matches`, { league_type: league, limit }), { signal });
+/**
+ * One player's finished games in a league, each with result "won" or
+ * "lost" from their side. opponentId narrows it to the games between the
+ * two of them - head to head.
+ */
+export const getPlayerMatches = (userId, league, { limit, opponentId } = {}, signal) =>
+  request(
+    withQuery(`/players/${userId}/matches`, {
+      league_type: league,
+      limit,
+      opponent_id: opponentId,
+    }),
+    { signal },
+  );
+
+/**
+ * Another player's profile as anyone may see it - picture, flag and both
+ * leagues' standings, never their name: { player: {...} }. 404 for an
+ * unknown or deleted account.
+ */
+export const getPlayer = (userId, signal) => request(`/players/${userId}`, { signal });
+
+/**
+ * A player's record against everyone they've played in a league, most
+ * games first: { opponents: [{ opponent: card, wins, losses }] }.
+ */
+export const getPlayerOpponents = (userId, league, signal) =>
+  request(withQuery(`/players/${userId}/opponents`, { league_type: league }), { signal });
 
 /** Country codes and names for the flag picker: { countries: [{code, name}] } */
 export const getCountries = (signal) => request('/countries', { signal });
@@ -218,6 +246,20 @@ export const getProfile = (signal) => request('/profile', { auth: true, signal }
 export const updateProfile = (changes) =>
   request('/profile', { method: 'PATCH', auth: true, body: changes });
 
+/**
+ * Upload a photo as the profile picture: image is base64, or a data: URL.
+ * The server crops it square, shrinks it and strips its metadata, and
+ * returns { message, profile }. A refusal carries data.field
+ * "profile_picture". Removing it is updateProfile({ profile_picture: null }).
+ */
+export const uploadProfilePicture = (image) =>
+  request('/profile/picture', {
+    method: 'POST',
+    auth: true,
+    body: { image },
+    timeoutMs: UPLOAD_TIMEOUT_MS,
+  });
+
 // --- Match / queue actions ---
 // tableId says which table; league is sent alongside so the server can
 // refuse a request whose table and league disagree.
@@ -238,6 +280,32 @@ export const leaveQueue = (tableId, league) =>
     auth: true,
     body: { table_id: tableId, league_type: league },
   });
+
+/**
+ * "I'm here" - the ready check. When the status is "your_turn", the player
+ * has a minute to send this or they're taken out of the queue. Returns
+ * { message, status: "confirmed" | "already_confirmed", match_started }.
+ * 409 before their turn or once the minute is up; 404 not in the queue.
+ */
+export const confirmHere = (tableId, league) =>
+  request('/queue/confirm', {
+    method: 'POST',
+    auth: true,
+    body: { table_id: tableId, league_type: league },
+  });
+
+/**
+ * Ask to call off the game in progress - or, when the opponent has asked
+ * already, agree, which cancels it with nothing recorded. Returns
+ * { message, status: "requested" | "already_requested" | "cancelled" }.
+ * matchId is the game the player saw: 409 if it has finished meanwhile.
+ */
+export const cancelMatch = (matchId) =>
+  request('/match/cancel', { method: 'POST', auth: true, body: { match_id: matchId } });
+
+/** Take back a request to cancel, or turn down the opponent's: the game goes on. */
+export const keepPlaying = (matchId) =>
+  request('/match/keep', { method: 'POST', auth: true, body: { match_id: matchId } });
 
 /**
  * matchId is the game the player saw when they filled in the score; the

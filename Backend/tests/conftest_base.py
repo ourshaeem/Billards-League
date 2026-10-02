@@ -137,14 +137,26 @@ class BaseTestCase(unittest.TestCase):
         server's clock never enters into it. A test that mixed the two
         would quietly re-admit the timezone bug it exists to prevent.
         """
+        self._backdate_queue_column("joined_at", user_id, seconds, table_id)
+
+    def backdate_turn(self, user_id, seconds, table_id=1):
+        """Make a player's turn have come `seconds` ago (the ready check)."""
+        self._backdate_queue_column("called_at", user_id, seconds, table_id)
+
+    def backdate_confirmation(self, user_id, seconds, table_id=1):
+        """Make a player have last said they were here `seconds` ago."""
+        self._backdate_queue_column("confirmed_at", user_id, seconds, table_id)
+
+    def _backdate_queue_column(self, column, user_id, seconds, table_id):
         db.session.execute(
             db.text(
-                "UPDATE Queue SET joined_at = datetime('now', :offset) "
+                f"UPDATE Queue SET {column} = datetime('now', :offset) "
                 "WHERE user_id = :uid AND table_id = :tid"
             ),
             {"offset": f"-{int(seconds)} seconds", "uid": user_id, "tid": table_id},
         )
         db.session.commit()
+        db.session.expire_all()
 
     def auth_headers(self, user_id):
         from flask_jwt_extended import create_access_token

@@ -1,6 +1,7 @@
 /**
- * The Profile tab: pick a flag, set a picture, see where you stand in
- * both leagues, and sign out. Port of ProfileSettings.jsx.
+ * The Profile tab: pick a flag, upload or link a picture, see where you
+ * stand in both leagues, choose light or dark, and sign out. Port of
+ * ProfileSettings.jsx.
  *
  * Problems appear beside the field they concern - both the ones caught
  * here and the ones the server sends back (it names the field).
@@ -13,10 +14,12 @@ import Feather from '@expo/vector-icons/Feather';
 import * as api from '../api';
 import { CountryPicker } from '../components/CountryPicker';
 import { DeleteAccountSheet } from '../components/DeleteAccountSheet';
-import { Avatar } from '../components/Player';
-import { Button, Card, Field, FieldError, Screen, Txt } from '../components/ui';
+import { Avatar, useOpenPlayer } from '../components/Player';
+import { Button, Card, Field, FieldError, Screen, Segmented, Txt } from '../components/ui';
 import { flagEmoji } from '../flags';
 import { LEAGUE_ORDER, LEAGUES } from '../leagues';
+import { PhotoProblem, pickSquarePhoto } from '../photo';
+import { APPEARANCE_OPTIONS, useAppearance } from '../state/AppearanceContext';
 import { useLeague } from '../state/LeagueContext';
 import { useLive } from '../state/LiveContext';
 import { useSession } from '../state/SessionContext';
@@ -73,13 +76,20 @@ export function ProfileScreen() {
   return (
     <Screen>
       {profile ? (
-        <ProfileForm key={profile.user_id} profile={profile} onSaved={setProfile} />
+        <ProfileForm
+          // A new picture starts the form over, so the link field never
+          // holds a picture that's already gone.
+          key={`${profile.user_id}-${profile.profile_picture ?? ''}`}
+          profile={profile}
+          onSaved={setProfile}
+        />
       ) : (
         <Card>
           <Txt muted>{problem ? `${problem} Try again in a moment.` : 'Loading your profile...'}</Txt>
         </Card>
       )}
       {profile ? <Standing profile={profile} /> : null}
+      <AppearanceCard />
       <Button variant="quiet" icon="log-out" title="Sign out" onPress={signOut} style={styles.signOut} />
 
       <Card title="Your account" style={styles.account}>
@@ -107,9 +117,13 @@ export function ProfileScreen() {
 function ProfileForm({ profile, onSaved }) {
   const { theme } = useLeague();
   const toast = useToast();
+  const openPlayer = useOpenPlayer();
+  // An uploaded photo's address isn't a link anyone typed, so the link
+  // field starts empty rather than offering it back to edit.
+  const startingLink = profile.picture_uploaded ? '' : profile.profile_picture || '';
   const [values, setValues] = useState({
     country_flag: profile.country_flag || '',
-    profile_picture: profile.profile_picture || '',
+    profile_picture: startingLink,
   });
   const [errors, setErrors] = useState({});
   const [busy, setBusy] = useState(false);
@@ -125,9 +139,16 @@ function ProfileForm({ profile, onSaved }) {
     const timer = setTimeout(() => setPreviewLink(link), PREVIEW_DELAY_MS);
     return () => clearTimeout(timer);
   }, [link]);
+  // The link being typed, once it looks like one; otherwise whatever the
+  // saved picture is - including an uploaded photo.
+  const linkEdited = link !== startingLink;
   const preview = {
     username: profile.username,
-    profile_picture: previewLink && !pictureProblem(previewLink) ? previewLink : null,
+    profile_picture: linkEdited
+      ? previewLink && !pictureProblem(previewLink)
+        ? previewLink
+        : null
+      : profile.profile_picture,
   };
 
   // The picker's list, fetched with the form so the chosen country shows
@@ -167,10 +188,12 @@ function ProfileForm({ profile, onSaved }) {
     }
     setErrors({});
     setBusy(true);
-    const res = await api.updateProfile({
-      country_flag: values.country_flag || null,
-      profile_picture: link || null,
-    });
+    // The picture is only sent when the link was changed: an empty link
+    // field also means "keep my uploaded photo", and sending it would
+    // delete the photo.
+    const changes = { country_flag: values.country_flag || null };
+    if (linkEdited) changes.profile_picture = link || null;
+    const res = await api.updateProfile(changes);
     setBusy(false);
 
     if (!res.ok) {
@@ -197,8 +220,17 @@ function ProfileForm({ profile, onSaved }) {
           <Txt variant="small" muted>
             {profile.first_name} {profile.last_name}
           </Txt>
+          <Button
+            variant="link"
+            size="sm"
+            title="See your profile as others do"
+            onPress={() => openPlayer(profile.user_id)}
+            style={styles.seeProfile}
+          />
         </View>
       </View>
+
+      <PhotoPicker profile={profile} onSaved={onSaved} />
 
       <View style={styles.field}>
         <Text style={[styles.label, { color: theme.quietText }]}>Country flag</Text>
@@ -224,14 +256,18 @@ function ProfileForm({ profile, onSaved }) {
       </View>
 
       <Field
-        label="Profile picture link"
+        label="Or use a link to a picture"
         value={values.profile_picture}
         onChangeText={(text) => {
           setValues((v) => ({ ...v, profile_picture: text }));
           setErrors((prev) => (prev.profile_picture ? { ...prev, profile_picture: null } : prev));
         }}
         error={errors.profile_picture}
-        hint="Paste a link to an image. Leave it empty to show your initial instead."
+        hint={
+          profile.picture_uploaded
+            ? "You're using an uploaded photo. Paste a link here to use that instead."
+            : 'Paste a link to an image. Leave it empty to show your initial instead.'
+        }
         placeholder="https://..."
         keyboardType="url"
         inputMode="url"
@@ -252,6 +288,108 @@ function ProfileForm({ profile, onSaved }) {
         }}
         onClose={() => setPickerOpen(false)}
       />
+    </Card>
+  );
+}
+
+/**
+ * Choosing a photo as the picture, or removing the picture. The photo is
+ * cropped and shrunk on the phone (photo.js), and again on the server,
+ * which also strips its metadata - where it was taken, the camera -
+ * before anyone sees it.
+ */
+function PhotoPicker({ profile, onSaved }) {
+  const toast = useToast();
+  const [working, setWorking] = useState(null);
+  const [error, setError] = useState(null);
+
+  const choose = async () => {
+    setError(null);
+    let image;
+    try {
+      image = await pickSquarePhoto();
+    } catch (problem) {
+      setError(problem instanceof PhotoProblem ? problem.message : "That photo couldn't be prepared.");
+      return;
+    }
+    if (!image) return; // backed out of the picker
+
+    setWorking('upload');
+    const res = await api.uploadProfilePicture(image);
+    setWorking(null);
+    if (!res.ok) {
+      if (res.data?.field) setError(res.message);
+      else if (res.kind !== api.ErrorKind.AUTH) toast.push(res.message, 'error');
+      return;
+    }
+    onSaved(res.data.profile);
+    toast.push('Picture saved.', 'success');
+  };
+
+  const remove = async () => {
+    setError(null);
+    setWorking('remove');
+    const res = await api.updateProfile({ profile_picture: null });
+    setWorking(null);
+    if (!res.ok) {
+      if (res.kind !== api.ErrorKind.AUTH) toast.push(res.message, 'error');
+      return;
+    }
+    onSaved(res.data.profile);
+    toast.push('Picture removed.', 'info');
+  };
+
+  return (
+    <View style={styles.photo}>
+      <View style={styles.photoActions}>
+        <Button
+          variant="quiet"
+          size="sm"
+          icon="image"
+          title={
+            working === 'upload'
+              ? 'Uploading...'
+              : profile.profile_picture
+                ? 'Choose a new photo'
+                : 'Choose a photo'
+          }
+          onPress={choose}
+          busy={working === 'upload'}
+          disabled={Boolean(working)}
+        />
+        {profile.profile_picture ? (
+          <Button
+            variant="quiet"
+            size="sm"
+            title={working === 'remove' ? 'Removing...' : 'Remove picture'}
+            onPress={remove}
+            disabled={Boolean(working)}
+          />
+        ) : null}
+      </View>
+      <Txt variant="small" muted style={styles.photoHint}>
+        Any photo works - it's cropped to a square, and the location and other details photos carry
+        are removed.
+      </Txt>
+      <FieldError message={error} />
+    </View>
+  );
+}
+
+/** Light, dark, or whatever the phone is set to. Saved on this phone. */
+function AppearanceCard() {
+  const { choice, setChoice } = useAppearance();
+  return (
+    <Card title="Appearance" icon="moon">
+      <Segmented
+        options={APPEARANCE_OPTIONS}
+        value={choice}
+        onChange={setChoice}
+        accessibilityLabel="Light or dark"
+      />
+      <Txt variant="small" muted style={styles.appearanceHint}>
+        Automatic follows your phone's light or dark setting.
+      </Txt>
     </Card>
   );
 }
@@ -282,7 +420,7 @@ function Standing({ profile }) {
               {standing?.elo ?? 0}
             </Text>
             <Text style={[styles.standingNumber, { color: theme.textMuted }]}>
-              <Text style={{ color: theme.accentPressed, fontFamily: fonts.semibold }}>{standing?.wins ?? 0}</Text>
+              <Text style={{ color: theme.accentText, fontFamily: fonts.semibold }}>{standing?.wins ?? 0}</Text>
               –{standing?.losses ?? 0}
             </Text>
           </View>
@@ -318,6 +456,11 @@ const styles = StyleSheet.create({
   standingName: { flex: 1 },
   standingNumber: { fontFamily: fonts.regular, fontSize: type.body, fontVariant: ['tabular-nums'], minWidth: 44, textAlign: 'right' },
   signOut: { marginTop: 4, marginBottom: 16 },
+  seeProfile: { alignSelf: 'flex-start', marginTop: 2 },
+  photo: { marginBottom: 16 },
+  photoActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  photoHint: { marginTop: 6 },
+  appearanceHint: { marginTop: 10 },
   account: { marginBottom: 8 },
   accountText: { marginBottom: 14 },
   privacy: { alignSelf: 'center' },

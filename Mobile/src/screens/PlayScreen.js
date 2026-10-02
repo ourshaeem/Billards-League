@@ -49,7 +49,10 @@ export function PlayScreen({ navigation }) {
         queueLength={live.queue.length}
         onJoin={live.join}
         onLeave={live.leave}
+        onConfirm={live.confirm}
         onRecord={live.record}
+        onCancelGame={live.cancelGame}
+        onKeepPlaying={live.keepPlaying}
         onStepDown={live.stepDown}
         onSwitchLeague={chooseLeague}
         busy={live.busy}

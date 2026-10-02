@@ -34,8 +34,17 @@ class PublicRoutes(ApiTestCase):
         entry = res.get_json()[0]
         self.assertEqual(
             set(entry.keys()),
-            {"username", "elo_rating", "total_wins", "total_losses", "rank_name"},
-            "the React leaderboard table reads exactly these keys",
+            {
+                "user_id",
+                "username",
+                "country_flag",
+                "profile_picture",
+                "elo_rating",
+                "total_wins",
+                "total_losses",
+                "rank_name",
+            },
+            "the ladders in both apps read exactly these keys",
         )
 
     def test_unranked_players_still_appear(self):
@@ -354,13 +363,22 @@ class MatchStatusRoute(ApiTestCase):
 
         self.assertEqual(
             set(body.keys()),
-            {"status", "opponent", "opponent_id", "match_id", "table_id", "league_type"},
-            "StatusPanel.jsx reads exactly these keys",
+            {
+                "status",
+                "opponent",
+                "opponent_id",
+                "match_id",
+                "table_id",
+                "league_type",
+                "cancel_requested_by",
+            },
+            "both apps' status panels read exactly these keys",
         )
         self.assertEqual(body["status"], "playing")
         self.assertEqual(body["opponent"], "alice")
         self.assertEqual(body["opponent_id"], self.alice)
         self.assertEqual(body["league_type"], "billiards")
+        self.assertIsNone(body["cancel_requested_by"])
 
     def test_opponent_resolves_from_either_seat(self):
         """Whichever seat you're in, the opponent is the other player."""

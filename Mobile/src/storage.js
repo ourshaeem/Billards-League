@@ -19,6 +19,10 @@ const KEYS = {
   user: 'league.user',
   league: 'league.league',
 };
+// Light or dark belongs to the phone, not the session, so signing out
+// keeps it - which is why it isn't one of the KEYS cleared then.
+const APPEARANCE_KEY = 'league.appearance';
+const APPEARANCE_CHOICES = ['system', 'light', 'dark'];
 
 const onWeb = Platform.OS === 'web';
 
@@ -78,4 +82,14 @@ export function saveLeague(league) {
 
 export async function clearSession() {
   await Promise.all(Object.values(KEYS).map((key) => write(key, null)));
+}
+
+/** "system", "light" or "dark" - "system" if nothing (valid) was saved. */
+export async function loadAppearance() {
+  const stored = await read(APPEARANCE_KEY);
+  return APPEARANCE_CHOICES.includes(stored) ? stored : 'system';
+}
+
+export function saveAppearance(choice) {
+  return write(APPEARANCE_KEY, choice === 'system' ? null : choice);
 }

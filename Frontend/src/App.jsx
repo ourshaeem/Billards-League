@@ -9,14 +9,23 @@
  * Screens: login / register -> league (pick billiards or ping pong) ->
  * dashboard, with profile reachable from the masthead. The league choice
  * sets the theme, the table everything is polled for, and whose ratings
- * the ladder and hover cards show.
+ * the ladder and hover cards show. Clicking any player opens their
+ * profile over whichever screen is showing; the browser's Back button
+ * closes it again.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowLeftRight, LogOut } from 'lucide-react';
+import { ArrowLeftRight, BellRing, LogOut, Moon, Sun } from 'lucide-react';
 
 import * as api from './api.js';
 import { flagEmoji } from './flags.js';
 import { isLeague, leagueInfo } from './leagues.js';
+import {
+  applyTheme,
+  getThemeChoice,
+  resolveTheme,
+  setThemeChoice,
+  watchSystemTheme,
+} from './theme.js';
 import { ToastStack, ConnectionBanner } from './components/Feedback.jsx';
 import { LoginScreen, RegisterScreen } from './components/AuthScreens.jsx';
 import { StatusPanel } from './components/StatusPanel.jsx';
@@ -25,7 +34,9 @@ import { ActiveTableCard } from './components/ActiveTable.jsx';
 import { MatchHistoryCard } from './components/MatchHistory.jsx';
 import { LeagueSelect } from './components/LeagueSelect.jsx';
 import { ProfileSettings } from './components/ProfileSettings.jsx';
+import { PlayerProfile } from './components/PlayerProfile.jsx';
 import { Avatar } from './components/Player.jsx';
+import { OpenPlayerContext } from './openPlayer.js';
 
 const POLL_INTERVAL_MS = 2500;
 // History only changes when a game ends. It's fetched on every Nth poll,
@@ -84,9 +95,18 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [toasts, setToasts] = useState([]);
 
+  // Light or dark: the stored choice, and what it means right now.
+  const [themeChoice, setThemeChoiceState] = useState(getThemeChoice);
+  const [theme, setTheme] = useState(() => resolveTheme(getThemeChoice()));
+  // The player whose profile is open, over the current screen, or null.
+  const [viewingPlayer, setViewingPlayer] = useState(null);
+
   // Remembers the last match id we announced, so "match found" fires once
   // rather than on every poll for as long as the match is running.
   const announcedMatchRef = useRef(null);
+  // The status before the latest one, to notice what just happened: a
+  // turn arriving, a turn missed, a game called off.
+  const lastStatusRef = useRef(null);
   // The game last seen at the table. When it changes, a game has ended
   // (or begun), so the history is due a refresh.
   const tableMatchRef = useRef(undefined);
@@ -142,6 +162,8 @@ export default function App() {
     setProfile(null);
     switchLeague(null);
     announcedMatchRef.current = null;
+    lastStatusRef.current = null;
+    setViewingPlayer(null);
     setView('login');
   }, [switchLeague]);
 
@@ -155,19 +177,68 @@ export default function App() {
       });
       setProfile(null);
       switchLeague(null);
+      setViewingPlayer(null);
       setView('login');
     });
     return () => api.setAuthFailureHandler(null);
   }, [pushToast, switchLeague]);
 
-  // The theme follows the league. Set on <html> so the page background,
-  // outside the React tree, changes with it.
+  // The league's colours follow the league. Set on <html> so the page
+  // background, outside the React tree, changes with it.
   useEffect(() => {
     const root = document.documentElement;
     if (league) root.dataset.league = league;
     else delete root.dataset.league;
-    document.title = league ? leagueInfo(league).name : APP_NAME;
   }, [league]);
+
+  // The tab's title says when it's your turn, so a player in another tab
+  // can see it from the tab strip.
+  const yourTurnNow = matchStatus?.status === 'your_turn' && !matchStatus.confirmed;
+  useEffect(() => {
+    const base = league ? leagueInfo(league).name : APP_NAME;
+    document.title = yourTurnNow ? `Your turn! - ${base}` : base;
+  }, [league, yourTurnNow]);
+
+  // Light or dark. "Automatic" keeps following the device as it changes.
+  useEffect(() => {
+    const apply = () => {
+      const next = resolveTheme(themeChoice);
+      applyTheme(next);
+      setTheme(next);
+    };
+    apply();
+    return themeChoice === 'system' ? watchSystemTheme(apply) : undefined;
+  }, [themeChoice]);
+
+  const chooseTheme = useCallback((choice) => {
+    setThemeChoice(choice);
+    setThemeChoiceState(choice);
+  }, []);
+
+  // --- Looking at another player -------------------------------------
+  // Each profile opened is a step in the browser's history, so Back (or
+  // a phone's back gesture) closes it instead of leaving the site.
+
+  const openPlayer = useCallback((playerId) => {
+    setViewingPlayer(playerId);
+    try {
+      window.history.pushState({ playerId }, '');
+    } catch {
+      // History can be unavailable in odd embeddings; the Back button still works.
+    }
+    window.scrollTo({ top: 0 });
+  }, []);
+
+  const closePlayer = useCallback(() => {
+    if (window.history.state?.playerId) window.history.back();
+    else setViewingPlayer(null);
+  }, []);
+
+  useEffect(() => {
+    const onPop = (e) => setViewingPlayer(e.state?.playerId ?? null);
+    window.addEventListener('popstate', onPop);
+    return () => window.removeEventListener('popstate', onPop);
+  }, []);
 
   // --- Reference data --------------------------------------------------
 
@@ -229,60 +300,96 @@ export default function App() {
 
   // --- Polling ---------------------------------------------------------
 
+  /** Tell the player about a change worth knowing about, wherever they are. */
+  const noticeStatusChange = useCallback(
+    (previous, next) => {
+      if (next.status === 'your_turn' && !next.confirmed && previous?.status !== 'your_turn') {
+        pushToast(
+          'It\'s your turn - tap "I\'m here" within a minute to keep your place.',
+          'success',
+        );
+        // A buzz, on phones that allow it.
+        navigator.vibrate?.([200, 100, 200]);
+      }
+      if (previous?.status === 'your_turn' && !previous.confirmed && next.status === 'idle') {
+        pushToast(
+          "You didn't say you were here in time, so you were taken out of the queue. Join again to get back in line.",
+          'error',
+        );
+      }
+      if (
+        previous?.status === 'playing' &&
+        previous.cancel_requested_by === 'you' &&
+        next.status !== 'playing'
+      ) {
+        pushToast(
+          `${previous.opponent} agreed - the game was cancelled. Nothing was recorded.`,
+          'info',
+        );
+      }
+    },
+    [pushToast],
+  );
+
   const refresh = useCallback(
-    async (signal, { withHistory = false } = {}) => {
+    async (signal, { withHistory = false, statusOnly = false } = {}) => {
       if (!league || !tableId) return;
       const forLeague = league;
       const stale = () => signal?.aborted || leagueRef.current !== forLeague;
 
-      const [queueRes, boardRes, tableRes] = await Promise.all([
-        api.getQueue(tableId, signal),
-        api.getLeaderboard(forLeague, signal),
-        api.getTable(tableId, signal),
-      ]);
-      if (stale()) return;
-
-      // Only the network case flips the offline banner; a 4xx means the
-      // server is up and talking to us, just refusing something.
-      setOffline(
-        [queueRes, boardRes, tableRes].some(
-          (res) => !res.ok && res.kind === api.ErrorKind.NETWORK && !res.aborted,
-        ),
-      );
-
-      if (queueRes.ok) {
-        setQueue(Array.isArray(queueRes.data) ? queueRes.data : []);
-        setLoaded((l) => (l.queue ? l : { ...l, queue: true }));
-      }
-      if (boardRes.ok) {
-        setLeaderboard(Array.isArray(boardRes.data) ? boardRes.data : []);
-        setLoaded((l) => (l.leaderboard ? l : { ...l, leaderboard: true }));
-      }
-
-      let tableMoved = false;
-      if (tableRes.ok && tableRes.data?.table) {
-        const table = tableRes.data.table;
-        tableMoved =
-          tableMatchRef.current !== undefined && tableMatchRef.current !== table.match_id;
-        tableMatchRef.current = table.match_id;
-        setActiveTable(table);
-        setLoaded((l) => (l.table ? l : { ...l, table: true }));
-      }
-
-      if (withHistory || tableMoved) {
-        const [allRes, mineRes] = await Promise.all([
-          api.getMatchHistory(forLeague, { limit: HISTORY_LIMIT }, signal),
-          userId
-            ? api.getPlayerMatches(userId, forLeague, { limit: HISTORY_LIMIT }, signal)
-            : null,
+      // Off the dashboard (a profile page) only your own status matters:
+      // enough to tell you when it's your turn.
+      if (!statusOnly) {
+        const [queueRes, boardRes, tableRes] = await Promise.all([
+          api.getQueue(tableId, signal),
+          api.getLeaderboard(forLeague, signal),
+          api.getTable(tableId, signal),
         ]);
         if (stale()) return;
-        if (allRes.ok) {
-          setHistory((h) => ({
-            all: Array.isArray(allRes.data?.matches) ? allRes.data.matches : [],
-            mine: mineRes?.ok && Array.isArray(mineRes.data?.matches) ? mineRes.data.matches : h.mine,
-          }));
-          setLoaded((l) => (l.history ? l : { ...l, history: true }));
+
+        // Only the network case flips the offline banner; a 4xx means the
+        // server is up and talking to us, just refusing something.
+        setOffline(
+          [queueRes, boardRes, tableRes].some(
+            (res) => !res.ok && res.kind === api.ErrorKind.NETWORK && !res.aborted,
+          ),
+        );
+
+        if (queueRes.ok) {
+          setQueue(Array.isArray(queueRes.data) ? queueRes.data : []);
+          setLoaded((l) => (l.queue ? l : { ...l, queue: true }));
+        }
+        if (boardRes.ok) {
+          setLeaderboard(Array.isArray(boardRes.data) ? boardRes.data : []);
+          setLoaded((l) => (l.leaderboard ? l : { ...l, leaderboard: true }));
+        }
+
+        let tableMoved = false;
+        if (tableRes.ok && tableRes.data?.table) {
+          const table = tableRes.data.table;
+          tableMoved =
+            tableMatchRef.current !== undefined && tableMatchRef.current !== table.match_id;
+          tableMatchRef.current = table.match_id;
+          setActiveTable(table);
+          setLoaded((l) => (l.table ? l : { ...l, table: true }));
+        }
+
+        if (withHistory || tableMoved) {
+          const [allRes, mineRes] = await Promise.all([
+            api.getMatchHistory(forLeague, { limit: HISTORY_LIMIT }, signal),
+            userId
+              ? api.getPlayerMatches(userId, forLeague, { limit: HISTORY_LIMIT }, signal)
+              : null,
+          ]);
+          if (stale()) return;
+          if (allRes.ok) {
+            setHistory((h) => ({
+              all: Array.isArray(allRes.data?.matches) ? allRes.data.matches : [],
+              mine:
+                mineRes?.ok && Array.isArray(mineRes.data?.matches) ? mineRes.data.matches : h.mine,
+            }));
+            setLoaded((l) => (l.history ? l : { ...l, history: true }));
+          }
         }
       }
 
@@ -294,12 +401,16 @@ export default function App() {
         // A dropped connection already has the offline banner; anything
         // else is the server failing to answer, which the panel shows.
         if (statusRes.kind === api.ErrorKind.SERVER) setStatusProblem(statusRes.message);
+        if (statusRes.kind === api.ErrorKind.NETWORK) setOffline(true);
         return;
       }
 
       const next = statusRes.data || { status: 'idle' };
       setStatusProblem(null);
+      if (statusOnly) setOffline(false);
       setMatchStatus(next);
+      noticeStatusChange(lastStatusRef.current, next);
+      lastStatusRef.current = next;
 
       // Tell someone their match started even if they were looking away.
       if (next.status === 'playing' && next.match_id !== announcedMatchRef.current) {
@@ -310,10 +421,16 @@ export default function App() {
         announcedMatchRef.current = null;
       }
     },
-    [league, tableId, userId, pushToast],
+    [league, tableId, userId, pushToast, noticeStatusChange],
   );
 
-  const polling = Boolean(userId) && view === 'dashboard' && Boolean(tableId);
+  // Polled on the dashboard, and - status only - on the profile pages, so
+  // a player looking at someone's games still hears when it's their turn.
+  const onDashboard = view === 'dashboard' && viewingPlayer === null;
+  const polling =
+    Boolean(userId) &&
+    Boolean(tableId) &&
+    (view === 'dashboard' || view === 'profile' || viewingPlayer !== null);
 
   useEffect(() => {
     if (!polling) return undefined;
@@ -322,7 +439,10 @@ export default function App() {
     let ticks = 0;
 
     const tick = async () => {
-      await refresh(controller.signal, { withHistory: ticks % HISTORY_EVERY_N_POLLS === 0 });
+      await refresh(controller.signal, {
+        withHistory: ticks % HISTORY_EVERY_N_POLLS === 0,
+        statusOnly: !onDashboard,
+      });
       ticks += 1;
       if (!controller.signal.aborted) {
         timer = setTimeout(tick, POLL_INTERVAL_MS);
@@ -338,7 +458,7 @@ export default function App() {
     // dashboard is left and returned to. The queue is data this effect
     // reads, not a reason to restart - depending on it once made every
     // queue change tear down and rebuild the timer.
-  }, [refresh, polling]);
+  }, [refresh, polling, onDashboard]);
 
   // --- Actions ---------------------------------------------------------
 
@@ -348,10 +468,7 @@ export default function App() {
     setBusy(false);
 
     if (!res.ok) {
-      pushToast(
-        res.status === 401 ? 'That username or password is wrong.' : res.message,
-        'error',
-      );
+      pushToast(res.status === 401 ? 'That username or password is wrong.' : res.message, 'error');
       return;
     }
 
@@ -430,6 +547,53 @@ export default function App() {
 
     pushToast('You left the queue.', 'info');
     setMatchStatus({ status: 'idle' });
+    // Leaving on your turn isn't missing it.
+    lastStatusRef.current = { status: 'idle' };
+    refresh();
+  };
+
+  const handleConfirm = async () => {
+    setBusy(true);
+    const res = await api.confirmHere(tableId, league);
+    setBusy(false);
+
+    if (!res.ok) {
+      pushToast(res.message, 'error');
+      // Too late or not your turn yet: catch up with what the server knows.
+      if (res.status === 409 || res.status === 404) lastStatusRef.current = null;
+      refresh();
+      return;
+    }
+    // The panel changes on its own, and "Match on" is announced when the
+    // game starts - a toast here as well would say it twice.
+    refresh();
+  };
+
+  /** Ask to cancel the game - or agree, when the opponent has asked. */
+  const handleCancelGame = async (matchId) => {
+    setBusy(true);
+    const res = await api.cancelMatch(matchId);
+    setBusy(false);
+
+    if (!res.ok) {
+      pushToast(res.message, 'error');
+      refresh();
+      return;
+    }
+    if (res.data?.status === 'cancelled') {
+      pushToast('Game cancelled - nothing was recorded.', 'info');
+      lastStatusRef.current = null;
+      announcedMatchRef.current = null;
+    }
+    refresh();
+  };
+
+  /** Take back a request to cancel, or turn down the opponent's. */
+  const handleKeepPlaying = async (matchId) => {
+    setBusy(true);
+    const res = await api.keepPlaying(matchId);
+    setBusy(false);
+    if (!res.ok) pushToast(res.message, 'error');
     refresh();
   };
 
@@ -446,6 +610,7 @@ export default function App() {
 
     pushToast(res.data?.message || 'You gave up the table.', 'info');
     setMatchStatus({ status: 'idle' });
+    lastStatusRef.current = { status: 'idle' };
     refresh(undefined, { withHistory: true });
   };
 
@@ -493,6 +658,22 @@ export default function App() {
     return { ok: true };
   };
 
+  /** image is the prepared photo as a data: URL. Returns { ok, field?, message? }. */
+  const handleUploadPicture = async (image) => {
+    setBusy(true);
+    const res = await api.uploadProfilePicture(image);
+    setBusy(false);
+
+    if (!res.ok) {
+      const field = res.data?.field;
+      if (!field) pushToast(res.message, 'error');
+      return { ok: false, field, message: res.message };
+    }
+    setProfile(res.data.profile);
+    pushToast('Picture saved.', 'success');
+    return { ok: true };
+  };
+
   /** Returns { ok, field?, message? }; on success the player is signed out. */
   const handleDeleteAccount = async (password) => {
     const res = await api.deleteAccount(password);
@@ -513,139 +694,222 @@ export default function App() {
   const screen = user ? (view === 'dashboard' && !league ? 'league' : view) : view;
   const me = profile ?? (user ? { username: user.username } : null);
   const myFlag = flagEmoji(profile?.country_flag);
+  const showingPlayer = Boolean(user) && viewingPlayer !== null;
+  // Away from the status panel, a turn coming up still needs answering.
+  const turnBanner = yourTurnNow && Boolean(user) && (showingPlayer || screen !== 'dashboard');
+
+  /** Change screen from the masthead, closing any profile that's open. */
+  const goTo = (next) => {
+    setViewingPlayer(null);
+    setView(next);
+  };
 
   return (
-    <div className="page">
-      <header className="masthead">
-        <h1 className="wordmark">
-          <span className="wordmark-dot" aria-hidden="true" />
-          {league ? leagueInfo(league).name : APP_NAME}
-        </h1>
+    <OpenPlayerContext.Provider value={user ? openPlayer : null}>
+      <div className="page">
+        <header className="masthead">
+          <h1 className="wordmark">
+            <span className="wordmark-dot" aria-hidden="true" />
+            {league ? leagueInfo(league).name : APP_NAME}
+          </h1>
 
-        {user && (
           <div className="masthead-side">
+            {user && (
+              <>
+                <button
+                  type="button"
+                  className="masthead-profile"
+                  onClick={() => goTo('profile')}
+                  aria-current={screen === 'profile' && !showingPlayer ? 'page' : undefined}
+                >
+                  <Avatar player={me} size="sm" />
+                  <strong className="masthead-user">{user.username}</strong>
+                  {myFlag && <span aria-hidden="true">{myFlag}</span>}
+                  <span className="sr-only"> - your profile</span>
+                </button>
+                {league && screen !== 'league' && (
+                  <button
+                    type="button"
+                    className="btn btn-quiet btn-small"
+                    onClick={() => goTo('league')}
+                  >
+                    <ArrowLeftRight size={15} aria-hidden="true" />
+                    Switch league
+                  </button>
+                )}
+                <button type="button" className="btn btn-quiet btn-small" onClick={signOut}>
+                  <LogOut size={15} aria-hidden="true" />
+                  Sign out
+                </button>
+              </>
+            )}
             <button
               type="button"
-              className="masthead-profile"
-              onClick={() => setView('profile')}
-              aria-current={screen === 'profile' ? 'page' : undefined}
+              className="btn btn-quiet btn-small btn-icon"
+              onClick={() => chooseTheme(theme === 'dark' ? 'light' : 'dark')}
+              aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+              title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
             >
-              <Avatar player={me} size="sm" />
-              <strong className="masthead-user">{user.username}</strong>
-              {myFlag && <span aria-hidden="true">{myFlag}</span>}
-              <span className="sr-only"> - your profile</span>
+              {theme === 'dark' ? (
+                <Sun size={16} aria-hidden="true" />
+              ) : (
+                <Moon size={16} aria-hidden="true" />
+              )}
             </button>
-            {league && screen !== 'league' && (
+          </div>
+        </header>
+
+        <ConnectionBanner offline={offline} />
+
+        {turnBanner && (
+          <div className="turn-banner" role="status">
+            <BellRing size={20} aria-hidden="true" className="turn-banner-icon" />
+            <p className="turn-banner-text">
+              <strong>It&rsquo;s your turn</strong>
+              {matchStatus.opponent ? ` against ${matchStatus.opponent}` : ''} - say you&rsquo;re
+              here within the minute.
+            </p>
+            <div className="turn-banner-actions">
+              <button
+                type="button"
+                className="btn btn-small"
+                onClick={handleConfirm}
+                disabled={busy}
+              >
+                I&rsquo;m here
+              </button>
+              <button
+                type="button"
+                className="btn btn-small btn-quiet"
+                onClick={() => goTo('dashboard')}
+              >
+                Go to the table
+              </button>
+            </div>
+          </div>
+        )}
+
+        {showingPlayer && (
+          <PlayerProfile
+            key={viewingPlayer}
+            userId={viewingPlayer}
+            league={league}
+            currentUserId={userId}
+            onBack={closePlayer}
+          />
+        )}
+
+        {screen === 'login' && !user && (
+          <LoginScreen onLogin={handleLogin} onSwitch={() => setView('register')} busy={busy} />
+        )}
+
+        {screen === 'register' && !user && (
+          <RegisterScreen
+            onRegister={handleRegister}
+            onSwitch={() => setView('login')}
+            busy={busy}
+          />
+        )}
+
+        {user && !showingPlayer && screen === 'league' && (
+          <LeagueSelect
+            current={league}
+            profile={profile}
+            leagueTables={leagueTables}
+            onChoose={chooseLeague}
+          />
+        )}
+
+        {user &&
+          !showingPlayer &&
+          screen === 'profile' &&
+          (profile ? (
+            <ProfileSettings
+              // A new picture starts the form over, so the link field never
+              // holds a picture that's already gone.
+              key={`${profile.user_id}-${profile.profile_picture ?? ''}`}
+              profile={profile}
+              countries={countries}
+              onSave={handleSaveProfile}
+              onUploadPicture={handleUploadPicture}
+              onDeleteAccount={handleDeleteAccount}
+              onBack={() => setView(league ? 'dashboard' : 'league')}
+              themeChoice={themeChoice}
+              onThemeChoice={chooseTheme}
+              busy={busy}
+            />
+          ) : (
+            <main className="profile-shell">
+              <p className="empty">Loading your profile...</p>
+            </main>
+          ))}
+
+        {user && !showingPlayer && screen === 'dashboard' && league && leagueTables && !tableId && (
+          <main className="auth-shell">
+            <div className="card">
+              <p>The {leagueInfo(league).name} doesn&rsquo;t have a table set up yet.</p>
               <button
                 type="button"
                 className="btn btn-quiet btn-small"
+                style={{ marginTop: 14 }}
                 onClick={() => setView('league')}
               >
-                <ArrowLeftRight size={15} aria-hidden="true" />
-                Switch league
+                Choose another league
               </button>
-            )}
-            <button type="button" className="btn btn-quiet btn-small" onClick={signOut}>
-              <LogOut size={15} aria-hidden="true" />
-              Sign out
-            </button>
-          </div>
-        )}
-      </header>
-
-      <ConnectionBanner offline={offline} />
-
-      {screen === 'login' && !user && (
-        <LoginScreen onLogin={handleLogin} onSwitch={() => setView('register')} busy={busy} />
-      )}
-
-      {screen === 'register' && !user && (
-        <RegisterScreen onRegister={handleRegister} onSwitch={() => setView('login')} busy={busy} />
-      )}
-
-      {user && screen === 'league' && (
-        <LeagueSelect
-          current={league}
-          profile={profile}
-          leagueTables={leagueTables}
-          onChoose={chooseLeague}
-        />
-      )}
-
-      {user && screen === 'profile' &&
-        (profile ? (
-          <ProfileSettings
-            key={profile.user_id}
-            profile={profile}
-            countries={countries}
-            onSave={handleSaveProfile}
-            onDeleteAccount={handleDeleteAccount}
-            onBack={() => setView(league ? 'dashboard' : 'league')}
-            busy={busy}
-          />
-        ) : (
-          <main className="profile-shell">
-            <p className="empty">Loading your profile...</p>
+            </div>
           </main>
-        ))}
+        )}
 
-      {user && screen === 'dashboard' && league && leagueTables && !tableId && (
-        <main className="auth-shell">
-          <div className="card">
-            <p>The {leagueInfo(league).name} doesn&rsquo;t have a table set up yet.</p>
-            <button
-              type="button"
-              className="btn btn-quiet btn-small"
-              style={{ marginTop: 14 }}
-              onClick={() => setView('league')}
-            >
-              Choose another league
-            </button>
-          </div>
-        </main>
-      )}
+        {user &&
+          !showingPlayer &&
+          screen === 'dashboard' &&
+          league &&
+          (!leagueTables || tableId) && (
+            <main>
+              <StatusPanel
+                status={matchStatus}
+                problem={statusProblem}
+                league={league}
+                tableName={tableName}
+                queueLength={queue.length}
+                onJoin={handleJoin}
+                onLeave={handleLeave}
+                onConfirm={handleConfirm}
+                onRecord={handleRecord}
+                onCancelGame={handleCancelGame}
+                onKeepPlaying={handleKeepPlaying}
+                onStepDown={handleStepDown}
+                onSwitchLeague={chooseLeague}
+                busy={busy}
+              />
 
-      {user && screen === 'dashboard' && league && (!leagueTables || tableId) && (
-        <main>
-          <StatusPanel
-            status={matchStatus}
-            problem={statusProblem}
-            league={league}
-            tableName={tableName}
-            queueLength={queue.length}
-            onJoin={handleJoin}
-            onLeave={handleLeave}
-            onRecord={handleRecord}
-            onStepDown={handleStepDown}
-            onSwitchLeague={chooseLeague}
-            busy={busy}
-          />
+              <div className="grid">
+                <ActiveTableCard
+                  table={activeTable}
+                  loaded={loaded.table}
+                  league={league}
+                  tableName={tableName}
+                  currentUserId={userId}
+                />
+                <QueueCard queue={queue} loaded={loaded.queue} currentUsername={user.username} />
+                <MatchHistoryCard
+                  history={history}
+                  loaded={loaded.history}
+                  league={league}
+                  currentUserId={userId}
+                />
+                <LeaderboardCard
+                  players={leaderboard}
+                  loaded={loaded.leaderboard}
+                  league={league}
+                  currentUsername={user.username}
+                />
+              </div>
+            </main>
+          )}
 
-          <div className="grid">
-            <ActiveTableCard
-              table={activeTable}
-              loaded={loaded.table}
-              league={league}
-              tableName={tableName}
-              currentUserId={userId}
-            />
-            <QueueCard queue={queue} loaded={loaded.queue} currentUsername={user.username} />
-            <MatchHistoryCard
-              history={history}
-              loaded={loaded.history}
-              league={league}
-              currentUserId={userId}
-            />
-            <LeaderboardCard
-              players={leaderboard}
-              loaded={loaded.leaderboard}
-              currentUsername={user.username}
-            />
-          </div>
-        </main>
-      )}
-
-      <ToastStack toasts={toasts} onDismiss={dismissToast} />
-    </div>
+        <ToastStack toasts={toasts} onDismiss={dismissToast} />
+      </div>
+    </OpenPlayerContext.Provider>
   );
 }

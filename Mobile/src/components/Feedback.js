@@ -14,7 +14,11 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Feather from '@expo/vector-icons/Feather';
 
-import { fonts, palette, radius, type } from '../theme';
+// Not the league's theme (useTheme): ToastContext draws these, and the
+// league's context needs ToastContext - importing it here would make a
+// circle. Nothing here differs between the leagues anyway.
+import { useAppearance } from '../state/AppearanceContext';
+import { fonts, palette, radius, themeFor, type } from '../theme';
 
 const TOAST_MS = { info: 4000, success: 4000, error: 8000 };
 
@@ -26,18 +30,22 @@ const EDGE = {
 
 export function ToastStack({ toasts, onDismiss }) {
   const insets = useSafeAreaInsets();
+  // Toasts sit above the league's theme in the app, so they take their
+  // colours - the same in both leagues - straight from the scheme.
+  const { scheme } = useAppearance();
+  const colors = themeFor(null, scheme);
   if (!toasts.length) return null;
 
   return (
     <View pointerEvents="box-none" style={[styles.stack, { top: insets.top + 8 }]}>
       {toasts.map((toast) => (
-        <Toast key={toast.id} toast={toast} onDismiss={onDismiss} />
+        <Toast key={toast.id} toast={toast} onDismiss={onDismiss} colors={colors} />
       ))}
     </View>
   );
 }
 
-function Toast({ toast, onDismiss }) {
+function Toast({ toast, onDismiss, colors }) {
   const fullTime = TOAST_MS[toast.tone] ?? TOAST_MS.info;
   const onDismissRef = useRef(onDismiss);
   useEffect(() => {
@@ -54,11 +62,16 @@ function Toast({ toast, onDismiss }) {
     <View
       accessibilityRole={toast.tone === 'error' ? 'alert' : undefined}
       accessibilityLiveRegion="polite"
-      style={[styles.toast, { borderLeftColor: EDGE[toast.tone] ?? EDGE.info }]}
+      style={[
+        styles.toast,
+        { backgroundColor: colors.toastBg, borderLeftColor: EDGE[toast.tone] ?? EDGE.info },
+      ]}
     >
-      <Text style={styles.message}>
+      <Text style={[styles.message, { color: colors.toastText }]}>
         {toast.message}
-        {toast.count > 1 ? <Text style={styles.count}> ×{toast.count}</Text> : null}
+        {toast.count > 1 ? (
+          <Text style={[styles.count, { color: colors.toastMuted }]}> ×{toast.count}</Text>
+        ) : null}
       </Text>
       <Pressable
         onPress={() => onDismiss(toast.id)}
@@ -67,7 +80,7 @@ function Toast({ toast, onDismiss }) {
         hitSlop={8}
         style={({ pressed }) => [styles.close, pressed && styles.closePressed]}
       >
-        <Feather name="x" size={16} color={palette.onDarkMuted} />
+        <Feather name="x" size={16} color={colors.toastMuted} />
       </Pressable>
     </View>
   );
@@ -78,11 +91,15 @@ function Toast({ toast, onDismiss }) {
  * quietly stops updating, which looks identical to "nothing is happening".
  */
 export function ConnectionBanner({ offline }) {
+  const theme = themeFor(null, useAppearance().scheme);
   if (!offline) return null;
   return (
-    <View accessibilityRole="alert" style={styles.banner}>
-      <Feather name="wifi-off" size={16} color={palette.warn} />
-      <Text style={styles.bannerText}>
+    <View
+      accessibilityRole="alert"
+      style={[styles.banner, { borderColor: theme.warnLine, backgroundColor: theme.warnSoft }]}
+    >
+      <Feather name="wifi-off" size={16} color={theme.warn} />
+      <Text style={[styles.bannerText, { color: theme.warn }]}>
         Can't reach the server, so what you see may be out of date. The free server can take up
         to a minute to wake up - retrying automatically.
       </Text>
@@ -101,18 +118,16 @@ const styles = StyleSheet.create({
     paddingRight: 6,
     borderRadius: radius.md,
     borderLeftWidth: 4,
-    backgroundColor: palette.gray900,
-    boxShadow: '0px 12px 32px rgba(27, 26, 34, 0.28)',
+    boxShadow: '0px 12px 32px rgba(0, 0, 0, 0.3)',
   },
   message: {
     flex: 1,
     paddingTop: 5,
-    color: palette.white,
     fontFamily: fonts.regular,
     fontSize: type.small,
     lineHeight: 19,
   },
-  count: { color: palette.onDarkMuted, fontVariant: ['tabular-nums'] },
+  count: { fontVariant: ['tabular-nums'] },
   close: { width: 32, height: 32, borderRadius: radius.sm, alignItems: 'center', justifyContent: 'center' },
   closePressed: { backgroundColor: 'rgba(255, 255, 255, 0.1)' },
   banner: {
@@ -123,8 +138,6 @@ const styles = StyleSheet.create({
     marginBottom: 14,
     borderRadius: radius.sm,
     borderWidth: 1,
-    borderColor: palette.warnLine,
-    backgroundColor: palette.warnSoft,
   },
-  bannerText: { flex: 1, color: palette.warn, fontFamily: fonts.regular, fontSize: type.small, lineHeight: 19 },
+  bannerText: { flex: 1, fontFamily: fonts.regular, fontSize: type.small, lineHeight: 19 },
 });

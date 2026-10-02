@@ -198,6 +198,9 @@ ADDED_COLUMNS = [
     ("Players", "country_flag", "VARCHAR(2) NULL"),
     ("Players", "profile_picture", "VARCHAR(512) NULL"),
     ("Players", "deleted_at", "DATETIME NULL"),
+    ("Queue", "called_at", "DATETIME NULL"),
+    ("Queue", "confirmed_at", "DATETIME NULL"),
+    ("Matches", "cancel_requested_by", "INTEGER NULL"),
 ]
 
 # The name ping pong's first table is given when ensure_schema creates it.
@@ -225,9 +228,11 @@ def ensure_schema():
     Steps:
       1. Every table the models map exists. On an empty database this
          builds them all; on an existing one it creates only what's
-         missing and touches nothing else.
+         missing (such as Player_Pictures, for uploaded photos) and
+         touches nothing else.
       2. Every column in ADDED_COLUMNS exists: the leave-queue timer, each
-         table's league, the ping pong ratings, and profile flag/picture.
+         table's league, the ping pong ratings, profile flag/picture, the
+         ready check's turn times, and a game's cancel request.
          Players.ping_pong_rank_id also gets its foreign key to Ranks.
       3. An empty Ranks table gets the DEFAULT_RANKS tiers.
       4. Table 1 exists in Pool_Tables. The UI plays on table 1, and Queue

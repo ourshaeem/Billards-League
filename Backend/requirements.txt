@@ -23,6 +23,12 @@ PyMySQL==1.2.3
 # (caching_sha2_password) over a connection that isn't encrypted.
 cryptography==50.0.1
 
+# Reads uploaded profile pictures and draws them again as small JPEGs,
+# which is also what strips the location data phones put in photos (see
+# logic/pictures.py). Ships ready-built for Linux and macOS, so the
+# container needs no image libraries of its own.
+Pillow==12.3.0
+
 # Serves the app in production (see gunicorn.conf.py). `python app.py`
 # is Flask's development server and isn't meant for the internet.
 gunicorn==26.2.0

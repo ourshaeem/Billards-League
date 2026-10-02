@@ -11,8 +11,11 @@
  *     solid block of deep purple.
  *   Ping pong: white, purple, gray. The status panel turns white with a
  *     purple band - a ball on a bright table.
- * A theme only swaps token values; no component asks which league it's
- * drawn in. Components get the current theme from useTheme().
+ * Each also comes dark (Profile > Appearance, or the phone's own setting):
+ * the same roles on a near-black screen. The billiards panel keeps its
+ * purple; the ping pong panel turns charcoal under its purple band.
+ * A theme only swaps token values; no component asks which league or
+ * scheme it's drawn in. Components get the current theme from useTheme().
  */
 
 export const palette = {
@@ -72,17 +75,25 @@ export const type = {
 
 export const radius = { sm: 8, md: 12, lg: 20, pill: 999 };
 
-// Roles shared by both leagues.
+// Roles shared by both leagues, by day.
 const shared = {
+  scheme: 'light',
+  // The phone's status bar text: dark on a light screen.
+  statusBar: 'dark',
+
   page: p.white,
   surface: p.white,
   line: p.gray200,
   lineSoft: p.gray100,
+  fillSoft: p.gray100,
   text: p.gray900,
   textMuted: p.gray500,
   textStrong: p.purple900,
   accent: p.purple600,
   accentPressed: p.purple700,
+  // Purple as text - wins, links, your own name. Its own token because
+  // in the dark it has to be lighter, where a pressed button gets darker.
+  accentText: p.purple700,
   accentStrong: p.purple800,
   accentSoft: p.purple100,
   accentWash: p.purple50,
@@ -94,6 +105,8 @@ const shared = {
   inputFocus: p.purple500,
 
   danger: p.danger,
+  // A red button's fill; white text sits on it.
+  dangerFill: p.danger,
   dangerPressed: p.dangerPressed,
   dangerSoft: p.dangerSoft,
   dangerLine: p.dangerLine,
@@ -101,18 +114,62 @@ const shared = {
   warnSoft: p.warnSoft,
   warnLine: p.warnLine,
 
-  // Toasts and player cards sit on dark gray, readable on any screen.
+  // Toasts sit on dark gray, readable on any screen.
   toastBg: p.gray900,
   toastText: p.white,
   toastMuted: p.onDarkMuted,
 
   shadowCard: '0px 1px 2px rgba(30, 11, 61, 0.05), 0px 4px 16px rgba(30, 11, 61, 0.04)',
+  shadowRaised: '0px 1px 3px rgba(30, 11, 61, 0.12)',
 };
 
-const billiards = {
+// The same roles at night: a near-black screen with a touch of purple in
+// it, text at 7:1 or better against its card, and purple a step lighter
+// wherever it is text. The values match the web app's dark tokens.
+const sharedDark = {
   ...shared,
-  pageGlow: p.purple50,
+  scheme: 'dark',
+  statusBar: 'light',
 
+  page: '#110e17',
+  surface: '#1a1622',
+  line: '#2d2838',
+  lineSoft: '#231f2c',
+  fillSoft: '#27222f',
+  text: '#ecebf3',
+  textMuted: '#a5a2b5',
+  textStrong: p.purple200,
+  accent: p.purple500,
+  accentPressed: p.purple600,
+  accentText: p.purple300,
+  accentStrong: p.purple100,
+  accentSoft: '#2e2249',
+  accentWash: '#211a31',
+  quietBorder: '#3f394c',
+  quietText: '#d5d3df',
+  quietPressed: '#27222f',
+  inputBorder: '#3f394c',
+  inputFocus: '#a78bfa',
+
+  danger: '#f97066',
+  dangerFill: '#d92d20',
+  dangerPressed: p.danger,
+  dangerSoft: '#2c1517',
+  dangerLine: '#7a271a',
+  warn: '#fec84b',
+  warnSoft: '#2b2112',
+  warnLine: '#7a5214',
+
+  // Lifted off the dark screen instead of sinking into it.
+  toastBg: '#2c2839',
+  toastMuted: '#bcb9cb',
+
+  shadowCard: '0px 1px 2px rgba(0, 0, 0, 0.4), 0px 4px 16px rgba(0, 0, 0, 0.25)',
+  shadowRaised: '0px 1px 3px rgba(0, 0, 0, 0.5)',
+};
+
+// The 4-ball and the purple status panel, the same by day and night.
+const billiardsTable = {
   // The 4-ball: solid purple with a white spot.
   ballFill: p.purple600,
   ballRing: 'transparent',
@@ -123,7 +180,6 @@ const billiards = {
   panelBorder: p.purple700,
   panelEdge: 'rgba(255, 255, 255, 0.45)',
   panelEdgeSize: 1,
-  panelShadow: '0px 16px 36px rgba(46, 16, 101, 0.26)',
   panelText: p.white,
   panelDim: 'rgba(255, 255, 255, 0.82)',
   panelFaint: 'rgba(255, 255, 255, 0.64)',
@@ -136,6 +192,20 @@ const billiards = {
   panelCtaPressed: p.purple50,
   panelErrorEdge: p.dangerOnDark,
   panelInputBorder: 'rgba(255, 255, 255, 0.4)',
+};
+
+const billiardsDark = {
+  ...sharedDark,
+  ...billiardsTable,
+  pageGlow: '#261c40',
+  panelShadow: '0px 16px 36px rgba(0, 0, 0, 0.5)',
+};
+
+const billiards = {
+  ...shared,
+  ...billiardsTable,
+  pageGlow: p.purple50,
+  panelShadow: '0px 16px 36px rgba(46, 16, 101, 0.26)',
 };
 
 const pingPong = {
@@ -167,9 +237,46 @@ const pingPong = {
   panelInputBorder: p.gray300,
 };
 
-const THEMES = { billiards, ping_pong: pingPong };
+// Ping pong at night: the white panel becomes charcoal under its purple
+// band, so it still reads as ping pong's - and isn't a floodlight.
+const pingPongDark = {
+  ...sharedDark,
+  pageGlow: '#1e1a28',
 
-/** The theme for a league; billiards for anything else (including none). */
-export function themeFor(league) {
-  return THEMES[league] || billiards;
+  ballFill: p.white,
+  ballRing: p.purple500,
+  ballSpot: null,
+
+  panelBg: '#1e1b27',
+  panelBgPlaying: '#261d3c',
+  panelBorder: '#3d3060',
+  panelEdge: p.purple500,
+  panelEdgeSize: 4,
+  panelShadow: '0px 16px 36px rgba(0, 0, 0, 0.45)',
+  panelText: '#f4f2fa',
+  panelDim: '#c9c6d7',
+  panelFaint: '#9f9bb0',
+  panelLine: '#3f394c',
+  panelFill: '#272231',
+  panelFillStrong: '#30293f',
+  panelIcon: '#a78bfa',
+  panelCtaBg: p.purple500,
+  panelCtaText: p.white,
+  panelCtaPressed: p.purple600,
+  panelErrorEdge: '#f97066',
+  panelInputBorder: '#3f394c',
+};
+
+const THEMES = {
+  light: { billiards, ping_pong: pingPong },
+  dark: { billiards: billiardsDark, ping_pong: pingPongDark },
+};
+
+/**
+ * The theme for a league, by day ("light") or night ("dark"); billiards
+ * for anything else (including no league yet).
+ */
+export function themeFor(league, scheme = 'light') {
+  const themes = THEMES[scheme] || THEMES.light;
+  return themes[league] || themes.billiards;
 }

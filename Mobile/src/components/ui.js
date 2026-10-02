@@ -8,7 +8,8 @@
  *   <label> + <input>     -> Field
  *   the page itself       -> Screen (scrolls, pulls to refresh)
  *
- * Colours come from the current league's theme, never written here.
+ * Colours come from the current league's theme - by day or by night -
+ * never written here.
  * Every control is at least 44 points tall - the smallest target a thumb
  * hits reliably - and says what it is to screen readers.
  */
@@ -66,7 +67,7 @@ function buttonColors(theme, variant) {
     case 'quiet':
       return { bg: 'transparent', pressed: theme.quietPressed, border: theme.quietBorder, text: theme.quietText };
     case 'link':
-      return { bg: 'transparent', pressed: 'transparent', border: 'transparent', text: theme.accentPressed };
+      return { bg: 'transparent', pressed: 'transparent', border: 'transparent', text: theme.accentText };
     // On the status panel, the colours come from the panel's own roles:
     // on the purple billiards panel the loud button is white.
     case 'panelPrimary':
@@ -79,7 +80,7 @@ function buttonColors(theme, variant) {
       return { bg: 'transparent', pressed: theme.panelFill, border: theme.panelLine, text: theme.panelDim };
     // Red only for the one thing that can't be undone: deleting an account.
     case 'danger':
-      return { bg: theme.danger, pressed: theme.dangerPressed, border: theme.danger, text: theme.onAccent };
+      return { bg: theme.dangerFill, pressed: theme.dangerPressed, border: theme.dangerFill, text: theme.onAccent };
     case 'dangerQuiet':
       return { bg: 'transparent', pressed: theme.dangerSoft, border: theme.dangerLine, text: theme.danger };
     default:
@@ -220,7 +221,7 @@ export function Pill({ children }) {
   const theme = useTheme();
   return (
     <View style={[styles.pill, { backgroundColor: theme.accentSoft }]}>
-      <Text style={[styles.pillText, { color: theme.accentPressed }]}>{children}</Text>
+      <Text style={[styles.pillText, { color: theme.accentText }]}>{children}</Text>
     </View>
   );
 }
@@ -331,7 +332,7 @@ export function Segmented({ options, value, onChange, accessibilityLabel }) {
     <View
       accessibilityRole="radiogroup"
       accessibilityLabel={accessibilityLabel}
-      style={[styles.segmented, { backgroundColor: theme.lineSoft }]}
+      style={[styles.segmented, { backgroundColor: theme.fillSoft }]}
     >
       {options.map((option) => {
         const selected = option.value === value;
@@ -343,11 +344,11 @@ export function Segmented({ options, value, onChange, accessibilityLabel }) {
             accessibilityState={{ selected, checked: selected }}
             style={[
               styles.segment,
-              selected && { backgroundColor: theme.surface, boxShadow: '0px 1px 3px rgba(30, 11, 61, 0.12)' },
+              selected && { backgroundColor: theme.surface, boxShadow: theme.shadowRaised },
             ]}
           >
             <Text
-              style={[styles.segmentText, { color: selected ? theme.accentPressed : theme.textMuted }]}
+              style={[styles.segmentText, { color: selected ? theme.accentText : theme.textMuted }]}
             >
               {option.label}
             </Text>

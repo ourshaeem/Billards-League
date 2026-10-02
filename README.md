@@ -5,8 +5,12 @@ and track each league's ladder.
 
 After signing in, players pick a league for the session. Both leagues run
 the same king-of-the-hill queue: winner stays on, next in line plays
-them. Each league has its own ratings, ranks, ladder, match history and
-colours (billiards: purple, white, gray; ping pong: white, purple, gray).
+them. When it's your turn you have a minute to say you're here, or the
+next person is up; and a game both players agree to call off is cancelled
+with nothing recorded. Each league has its own ratings, ranks, ladder,
+match history and colours (billiards: purple, white, gray; ping pong:
+white, purple, gray), each in light and dark. Tap any player to see their
+profile, their games and their record against you.
 
 Stack: **MySQL + Python/Flask + React (Vite)**. Kept deliberately plain so
 the app can be ported to React Native later.
@@ -135,6 +139,13 @@ To point it at a backend on your own computer instead, see
 `Mobile/.env.example`, and restart with `npx expo start --clear` - Expo
 caches the address. Sign-in tokens are kept in Expo SecureStore (the iOS
 Keychain / Android Keystore), not plain storage.
+
+Choosing a photo uses `expo-image-picker` and `expo-image-manipulator`,
+and the turn buzz `expo-haptics`. They're native code, so an app built
+before them (the APK up to version 3) needs replacing with a new build
+(`npx eas-cli build --platform android --profile preview`). Expo Go
+already has them. There are no push notifications: a player whose turn
+is coming needs the app open to see it.
 
 `npx expo start --web` runs the same app in a browser, which is handy for
 a quick look but isn't what ships to phones.
@@ -360,12 +371,17 @@ Backend/
   gunicorn.conf.py          workers, port, and the one-per-start schema run
   logic/
     manage_queue.py         joining, leaving, matchmaking (single source of
-                            truth), player status, giving up the table
+                            truth) with its one-minute ready check, player
+                            status, giving up the table
     record_match.py         reporting results, score rules and ELO for
                             both leagues, king handoff
+    cancel_match.py         calling a game off when both players agree
     tables.py               which league a table is in, and who's at it
-    match_history.py        finished games, per league and per player
-    profile.py              reading a profile, changing flag and picture
+    match_history.py        finished games, per league, per player and
+                            head to head; records against each opponent
+    profile.py              reading profiles, changing flag and picture
+    pictures.py             uploaded photos: checked, cropped, shrunk and
+                            stripped of location data, kept in the database
     countries.py            the country list flags are picked from
     auth.py                 registration and login
     leaderboard.py          top 50, per league
@@ -378,13 +394,21 @@ Frontend/
     App.jsx                 session, league choice, polling, actions
     leagues.js              league names, score rules, quick-score buttons
     flags.js                country code -> flag emoji
-    index.css               design tokens (both league themes) and styles
+    theme.js                light / dark choice, remembered on the device
+    photo.js                cropping and shrinking a photo before upload
+    openPlayer.js           how any name opens that player's profile
+    index.css               design tokens (both league themes, light and
+                            dark) and styles
     components/
-      StatusPanel.jsx       the four player states, leave / give-up buttons
+      StatusPanel.jsx       the five player states: join, I'm here, leave,
+                            report or cancel a game, give up the table
       LeagueSelect.jsx      choosing billiards or ping pong after sign-in
       ActiveTable.jsx       who is at the table right now
       MatchHistory.jsx      recent games, everyone's or yours
-      ProfileSettings.jsx   flag, picture, standing in both leagues
+      PlayerProfile.jsx     another player: standings, record against
+                            everyone and against you, their games
+      ProfileSettings.jsx   flag, photo or picture link, light / dark,
+                            standing in both leagues
       Player.jsx            avatar, name + flag, hover card (rank, rating)
       Panels.jsx            queue list, ladder
       AuthScreens.jsx       sign in, register
@@ -395,15 +419,19 @@ Mobile/                     the Expo / React Native app
   src/
     api.js                  ALL backend calls - the twin of Frontend/src/api.js
     config.js               server address (live Render by default), polling pace
-    storage.js              session in SecureStore
-    theme.js                design tokens, both league themes
+    storage.js              session and light / dark choice in SecureStore
+    theme.js                design tokens, both league themes, light and dark
+    photo.js                picking, cropping and shrinking a photo
     leagues.js, flags.js    copied from Frontend/src - keep in step
-    state/                  session, league, live queue/table data, toasts
-    navigation/             sign-in stack -> league picker -> tabs
+    state/                  appearance, session, league, live queue/table
+                            data and actions, toasts
+    navigation/             sign-in stack -> league picker -> tabs, player
+                            profiles over the tabs
     screens/                sign in, register, league picker, Play, Games,
-                            Ladder, Profile
-    components/             status panel, table and queue cards, player
-                            chip and card, flag picker, buttons and fields
+                            Ladder, Profile, a player's profile
+    components/             status panel, turn banner, table and queue
+                            cards, game rows, player chip, flag picker,
+                            buttons and fields
 
 AGENTS.md                   the six roles and the contracts between them
 render.yaml                 Render Blueprint: deploys Backend/ as a Docker service
@@ -431,6 +459,24 @@ leagues without knowing either exists. A match's league is its table's.
   rating of 1200 - averaged between the two players so the ladder stays
   zero-sum. A lopsided game moves up to 50% more than a close one (11-0
   vs 11-9 or a deuce game). Billiards keeps its flat K of 32.
+
+## Taking turns, and calling a game off
+
+- **The ready check.** When a player's turn comes - a king is waiting for
+  a challenger, or the table is free and they're one of the first two in
+  line - they have a minute to tap "I'm here". If they don't, they're
+  taken out of the queue and the next person is up. At a free table both
+  players must say they're here; the game starts once they have.
+  Someone who joined (or said they were here) within the last minute
+  isn't asked again, so joining a table with room starts at once. The
+  minute is timed by the database's clock, and enforced by the server
+  whichever app is asking. It's part of `attempt_matchmaking()` - still
+  the one place matchmaking happens.
+- **Cancelling a game.** Either player can ask to cancel; nothing happens
+  until the other agrees, and either can take it back. A cancelled game
+  records nothing and moves nobody's rating. If the first player was
+  holding the table (they won the last game there), they keep it and the
+  next in line is up; otherwise the table goes to the next two.
 
 ## Next steps
 

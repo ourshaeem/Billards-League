@@ -1,16 +1,19 @@
 /**
- * The player's own profile: pick a flag, set a picture, see where they
- * stand in both leagues.
+ * The player's own profile: pick a flag, upload or link a picture, choose
+ * light or dark, see where they stand in both leagues.
  *
  * Problems appear beside the field they concern - both the ones caught
  * here and the ones the server sends back (it names the field).
  */
 import React, { useEffect, useRef, useState } from 'react';
-import { ArrowLeft, Trash2 } from 'lucide-react';
+import { ArrowLeft, ImageUp, Trash2 } from 'lucide-react';
 
 import { PRIVACY_POLICY_URL } from '../api.js';
 import { flagEmoji } from '../flags.js';
 import { LEAGUE_ORDER, LEAGUES } from '../leagues.js';
+import { PhotoProblem, squarePhoto } from '../photo.js';
+import { THEME_CHOICES } from '../theme.js';
+import { useOpenPlayer } from '../openPlayer.js';
 import { Avatar } from './Player.jsx';
 import { FieldError } from './Feedback.jsx';
 
@@ -30,12 +33,26 @@ function pictureProblem(link) {
   return null;
 }
 
-export function ProfileSettings({ profile, countries, onSave, onDeleteAccount, onBack, busy }) {
+export function ProfileSettings({
+  profile,
+  countries,
+  onSave,
+  onUploadPicture,
+  onDeleteAccount,
+  onBack,
+  themeChoice,
+  onThemeChoice,
+  busy,
+}) {
+  // An uploaded photo's address isn't a link anyone typed, so the link
+  // field starts empty rather than offering it back to edit.
+  const startingLink = profile.picture_uploaded ? '' : profile.profile_picture || '';
   const [values, setValues] = useState({
     country_flag: profile.country_flag || '',
-    profile_picture: profile.profile_picture || '',
+    profile_picture: startingLink,
   });
   const [errors, setErrors] = useState({});
+  const openPlayer = useOpenPlayer();
 
   const update = (field) => (e) => {
     setValues((v) => ({ ...v, [field]: e.target.value }));
@@ -52,9 +69,16 @@ export function ProfileSettings({ profile, countries, onSave, onDeleteAccount, o
     const timer = setTimeout(() => setPreviewLink(link), PREVIEW_DELAY_MS);
     return () => clearTimeout(timer);
   }, [link]);
+  // The link being typed, once it looks like one; otherwise whatever the
+  // saved picture is - including an uploaded photo.
+  const linkEdited = link !== startingLink;
   const preview = {
     username: profile.username,
-    profile_picture: previewLink && !pictureProblem(previewLink) ? previewLink : null,
+    profile_picture: linkEdited
+      ? previewLink && !pictureProblem(previewLink)
+        ? previewLink
+        : null
+      : profile.profile_picture,
   };
 
   const submit = async (e) => {
@@ -66,10 +90,12 @@ export function ProfileSettings({ profile, countries, onSave, onDeleteAccount, o
     }
     setErrors({});
 
-    const result = await onSave({
-      country_flag: values.country_flag || null,
-      profile_picture: link || null,
-    });
+    // The picture is only sent when the link was changed: an empty link
+    // field also means "keep my uploaded photo", and sending it would
+    // delete the photo.
+    const changes = { country_flag: values.country_flag || null };
+    if (linkEdited) changes.profile_picture = link || null;
+    const result = await onSave(changes);
     if (!result.ok && result.field) {
       setErrors({ [result.field]: result.message });
     }
@@ -77,7 +103,9 @@ export function ProfileSettings({ profile, countries, onSave, onDeleteAccount, o
 
   // Until the list arrives (or if it can't), the player's current choice
   // still has to be a valid option.
-  const options = countries ?? (profile.country_flag ? [{ code: profile.country_flag, name: profile.country_flag }] : []);
+  const options =
+    countries ??
+    (profile.country_flag ? [{ code: profile.country_flag, name: profile.country_flag }] : []);
 
   return (
     <main className="profile-shell" aria-labelledby="profile-title">
@@ -99,8 +127,24 @@ export function ProfileSettings({ profile, countries, onSave, onDeleteAccount, o
             <p className="muted small">
               {profile.first_name} {profile.last_name}
             </p>
+            {openPlayer && (
+              <button
+                type="button"
+                className="btn-link btn-link-small"
+                onClick={() => openPlayer(profile.user_id)}
+              >
+                See your profile as others do
+              </button>
+            )}
           </div>
         </div>
+
+        <PhotoPicker
+          profile={profile}
+          onUpload={onUploadPicture}
+          onRemove={() => onSave({ profile_picture: null })}
+          busy={busy}
+        />
 
         <form onSubmit={submit} noValidate>
           <div className="field">
@@ -124,7 +168,7 @@ export function ProfileSettings({ profile, countries, onSave, onDeleteAccount, o
           </div>
 
           <div className="field">
-            <label htmlFor="profile-picture">Profile picture link</label>
+            <label htmlFor="profile-picture">Or use a link to a picture</label>
             <input
               id="profile-picture"
               type="url"
@@ -139,7 +183,9 @@ export function ProfileSettings({ profile, countries, onSave, onDeleteAccount, o
               }
             />
             <span className="field-hint" id="profile-picture-hint">
-              Paste a link to an image. Leave it empty to show your initial instead.
+              {profile.picture_uploaded
+                ? "You're using an uploaded photo. Paste a link here to use that instead."
+                : 'Paste a link to an image. Leave it empty to show your initial instead.'}
             </span>
             <FieldError id="profile-picture-error" message={errors.profile_picture} />
           </div>
@@ -189,6 +235,31 @@ export function ProfileSettings({ profile, countries, onSave, onDeleteAccount, o
         </div>
       </section>
 
+      <section className="card" aria-labelledby="appearance-heading">
+        <div className="card-head">
+          <h2 className="card-title" id="appearance-heading">
+            Appearance
+          </h2>
+          <div className="segmented" role="group" aria-labelledby="appearance-heading">
+            {THEME_CHOICES.map((option) => (
+              <button
+                key={option.key}
+                type="button"
+                className="segmented-option"
+                aria-pressed={themeChoice === option.key}
+                onClick={() => onThemeChoice(option.key)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <p className="muted small">
+          Automatic follows your device&rsquo;s light or dark setting. Your choice is remembered on
+          this device.
+        </p>
+      </section>
+
       <DeleteAccount onDelete={onDeleteAccount} />
 
       <p className="small profile-privacy">
@@ -197,6 +268,87 @@ export function ProfileSettings({ profile, countries, onSave, onDeleteAccount, o
         </a>
       </p>
     </main>
+  );
+}
+
+/**
+ * Uploading a photo as the picture, or removing the picture. The photo is
+ * cropped and shrunk here (see photo.js), and again on the server, which
+ * also strips its metadata - where it was taken, the camera - before
+ * anyone sees it.
+ */
+function PhotoPicker({ profile, onUpload, onRemove, busy }) {
+  const inputRef = useRef(null);
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState(null);
+
+  const choose = async (e) => {
+    const file = e.target.files?.[0];
+    // Cleared, so choosing the same file again still counts as a change.
+    e.target.value = '';
+    if (!file) return;
+    setError(null);
+    setWorking(true);
+    try {
+      const image = await squarePhoto(file);
+      const result = await onUpload(image);
+      if (!result.ok && result.field) setError(result.message);
+    } catch (problem) {
+      setError(
+        problem instanceof PhotoProblem
+          ? problem.message
+          : "That picture couldn't be prepared. Try a different one.",
+      );
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  return (
+    <div className="photo-picker">
+      <div className="photo-picker-actions">
+        {/* The button below stands in for the browser's own file control,
+            which can't be styled; this one stays out of reach. */}
+        <input
+          ref={inputRef}
+          type="file"
+          accept="image/*"
+          className="sr-only"
+          onChange={choose}
+          tabIndex={-1}
+          aria-hidden="true"
+        />
+        <button
+          type="button"
+          className="btn btn-quiet btn-small"
+          onClick={() => inputRef.current?.click()}
+          disabled={working || busy}
+          aria-describedby={error ? 'profile-photo-error' : 'profile-photo-hint'}
+        >
+          <ImageUp size={16} aria-hidden="true" />
+          {working
+            ? 'Uploading...'
+            : profile.profile_picture
+              ? 'Upload a new photo'
+              : 'Upload a photo'}
+        </button>
+        {profile.profile_picture && (
+          <button
+            type="button"
+            className="btn btn-quiet btn-small"
+            onClick={onRemove}
+            disabled={working || busy}
+          >
+            Remove picture
+          </button>
+        )}
+      </div>
+      <span className="field-hint" id="profile-photo-hint">
+        Any photo works - it&rsquo;s cropped to a square, and the location and other details photos
+        carry are removed.
+      </span>
+      <FieldError id="profile-photo-error" message={error} />
+    </div>
   );
 }
 
@@ -247,8 +399,8 @@ function DeleteAccount({ onDelete }) {
       {!open ? (
         <>
           <p className="muted small danger-zone-text">
-            Deleting your account removes your name, flag, picture and password, and takes you
-            off the ladders. Your games stay in other players' history as "Deleted player".
+            Deleting your account removes your name, flag, picture and password, and takes you off
+            the ladders. Your games stay in other players' history as "Deleted player".
           </p>
           <button type="button" className="btn btn-danger-quiet" onClick={() => setOpen(true)}>
             <Trash2 size={16} aria-hidden="true" />
@@ -259,10 +411,10 @@ function DeleteAccount({ onDelete }) {
         <form onSubmit={submit} noValidate>
           <p className="danger-zone-title">Delete your account?</p>
           <p className="small danger-zone-text">
-            This removes your username, name, flag, picture and password straight away, takes
-            you out of every queue and off the ladders, and signs you out. Games you've played
-            stay in other players' history, shown as "Deleted player" with nothing that
-            identifies you. <strong>This can't be undone.</strong>
+            This removes your username, name, flag, picture and password straight away, takes you
+            out of every queue and off the ladders, and signs you out. Games you've played stay in
+            other players' history, shown as "Deleted player" with nothing that identifies you.{' '}
+            <strong>This can't be undone.</strong>
           </p>
           <div className="field">
             <label htmlFor="delete-password">Your password</label>

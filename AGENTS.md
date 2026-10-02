@@ -55,7 +55,10 @@ joining queues, starting and recording matches, logging in, registering.
 - Matchmaking has exactly one implementation:
   `manage_queue.attempt_matchmaking()`. If a second copy of that logic
   ever appears, that is the bug - a duplicate is what caused the original
-  stuck-queue deadlock.
+  stuck-queue deadlock. The ready check (who is up, who has said they're
+  here, who has run out of time) is part of it, not beside it;
+  `confirm_here()` only records a confirmation, and callers run
+  matchmaking afterwards, as they do after `join_queue()`.
 - Distinguishable outcomes stay distinguishable. `join_queue`,
   `step_down` and `report_result` return *which* thing happened, never a
   bare true/false.
@@ -90,7 +93,12 @@ app gets run - locally and in production.
 - Dependencies stay pinned in `requirements.txt`. The MySQL driver is
   PyMySQL (`mysql+pymysql://`), locally and in production; anything that
   reads a MySQL error code goes through `mysql_error_code()`, because
-  PyMySQL keeps it somewhere other drivers don't.
+  PyMySQL keeps it somewhere other drivers don't. Pillow redraws uploaded
+  photos (`logic/pictures.py`); its wheels need no system libraries.
+- Uploaded photos live in the database (`Player_Pictures`, MEDIUMBLOB on
+  MySQL), never on disk: the host's disk is wiped on every deploy. In
+  production the app trusts the proxy's `X-Forwarded-Proto` (ProxyFix),
+  so the picture links it builds are `https://`.
 - Production configuration comes only from environment variables. The
   image sets `APP_ENV=production`, which turns a missing `DATABASE_URL`
   or `JWT_SECRET_KEY` into a refusal to start - never a quiet fallback to
@@ -139,6 +147,18 @@ match history and player profiles. Tests: `tests/test_leagues.py`
 `PingPongEloTests`, `LeaderboardByLeague`, `TableSnapshotRoute`),
 `tests/test_match_history.py`, `tests/test_profile.py`, and the
 `ensure_schema` additions in `tests/test_schema.py`.
+
+**Shipped, handed to Backend 1 on 2026-10-02:** the ready check (a minute
+to say you're here when your turn comes), cancelling a game when both
+players agree, uploaded profile photos, public player profiles and
+head-to-head records. Tests: `tests/test_ready_check.py` (`YourTurn`,
+`FreeTable`, `JustJoined`, `Confirming`, `ReadyCheckRoutes`),
+`tests/test_cancel_match.py` (`AskingAndAgreeing`,
+`WhatHappensToTheTable`, `ChangingYourMind`, `NothingToCancel`,
+`CancelRoutes`), `tests/test_pictures.py` (`Uploading`,
+`PrivacyOfPhotos`, `Refusals`, `OnePictureAtATime`,
+`BehindTheHostsProxy`), `tests/test_player_profiles.py`, and the new
+columns and table in `tests/test_schema.py`.
 
 **Shipped, handed to Backend 1 on 2026-10-01:** `reset-league`, the CLI
 command that starts one league over (`logic/seasons.py`). Tests:
@@ -205,9 +225,13 @@ class names in `Frontend/src/components/`.
   Red and amber are for errors and warnings only.
 - Two league themes, chosen by `<html data-league>`: billiards (purple,
   white, gray - the default) and ping pong (white, purple, gray - the
-  status panel turns white). A theme only redefines tokens, including
-  the `--panel-*` roles the status panel uses; components never check
-  which league they're drawn in.
+  status panel turns white). Each comes light or dark, chosen by
+  `<html data-theme>` (`src/theme.js`: the player's choice, or the
+  device's setting): in the dark the billiards panel keeps its purple and
+  the ping pong panel turns charcoal under its purple band. A theme only
+  redefines tokens, including the `--panel-*` roles the status panel
+  uses; components never check which league or theme they're drawn in.
+  The mobile app's `theme.js` mirrors the same four themes.
 - Quality floor, not negotiable: works down to a phone width, visible
   keyboard focus, readable contrast, `prefers-reduced-motion` respected.
 - The status panel is the one loud element on the page. If something else
@@ -242,8 +266,9 @@ also gives matchmaking a chance when the player is waiting):
 |--------------------------|--------------------------------------|------------|
 | `idle`                   | Not queued, not playing              | -          |
 | `queued`                 | Waiting for an opponent              | `queue_position`, `seconds_waiting`, `can_leave`, `leave_unlocks_in`, `table_id`, `league_type` |
-| `waiting_for_challenger` | Won and holding the table            | `match_id`, `table_id`, `league_type` |
-| `playing`                | Game in progress                     | `opponent`, `opponent_id`, `match_id`, `table_id`, `league_type` |
+| `your_turn`              | Up to play: say "I'm here" in time   | `confirmed`, `seconds_left`, `opponent`, `opponent_id`, `opponent_confirmed`, `opponent_seconds_left`, `table_id`, `league_type` |
+| `waiting_for_challenger` | Won and holding the table            | `match_id`, `table_id`, `league_type`, `up_next`, `up_next_seconds_left` |
+| `playing`                | Game in progress                     | `opponent`, `opponent_id`, `match_id`, `table_id`, `league_type`, `cancel_requested_by` |
 
 `league_type` is the league of the game, which can differ from the league
 asked about: a player plays one game at a time, whichever league's
@@ -253,23 +278,49 @@ screen they are looking at. The UI reports the score with *this*
 `queue_position` is the player's actual place in line, 1 at the front.
 (The stored column only counts up; never show it directly.)
 
-`StatusPanel.jsx` renders one branch per value. Adding a fifth status
-means adding a branch, or the panel falls through to "idle" and misleads
-people. A failed status check returns `500 {message}`, never
-`{"status": "idle"}` - that would offer Join to someone mid-game.
+The ready check: when a player's turn comes they have 60 seconds
+(`READY_CHECK_SECONDS`) to send `POST /queue/confirm`, or they're taken
+out of the queue and the next in line is up. `seconds_left` is their time
+left (null once `confirmed`). The opponent is the king holding the table
+(always confirmed) or the other player up at a free table, whose own
+clock is `opponent_seconds_left`. A player who joined or confirmed within
+the last 60 seconds is counted as here without being asked. The king's
+`up_next` / `up_next_seconds_left` name who is up to challenge them and
+how long they have (null when nobody is). `cancel_requested_by` is
+`"you"`, `"opponent"` or null - see `POST /match/cancel`.
+
+The status panels (`StatusPanel.jsx`, and `StatusPanel.js` in the mobile
+app) render one branch per value. Adding a sixth status means adding a
+branch to both, or the panels fall through to "idle" and mislead people
+- which is exactly what an app built before `your_turn` shows; see
+`POST /queue/join` for how it still confirms. A failed status check
+returns `500 {message}`, never `{"status": "idle"}` - that would offer
+Join to someone mid-game.
 
 ### `POST /queue/join`
 
 Returns `{ message, status, match_started }` where `status` is `joined`
 or `already_queued`. `409` means already playing. Joining always attempts
 matchmaking, so an already-queued player who retries gets matched - that
-is what makes a stuck queue heal itself.
+is what makes a stuck queue heal itself. Joining again on your turn
+counts as "I'm here" (how an app from before the ready check, which
+shows Join instead, confirms); after the minute is up it joins again at
+the back of the line.
+
+### `POST /queue/confirm`
+
+"I'm here". Body `{ table_id?, league_type? }` (as for joining). `200 {
+message, status, match_started }`, `status` being `confirmed` or
+`already_confirmed`; the game starts once everyone up has confirmed.
+`409` not your turn yet, or the minute is already up (you're taken out
+of the queue); `404` not in the queue.
 
 ### `POST /queue/leave`
 
 `200` left, `403` still inside the wait (body carries
 `leave_unlocks_in`), `404` not in the queue. The wait is enforced
-server-side; the disabled button is only a courtesy.
+server-side; the disabled button is only a courtesy. A player whose turn
+has come may leave at once, and the next in line is up straight away.
 
 ### `POST /match/record`
 
@@ -287,6 +338,20 @@ nothing is saved. Both are optional for old clients, but the UI always
 sends them. Returns `{ message, elo_change, winner_id }`. `404` no game
 in progress, `409` no opponent yet.
 
+### `POST /match/cancel`, `POST /match/keep`
+
+Calling a game off takes both players. `cancel` asks - or, when the
+opponent has already asked, agrees, which deletes the game: nothing is
+recorded and no rating moves. `keep` takes your own request back or
+turns down theirs. Body `{ match_id }` (optional for old apps), the game
+the player saw. `cancel` returns `200 { message, status }` with `status`
+`requested`, `already_requested` or `cancelled`; `keep` returns `kept` or
+`nothing_to_keep`. `409` that game has finished (or, for `cancel`, a king
+with no challenger - give up the table instead); `404` no game. After a
+cancel, a king who won the last game there keeps the table; two players
+who came off the queue together both go, and the table goes to the next
+two.
+
 ### `POST /table/step-down`
 
 A king with no challenger gives up the table. `200` done, `404` not
@@ -295,14 +360,16 @@ The freed table goes to the first two in the queue.
 
 ### `GET /queue/<table_id>`
 
-`[{ queue_position, username }]` in order, `queue_position` being the
-place in line (1, 2, 3...).
+`[{ queue_position, user_id, username, called, confirmed }]` in order,
+`queue_position` being the place in line (1, 2, 3...). `called` means
+it's that player's turn; `confirmed` that they've said they're here.
 
 ### `GET /leaderboard?league_type=`
 
-`[{ username, elo_rating, total_wins, total_losses, rank_name }]` - the
-same shape for both leagues, filled from that league's columns. No
-`league_type` means billiards.
+`[{ user_id, username, country_flag, profile_picture, elo_rating,
+total_wins, total_losses, rank_name }]` - the same shape for both
+leagues, filled from that league's columns. No `league_type` means
+billiards. `user_id` is how a ladder row opens that player's profile.
 
 ### Player cards
 
@@ -311,7 +378,10 @@ card (`Player.to_card`): `{ user_id, username, country_flag,
 profile_picture, league_type, elo, rank_name, wins, losses }`, with the
 numbers for `league_type`. The hover card reads these; hovering never
 makes a request. `country_flag` is an ISO code (`"CA"`) - the client
-draws the emoji. `profile_picture` is an http(s) link or null.
+draws the emoji. `profile_picture` is an http(s) link or null: either a
+link the player gave, or - for a photo they uploaded - this API's own
+`/players/<id>/picture?v=...`, built on the address the request came in
+on.
 
 ### `GET /table/<table_id>`
 
@@ -329,20 +399,48 @@ cards. `seconds_ago` is measured by the database's clock (the same
 reason as the queue timer), from when the game *finished*. `limit` is
 1-50, default 20. Public.
 
-### `GET /players/<user_id>/matches?league_type=&limit=`
+### `GET /players/<user_id>/matches?league_type=&limit=&opponent_id=`
 
 As above, for one player, each entry adding `result`: `won` or `lost`.
-`404` for an unknown player. Public.
+`opponent_id` narrows it to the games between those two (head to head;
+`400` if it isn't a player id). `404` for an unknown player. Public.
+
+### `GET /players/<user_id>`, `GET /players/<user_id>/opponents?league_type=`
+
+A player's profile as anyone sees it: `{ player: { user_id, username,
+country_flag, profile_picture, leagues: {...} } }` - never their real
+name. `404` for an unknown or deleted account (the message says which).
+`opponents` is their record against everyone they've played in a
+league, most games first: `{ user_id, league_type, opponents: [{
+opponent: card, wins, losses }] }`, wins and losses from their side.
+Both public.
+
+### `GET /players/<user_id>/picture`
+
+An uploaded photo, as a JPEG. With the link's current `?v=` it can be
+cached for good; a new photo gets a new link. `404` when the player has
+none. Public.
 
 ### `GET /profile`, `PATCH /profile`
 
 `GET` returns `{ profile: { user_id, username, first_name, last_name,
-country_flag, profile_picture, leagues: { billiards: {elo, rank_name,
-wins, losses}, ping_pong: {...} } } }`. `PATCH` takes `{ country_flag?,
-profile_picture? }` (null or `""` clears one) and returns `{ message,
+country_flag, profile_picture, picture_uploaded, leagues: { billiards:
+{elo, rank_name, wins, losses}, ping_pong: {...} } } }`.
+`picture_uploaded` says the picture is an uploaded photo, not a link, so
+the form doesn't offer its address back as a link to edit. `PATCH` takes
+`{ country_flag?, profile_picture? }` (null or `""` clears one; a new
+link or none also deletes an uploaded photo) and returns `{ message,
 profile }`. A value that can't be saved is `400` with `field` naming it,
 so the form can show the message beside that field; nothing is saved.
 Only those two fields are editable. Both need a login.
+
+`POST /profile/picture` uploads a photo: `{ image: "<base64>" }` (a
+`data:` URL is fine). The server decodes it, refuses anything that isn't
+a picture or is too big (`400`, `field: "profile_picture"`; a body over
+the size limit is `413`), turns it upright, crops it to a 512px square
+and saves it as a new JPEG with no metadata - which is what removes the
+location phones put in photos. Returns `{ message, profile }`. The apps
+shrink a photo before sending it, but the server doesn't rely on that.
 
 `GET /countries` returns `{ countries: [{ code, name }] }`, sorted by
 name - the picker's list, and the only codes `PATCH` accepts.
@@ -355,8 +453,8 @@ password, both with `field: "password"` (a 403, never a 401: to the apps
 a 401 means "session ended"); `409` a game in progress - report it first.
 
 Deleting wipes the Players row's personal details (username becomes a
-random placeholder, names, flag, picture, password) and sets
-`deleted_at`; the row stays so other players' history keeps working,
+random placeholder, names, flag, picture - an uploaded photo is deleted
+outright - password) and sets `deleted_at`; the row stays so other players' history keeps working,
 shown as "Deleted player" (`Player.display_name`). The player leaves
 every queue, gives up a held table and drops off the ladder. Both app
 stores require this, in the app, for any app with sign-up.

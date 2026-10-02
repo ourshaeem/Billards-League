@@ -1,5 +1,6 @@
 /**
- * The two reference panels: who's waiting, and who's on top.
+ * The two reference panels: who's waiting, and who's on top. Any name in
+ * either opens that player's profile.
  *
  * Both distinguish "still loading" from "genuinely empty". The old
  * version showed "Loading leaderboard..." forever when the request had
@@ -7,6 +8,22 @@
  */
 import React from 'react';
 import { Trophy, Users } from 'lucide-react';
+
+import { PlayerChip, PlayerLink } from './Player.jsx';
+
+/** Where someone whose turn has come stands: asked, or confirmed. */
+function TurnTag({ entry }) {
+  if (!entry.called) return null;
+  return entry.confirmed ? (
+    <span className="queue-tag" data-tag="here">
+      here
+    </span>
+  ) : (
+    <span className="queue-tag" data-tag="up">
+      up - confirming
+    </span>
+  );
+}
 
 export function QueueCard({ queue, loaded, currentUsername }) {
   return (
@@ -35,16 +52,20 @@ export function QueueCard({ queue, loaded, currentUsername }) {
               <li
                 className="queue-row"
                 key={`${player.username}-${player.queue_position}`}
-                data-next={index === 0 ? 'true' : 'false'}
+                data-next={index === 0 || player.called ? 'true' : 'false'}
               >
                 <span className="queue-pos" aria-hidden="true">
                   {index + 1}
                 </span>
                 <span className="queue-name">
-                  {player.username}
+                  <PlayerLink userId={player.user_id} name={player.username} isYou={isYou} />
                   {isYou && <span className="tag-you">you</span>}
                 </span>
-                {index === 0 && <span className="up-next">up next</span>}
+                {player.called ? (
+                  <TurnTag entry={player} />
+                ) : (
+                  index === 0 && <span className="up-next">up next</span>
+                )}
               </li>
             );
           })}
@@ -52,13 +73,29 @@ export function QueueCard({ queue, loaded, currentUsername }) {
       )}
 
       <p className="small muted" style={{ marginTop: 16 }}>
-        The winner keeps the table and plays whoever is next in line.
+        The winner keeps the table and plays whoever is next in line. When it&rsquo;s your turn, you
+        have a minute to say you&rsquo;re here.
       </p>
     </section>
   );
 }
 
-export function LeaderboardCard({ players, loaded, currentUsername }) {
+/** A ladder row as a player card, so the ladder can draw it like everywhere else. */
+function asCard(row, league) {
+  return {
+    user_id: row.user_id,
+    username: row.username,
+    country_flag: row.country_flag,
+    profile_picture: row.profile_picture,
+    league_type: league,
+    elo: row.elo_rating,
+    rank_name: row.rank_name,
+    wins: row.total_wins,
+    losses: row.total_losses,
+  };
+}
+
+export function LeaderboardCard({ players, loaded, league, currentUsername }) {
   return (
     <section className="card" aria-labelledby="ladder-heading">
       <div className="card-head">
@@ -95,9 +132,13 @@ export function LeaderboardCard({ players, loaded, currentUsername }) {
                 return (
                   <tr key={player.username} data-self={isYou ? 'true' : 'false'}>
                     <td>{index + 1}</td>
-                    <td>
-                      {player.username}
-                      {isYou && <span className="tag-you">you</span>}
+                    <td className="ladder-player">
+                      <PlayerChip
+                        player={asCard(player, league)}
+                        league={league}
+                        size="sm"
+                        isYou={isYou}
+                      />
                       <span className="rank-name">{player.rank_name || 'Unranked'}</span>
                     </td>
                     <td className="elo">{player.elo_rating}</td>
@@ -108,7 +149,9 @@ export function LeaderboardCard({ players, loaded, currentUsername }) {
                     </td>
                     {/* A win rate off zero games would read as 0%, which is
                         harsher than the truth: they simply haven't played. */}
-                    <td>{winRate === null ? <span className="muted">&mdash;</span> : `${winRate}%`}</td>
+                    <td>
+                      {winRate === null ? <span className="muted">&mdash;</span> : `${winRate}%`}
+                    </td>
                   </tr>
                 );
               })}

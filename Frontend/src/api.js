@@ -16,12 +16,14 @@
 // Vite exposes env vars prefixed with VITE_. Set VITE_API_BASE in a
 // Frontend/.env file to point at a different backend (a phone on the same
 // wifi can't reach "localhost" - it needs the computer's LAN IP).
-const API_BASE =
-  import.meta.env.VITE_API_BASE || 'http://localhost:5000';
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:5000';
 
 // Give up on a request after this long. Without it a dropped connection
 // leaves buttons spinning forever with no explanation.
 const REQUEST_TIMEOUT_MS = 10000;
+// A photo is a much bigger request than anything else, and a slow
+// upstream connection needs longer to send it.
+const UPLOAD_TIMEOUT_MS = 45000;
 
 export const TOKEN_KEY = 'token';
 // Which league the player chose for this session. Kept beside the token so
@@ -33,7 +35,8 @@ const LEAGUE_KEY = 'league';
 // such things - this is the second lock on the door, because the one time
 // it did, a SQL statement filled the screen in a box nobody could close.
 const MAX_MESSAGE_LENGTH = 240;
-const TECHNICAL_MESSAGE = /traceback|sqlalche|\bsql\b|select\s.+\sfrom\s|mysql|exception|errno|stack/i;
+const TECHNICAL_MESSAGE =
+  /traceback|sqlalche|\bsql\b|select\s.+\sfrom\s|mysql|exception|errno|stack/i;
 
 function readableMessage(message, fallback) {
   if (typeof message !== 'string') return fallback;
@@ -46,10 +49,10 @@ function readableMessage(message, fallback) {
 
 /** Error categories, so callers can react without string-matching messages. */
 export const ErrorKind = {
-  NETWORK: 'network',   // server unreachable / offline / timed out
-  AUTH: 'auth',         // token missing, expired or rejected
+  NETWORK: 'network', // server unreachable / offline / timed out
+  AUTH: 'auth', // token missing, expired or rejected
   REJECTED: 'rejected', // server understood and said no (4xx)
-  SERVER: 'server',     // server broke (5xx)
+  SERVER: 'server', // server broke (5xx)
 };
 
 export function getToken() {
@@ -130,7 +133,10 @@ export function setAuthFailureHandler(fn) {
  * wording when it sent one, otherwise something plain written here. No
  * caller ever has to render "[object Object]" or a raw stack trace.
  */
-async function request(path, { method = 'GET', body, auth = false, signal } = {}) {
+async function request(
+  path,
+  { method = 'GET', body, auth = false, signal, timeoutMs = REQUEST_TIMEOUT_MS } = {},
+) {
   const headers = {};
   if (body !== undefined) headers['Content-Type'] = 'application/json';
 
@@ -151,7 +157,7 @@ async function request(path, { method = 'GET', body, auth = false, signal } = {}
   // Combine our timeout with any caller-supplied cancellation, so an
   // unmounting component and a slow server are both handled.
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   if (signal) signal.addEventListener('abort', () => controller.abort());
 
   let response;
@@ -249,9 +255,34 @@ export const getTable = (tableId, signal) => request(`/table/${tableId}`, { sign
 export const getMatchHistory = (league, { limit } = {}, signal) =>
   request(withQuery('/matches/history', { league_type: league, limit }), { signal });
 
-/** One player's finished games in a league, each with result "won" or "lost". */
-export const getPlayerMatches = (userId, league, { limit } = {}, signal) =>
-  request(withQuery(`/players/${userId}/matches`, { league_type: league, limit }), { signal });
+/**
+ * One player's finished games in a league, each with result "won" or
+ * "lost" from their side. opponentId narrows it to the games between the
+ * two of them - head to head.
+ */
+export const getPlayerMatches = (userId, league, { limit, opponentId } = {}, signal) =>
+  request(
+    withQuery(`/players/${userId}/matches`, {
+      league_type: league,
+      limit,
+      opponent_id: opponentId,
+    }),
+    { signal },
+  );
+
+/**
+ * Another player's profile as anyone may see it - picture, flag and both
+ * leagues' standings, never their name: { player: {...} }. 404 for an
+ * unknown or deleted account.
+ */
+export const getPlayer = (userId, signal) => request(`/players/${userId}`, { signal });
+
+/**
+ * A player's record against everyone they've played in a league, most
+ * games first: { opponents: [{ opponent: card, wins, losses }] }.
+ */
+export const getPlayerOpponents = (userId, league, signal) =>
+  request(withQuery(`/players/${userId}/opponents`, { league_type: league }), { signal });
 
 /** Country codes and names for the flag picker: { countries: [{code, name}] } */
 export const getCountries = (signal) => request('/countries', { signal });
@@ -263,8 +294,7 @@ export const checkHealth = (signal) => request('/health', { signal });
 export const login = (username, password) =>
   request('/login', { method: 'POST', body: { username, password } });
 
-export const register = (payload) =>
-  request('/register', { method: 'POST', body: payload });
+export const register = (payload) => request('/register', { method: 'POST', body: payload });
 
 // --- Profile ---
 
@@ -277,6 +307,20 @@ export const getProfile = (signal) => request('/profile', { auth: true, signal }
  */
 export const updateProfile = (changes) =>
   request('/profile', { method: 'PATCH', auth: true, body: changes });
+
+/**
+ * Upload a photo as the profile picture: image is base64, or a data: URL.
+ * The server crops it square, shrinks it and strips its metadata, and
+ * returns { message, profile }. A refusal carries data.field
+ * "profile_picture". Removing it is updateProfile({ profile_picture: null }).
+ */
+export const uploadProfilePicture = (image) =>
+  request('/profile/picture', {
+    method: 'POST',
+    auth: true,
+    body: { image },
+    timeoutMs: UPLOAD_TIMEOUT_MS,
+  });
 
 // --- Match / queue actions ---
 // tableId says which table; league is sent alongside so the server can
@@ -298,6 +342,32 @@ export const leaveQueue = (tableId = 1, league) =>
     auth: true,
     body: { table_id: tableId, league_type: league },
   });
+
+/**
+ * "I'm here" - the ready check. When the status is "your_turn", the player
+ * has a minute to send this or they're taken out of the queue. Returns
+ * { message, status: "confirmed" | "already_confirmed", match_started }.
+ * 409 before their turn or once the minute is up; 404 not in the queue.
+ */
+export const confirmHere = (tableId = 1, league) =>
+  request('/queue/confirm', {
+    method: 'POST',
+    auth: true,
+    body: { table_id: tableId, league_type: league },
+  });
+
+/**
+ * Ask to call off the game in progress - or, when the opponent has asked
+ * already, agree, which cancels it with nothing recorded. Returns
+ * { message, status: "requested" | "already_requested" | "cancelled" }.
+ * matchId is the game the player saw: 409 if it has finished meanwhile.
+ */
+export const cancelMatch = (matchId) =>
+  request('/match/cancel', { method: 'POST', auth: true, body: { match_id: matchId } });
+
+/** Take back a request to cancel, or turn down the opponent's: the game goes on. */
+export const keepPlaying = (matchId) =>
+  request('/match/keep', { method: 'POST', auth: true, body: { match_id: matchId } });
 
 /**
  * matchId is the game the player saw when they filled in the score. The

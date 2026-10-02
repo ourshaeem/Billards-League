@@ -18,6 +18,28 @@
     />
 
     <title>Billiards League</title>
+
+    <!-- Light or dark before the first paint, so a dark page doesn't
+         flash white while the app loads. The same rule as src/theme.js:
+         a stored "light"/"dark" choice, otherwise the device's setting. -->
+    <script>
+      (function () {
+        var choice = null;
+        try {
+          choice = localStorage.getItem('theme');
+        } catch (e) {}
+        var dark =
+          choice === 'dark' ||
+          (choice !== 'light' &&
+            window.matchMedia &&
+            window.matchMedia('(prefers-color-scheme: dark)').matches);
+        document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+        if (dark) {
+          var toolbar = document.querySelector('meta[name="theme-color"]');
+          if (toolbar) toolbar.setAttribute('content', '#15121d');
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

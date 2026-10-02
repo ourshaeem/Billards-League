@@ -1,15 +1,18 @@
 /**
  * What's happening right now in the chosen league, and the actions that
  * change it: your status, the queue, who is at the table; joining,
- * leaving, giving up the table and reporting a result.
+ * leaving, saying "I'm here", giving up the table, reporting a result,
+ * and calling a game off by agreement.
  *
  * The mobile counterpart of the polling and action handlers in
  * Frontend/src/App.jsx. It polls for the whole app, not one screen, so a
  * player waiting in the queue who wanders over to the ladder still hears
- * "Match on" when their game starts. Polling pauses while the app is in
- * the background.
+ * that it's their turn - with a buzz - or that their game is on. Polling
+ * pauses while the app is in the background: there are no push
+ * notifications, so a player whose turn is coming keeps the app open.
  */
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import * as Haptics from 'expo-haptics';
 
 import * as api from '../api';
 import { POLL_INTERVAL_MS } from '../config';
@@ -62,10 +65,39 @@ export function LiveProvider({ children }) {
   }, [scope]);
   // The last match id announced, so "Match on" fires once per game.
   const announcedRef = useRef(null);
+  // The status before the latest one, to notice what just happened: a
+  // turn arriving, a turn missed, a game called off.
+  const lastStatusRef = useRef(null);
   // The game last seen at the table, per scope.
   const tableMatchRef = useRef(null);
 
   const signedInWithTable = status === 'signedIn' && Boolean(league) && Boolean(tableId);
+
+  /** Tell the player about a change worth knowing about, wherever they are. */
+  const noticeChange = useCallback(
+    (previous, next) => {
+      if (next.status === 'your_turn' && !next.confirmed && previous?.status !== 'your_turn') {
+        toast.push('It\'s your turn - tap "I\'m here" within a minute to keep your place.', 'success');
+        // A buzz, so a phone on the table gets noticed. Not every phone can.
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
+      }
+      if (previous?.status === 'your_turn' && !previous.confirmed && next.status === 'idle') {
+        toast.push(
+          "You didn't say you were here in time, so you were taken out of the queue. Join again to get back in line.",
+          'error',
+        );
+      }
+      if (
+        previous?.status === 'playing' &&
+        previous.cancel_requested_by === 'you' &&
+        next.status !== 'playing'
+      ) {
+        toast.push(`${previous.opponent} agreed - the game was cancelled. Nothing was recorded.`, 'info');
+        setGamesVersion((v) => v + 1);
+      }
+    },
+    [toast],
+  );
 
   const refresh = useCallback(
     async (signal) => {
@@ -121,6 +153,9 @@ export function LiveProvider({ children }) {
       // Tell someone their match started, whichever screen they're on.
       if (statusRes.ok) {
         const next = statusRes.data || { status: 'idle' };
+        const previous = lastStatusRef.current;
+        lastStatusRef.current = next;
+        noticeChange(previous, next);
         if (next.status === 'playing' && next.match_id !== announcedRef.current) {
           announcedRef.current = next.match_id;
           toast.push(`Match on: you're playing ${next.opponent}.`, 'success');
@@ -128,8 +163,13 @@ export function LiveProvider({ children }) {
         if (next.status !== 'playing') announcedRef.current = null;
       }
     },
-    [signedInWithTable, scope, tableId, toast],
+    [signedInWithTable, scope, tableId, toast, noticeChange],
   );
+
+  // A new player or league starts with nothing to compare against.
+  useEffect(() => {
+    lastStatusRef.current = null;
+  }, [scope]);
 
   usePolling(refresh, POLL_INTERVAL_MS, signedInWithTable && active);
 
@@ -182,8 +222,54 @@ export function LiveProvider({ children }) {
     }
     toast.push('You left the queue.', 'info');
     setMatchStatus({ status: 'idle' });
+    // Leaving on your turn isn't missing it.
+    lastStatusRef.current = { status: 'idle' };
     refresh();
   }, [perform, tableId, league, reportFailure, refresh, toast, setMatchStatus]);
+
+  /** "I'm here": the ready check, when it's the player's turn. */
+  const confirm = useCallback(async () => {
+    const res = await perform(() => api.confirmHere(tableId, league));
+    if (!res.ok) {
+      reportFailure(res);
+      // Too late, or not their turn yet: catch up with the server, and
+      // don't announce the miss a second time.
+      if (res.status === 409 || res.status === 404) lastStatusRef.current = null;
+    }
+    // On success the panel changes by itself, and "Match on" is announced
+    // when the game starts - a toast here too would say it twice.
+    refresh();
+  }, [perform, tableId, league, reportFailure, refresh]);
+
+  /** Ask to cancel the game - or agree, when the opponent has asked. */
+  const cancelGame = useCallback(
+    async (matchId) => {
+      const res = await perform(() => api.cancelMatch(matchId));
+      if (!res.ok) {
+        reportFailure(res);
+        refresh();
+        return;
+      }
+      if (res.data?.status === 'cancelled') {
+        toast.push('Game cancelled - nothing was recorded.', 'info');
+        lastStatusRef.current = null;
+        announcedRef.current = null;
+        setGamesVersion((v) => v + 1);
+      }
+      refresh();
+    },
+    [perform, reportFailure, refresh, toast],
+  );
+
+  /** Take back a request to cancel, or turn down the opponent's. */
+  const keepPlaying = useCallback(
+    async (matchId) => {
+      const res = await perform(() => api.keepPlaying(matchId));
+      if (!res.ok) reportFailure(res);
+      refresh();
+    },
+    [perform, reportFailure, refresh],
+  );
 
   const stepDown = useCallback(async () => {
     const res = await perform(() => api.stepDown(tableId));
@@ -194,6 +280,7 @@ export function LiveProvider({ children }) {
     }
     toast.push(res.data?.message || 'You gave up the table.', 'info');
     setMatchStatus({ status: 'idle' });
+    lastStatusRef.current = { status: 'idle' };
     setGamesVersion((v) => v + 1);
     refresh();
   }, [perform, tableId, reportFailure, refresh, toast, setMatchStatus]);
@@ -225,15 +312,40 @@ export function LiveProvider({ children }) {
   const value = useMemo(() => {
     // scope is internal bookkeeping, not something a screen needs.
     const { scope: _scope, ...state } = live;
-    return { ...state, busy, gamesVersion, refresh, join, leave, stepDown, record };
-  }, [live, busy, gamesVersion, refresh, join, leave, stepDown, record]);
+    return {
+      ...state,
+      busy,
+      gamesVersion,
+      refresh,
+      join,
+      leave,
+      confirm,
+      stepDown,
+      record,
+      cancelGame,
+      keepPlaying,
+    };
+  }, [
+    live,
+    busy,
+    gamesVersion,
+    refresh,
+    join,
+    leave,
+    confirm,
+    stepDown,
+    record,
+    cancelGame,
+    keepPlaying,
+  ]);
 
   return <LiveContext.Provider value={value}>{children}</LiveContext.Provider>;
 }
 
 /**
  * { matchStatus, statusProblem, queue, table, loaded, offline, busy,
- *   gamesVersion, refresh, join, leave, stepDown, record }
+ *   gamesVersion, refresh, join, leave, confirm, stepDown, record,
+ *   cancelGame, keepPlaying }
  */
 export function useLive() {
   return useContext(LiveContext);

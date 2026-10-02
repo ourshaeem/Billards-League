@@ -1,14 +1,16 @@
 /**
  * The Ladder tab: the league's top 50. Port of the web leaderboard card.
  * Fetched while the tab is on screen, and straight away when a game ends.
+ * Tapping a player opens their profile.
  */
 import React, { useCallback, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useIsFocused } from '@react-navigation/native';
 
 import * as api from '../api';
 import { SLOW_POLL_INTERVAL_MS } from '../config';
-import { YouTag } from '../components/TableCards';
+import { Avatar, useOpenPlayer } from '../components/Player';
+import { flagEmoji } from '../flags';
 import { Card, Screen, Txt } from '../components/ui';
 import { useAppActive } from '../hooks/useAppActive';
 import { usePolling } from '../hooks/usePolling';
@@ -24,6 +26,7 @@ export function LadderScreen() {
   const { gamesVersion } = useLive();
   const focused = useIsFocused();
   const active = useAppActive();
+  const openPlayer = useOpenPlayer();
   const [refreshing, setRefreshing] = useState(false);
 
   const [data, setData] = useState(() => ({ league, players: [], loaded: false, problem: null }));
@@ -73,7 +76,7 @@ export function LadderScreen() {
           <>
             <View style={[styles.row, styles.headRow, { borderBottomColor: theme.line }]}>
               <HeadCell style={styles.place}>#</HeadCell>
-              <HeadCell style={styles.player}>Player</HeadCell>
+              <HeadCell style={[styles.player, styles.playerHead]}>Player</HeadCell>
               <HeadCell style={styles.number}>Points</HeadCell>
               <HeadCell style={styles.number}>W–L</HeadCell>
               <HeadCell style={styles.rate}>Win %</HeadCell>
@@ -82,26 +85,37 @@ export function LadderScreen() {
               const played = (player.total_wins || 0) + (player.total_losses || 0);
               const winRate = played > 0 ? Math.round((player.total_wins / played) * 100) : null;
               const isYou = player.username === user?.username;
+              const flag = flagEmoji(player.country_flag);
               return (
-                <View
+                <Pressable
                   key={player.username}
-                  accessible
+                  onPress={() => openPlayer(player.user_id)}
+                  disabled={!player.user_id}
+                  accessibilityRole="button"
                   accessibilityLabel={`${index + 1}, ${player.username}${isYou ? ', you' : ''}, ${player.rank_name || 'Unranked'}, ${pointsText(player.elo_rating)}, ${player.total_wins} won, ${player.total_losses} lost`}
-                  style={[
+                  accessibilityHint="Opens their profile"
+                  style={({ pressed }) => [
                     styles.row,
                     { borderBottomColor: theme.lineSoft },
+                    // Your own row is marked by its colour and edge; with the
+                    // picture there's no room for a "you" tag beside a name.
                     isYou && { backgroundColor: theme.accentWash, borderLeftColor: theme.accent, borderLeftWidth: 3 },
+                    pressed && { backgroundColor: theme.accentSoft },
                   ]}
                 >
                   <Cell style={styles.place} muted>
                     {index + 1}
                   </Cell>
+                  <Avatar
+                    player={{ username: player.username, profile_picture: player.profile_picture }}
+                    size="sm"
+                  />
                   <View style={styles.player}>
                     <View style={styles.nameRow}>
-                      <Txt numberOfLines={1} style={styles.name}>
+                      <Txt numberOfLines={1} weight="semibold" style={styles.name}>
                         {player.username}
                       </Txt>
-                      {isYou ? <YouTag /> : null}
+                      {flag ? <Text>{flag}</Text> : null}
                     </View>
                     <Txt variant="small" muted>
                       {player.rank_name || 'Unranked'}
@@ -109,7 +123,7 @@ export function LadderScreen() {
                   </View>
                   <Cell style={[styles.number, styles.points]}>{player.elo_rating}</Cell>
                   <Text style={[styles.cell, styles.number]}>
-                    <Text style={{ color: theme.accentPressed, fontFamily: fonts.semibold }}>{player.total_wins}</Text>
+                    <Text style={{ color: theme.accentText, fontFamily: fonts.semibold }}>{player.total_wins}</Text>
                     <Text style={{ color: theme.textMuted }}>–{player.total_losses}</Text>
                   </Text>
                   {/* A win rate off zero games would read as 0%, harsher than
@@ -117,7 +131,7 @@ export function LadderScreen() {
                   <Cell style={styles.rate} muted={winRate === null}>
                     {winRate === null ? '—' : `${winRate}%`}
                   </Cell>
-                </View>
+                </Pressable>
               );
             })}
           </>
@@ -155,6 +169,8 @@ const styles = StyleSheet.create({
   head: { fontFamily: fonts.semibold, fontSize: type.small },
   place: { width: 26 },
   player: { flex: 1, minWidth: 0 },
+  // Over the name, past where the pictures sit.
+  playerHead: { paddingLeft: 34 },
   nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   name: { flexShrink: 1 },
   number: { width: 52, textAlign: 'right' },

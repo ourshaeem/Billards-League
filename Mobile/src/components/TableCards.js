@@ -7,12 +7,12 @@
  * failed to load must not read as "nobody is waiting".
  */
 import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 
 import { useTheme } from '../state/LeagueContext';
 import { fonts, radius, type } from '../theme';
-import { PlayerChip } from './Player';
+import { PlayerChip, useOpenPlayer } from './Player';
 import { Card, Pill, Txt } from './ui';
 
 const STATE_LABEL = {
@@ -30,7 +30,7 @@ export function ActiveTableCard({ table, loaded, league, tableName, currentUserI
       title="At the table"
       icon="target"
       right={loaded && state ? <Pill>{STATE_LABEL[state] ?? state}</Pill> : null}
-      footer={loaded && occupied ? 'Tap a player to see their rank and rating.' : null}
+      footer={loaded && occupied ? 'Tap a player to see their profile.' : null}
     >
       {!loaded ? <Txt muted style={styles.empty}>Checking the table...</Txt> : null}
 
@@ -87,14 +87,21 @@ function Seat({ label, crown = false, player, league, currentUserId }) {
   );
 }
 
+/** Where someone whose turn has come stands: asked, or confirmed. */
+function turnLabel(entry) {
+  if (!entry.called) return null;
+  return entry.confirmed ? 'here' : 'up - confirming';
+}
+
 export function QueueCard({ queue, loaded, currentUsername }) {
   const theme = useTheme();
+  const openPlayer = useOpenPlayer();
   return (
     <Card
       title="Waiting to play"
       icon="users"
       right={<Pill>{`${queue.length} ${queue.length === 1 ? 'player' : 'players'}`}</Pill>}
-      footer="The winner keeps the table and plays whoever is next in line."
+      footer="The winner keeps the table and plays whoever is next in line. When it's your turn, you have a minute to say you're here."
     >
       {!loaded ? <Txt muted style={styles.empty}>Checking the queue...</Txt> : null}
 
@@ -107,34 +114,56 @@ export function QueueCard({ queue, loaded, currentUsername }) {
       {loaded && queue.length > 0
         ? queue.map((player, index) => {
             const isYou = currentUsername && player.username === currentUsername;
-            const next = index === 0;
+            const next = index === 0 || player.called;
+            const turn = turnLabel(player);
+            const said = turn ?? (index === 0 ? 'up next' : null);
             return (
-              <View
+              <Pressable
                 key={`${player.username}-${player.queue_position}`}
-                accessibilityLabel={`Number ${index + 1}, ${player.username}${isYou ? ', you' : ''}${next ? ', up next' : ''}`}
-                accessible
-                style={[
+                onPress={() => openPlayer(player.user_id)}
+                disabled={!player.user_id}
+                accessibilityRole="button"
+                accessibilityLabel={`Number ${index + 1}, ${player.username}${isYou ? ', you' : ''}${said ? `, ${said}` : ''}`}
+                accessibilityHint="Opens their profile"
+                style={({ pressed }) => [
                   styles.queueRow,
                   index < queue.length - 1 && { borderBottomWidth: 1, borderBottomColor: theme.lineSoft },
+                  pressed && { backgroundColor: theme.accentWash },
                 ]}
               >
                 <View
-                  style={[styles.queuePos, { backgroundColor: next ? theme.accent : theme.lineSoft }]}
+                  style={[styles.queuePos, { backgroundColor: next ? theme.accent : theme.fillSoft }]}
                 >
                   <Text style={[styles.queuePosText, { color: next ? theme.onAccent : theme.textMuted }]}>
                     {index + 1}
                   </Text>
                 </View>
-                <Txt numberOfLines={1} style={styles.queueName}>
+                <Txt numberOfLines={1} weight="semibold" style={styles.queueName}>
                   {player.username}
                 </Txt>
                 {isYou ? <YouTag /> : null}
-                {next ? (
-                  <Txt variant="label" color={theme.accent}>
+                {turn ? (
+                  <View
+                    style={[
+                      styles.turnTag,
+                      { backgroundColor: player.confirmed ? theme.accent : theme.accentSoft },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.turnTagText,
+                        { color: player.confirmed ? theme.onAccent : theme.accentText },
+                      ]}
+                    >
+                      {turn.toUpperCase()}
+                    </Text>
+                  </View>
+                ) : index === 0 ? (
+                  <Txt variant="label" color={theme.accentText}>
                     up next
                   </Txt>
                 ) : null}
-              </View>
+              </Pressable>
             );
           })
         : null}
@@ -164,6 +193,8 @@ const styles = StyleSheet.create({
   queuePos: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
   queuePosText: { fontFamily: fonts.bold, fontSize: type.small, fontVariant: ['tabular-nums'] },
   queueName: { flex: 1 },
+  turnTag: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: radius.pill },
+  turnTagText: { fontFamily: fonts.bold, fontSize: 10.5, letterSpacing: 0.4 },
   you: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: radius.pill },
   youText: { fontFamily: fonts.semibold, fontSize: 11.5 },
 });

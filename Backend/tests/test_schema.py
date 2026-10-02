@@ -114,6 +114,9 @@ class EnsureSchemaTests(BaseTestCase):
             ("Players", "ping_pong_wins"),
             ("Players", "deleted_at"),
             ("Pool_Tables", "league_type"),
+            ("Queue", "called_at"),
+            ("Queue", "confirmed_at"),
+            ("Matches", "cancel_requested_by"),
         ):
             db.session.execute(db.text(f"ALTER TABLE {table} DROP COLUMN {column}"))
         db.session.commit()
@@ -126,6 +129,15 @@ class EnsureSchemaTests(BaseTestCase):
         self.assertEqual(db.session.get(PoolTable, 1).league_type, "billiards",
                          "an existing table is a pool table")
         self.assertEqual(db.session.get(Player, self.alice).ping_pong_wins, 0)
+
+    def test_the_uploaded_pictures_table_is_created_on_an_older_database(self):
+        db.session.execute(db.text("DROP TABLE Player_Pictures"))
+        db.session.commit()
+        self.assertFalse(check_schema())
+
+        ensure_schema()
+
+        self.assertTrue(check_schema())
 
     def test_adds_a_ping_pong_table_when_there_is_none(self):
         db.session.execute(db.delete(PoolTable).where(PoolTable.league_type == PING_PONG))

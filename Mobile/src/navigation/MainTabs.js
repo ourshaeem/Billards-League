@@ -31,7 +31,8 @@ const Tab = createBottomTabNavigator();
 // each icon; what's left was too little for a 12-point label in Archivo,
 // whose letters were cut off at the bottom. This leaves the label room.
 // The phone's bottom safe area (the home indicator) is added on top.
-const TAB_BAR_HEIGHT = 60;
+export const TAB_BAR_HEIGHT = 60;
+export const TAB_ROUTES = ['Play', 'Games', 'Ladder', 'Profile'];
 
 const TAB_ICONS = {
   Play: 'play-circle',

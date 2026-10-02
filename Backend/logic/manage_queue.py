@@ -21,8 +21,19 @@ log = logging.getLogger(__name__)
 
 # How long someone must wait with no match before they may leave on their
 # own. Long enough that nobody can dodge a match that's about to start,
-# short enough that an accidental join isn't a trap.
+# short enough that an accidental join isn't a trap. Once it's their turn
+# they may leave at any time: not confirming would take them out anyway.
 LEAVE_UNLOCK_SECONDS = 30
+
+# The ready check. When a player's turn comes they have this long to say
+# they're here; after that they're taken out of the queue and the next
+# person is up. Without it, a player who joined and wandered off kept a
+# king waiting at the table for nobody.
+READY_CHECK_SECONDS = 60
+# A player who joined, or said they were here, this recently isn't asked
+# again when their turn comes - they plainly are here. Without it, joining
+# a table with room meant tapping Join and then at once tapping again.
+RECENTLY_HERE_SECONDS = 60
 
 # join_queue outcomes. Named strings rather than True/False so callers can
 # tell "you were already waiting" apart from "you just joined" - collapsing
@@ -35,6 +46,13 @@ JOIN_RESULT_ALREADY_PLAYING = "already_playing"
 STEP_DOWN_RESULT_DONE = "stepped_down"
 STEP_DOWN_RESULT_NOT_HOLDING = "not_holding"
 STEP_DOWN_RESULT_IN_GAME = "in_game"
+
+# confirm_here outcomes.
+CONFIRM_RESULT_CONFIRMED = "confirmed"
+CONFIRM_RESULT_ALREADY_CONFIRMED = "already_confirmed"
+CONFIRM_RESULT_NOT_YOUR_TURN = "not_your_turn"
+CONFIRM_RESULT_TOO_LATE = "too_late"
+CONFIRM_RESULT_NOT_QUEUED = "not_queued"
 
 
 def _locked(stmt):
@@ -214,10 +232,76 @@ def leave_all_queues(user_id):
         raise
 
 
+@retry_on_deadlock
+def confirm_here(user_id, table_id):
+    """
+    A player whose turn has come says they're here. Returns one of the
+    CONFIRM_RESULT_*.
+
+    Like join_queue, this doesn't start the game itself: call
+    attempt_matchmaking() afterwards, which starts it once everyone whose
+    turn it is has confirmed.
+
+    Taken under the table's lock, so it can't cross with matchmaking
+    deciding the same player has run out of time. A confirmation that
+    arrives after the minute is up counts for nothing even if nobody has
+    removed the player yet: it removes them, as matchmaking would have.
+    """
+    try:
+        _lock_table(table_id)
+        row = db.session.execute(
+            _locked(
+                db.select(QueueEntry, seconds_since(QueueEntry.called_at)).where(
+                    QueueEntry.user_id == user_id,
+                    QueueEntry.table_id == table_id,
+                )
+            )
+        ).first()
+
+        if row is None:
+            outcome = CONFIRM_RESULT_NOT_QUEUED
+        else:
+            entry, seconds_called = row
+            if not entry.is_called:
+                outcome = CONFIRM_RESULT_NOT_YOUR_TURN
+            elif entry.is_confirmed:
+                outcome = CONFIRM_RESULT_ALREADY_CONFIRMED
+            elif _turn_has_run_out(seconds_called):
+                log.info("%r confirmed too late; taking them out of the queue", entry)
+                db.session.delete(entry)
+                outcome = CONFIRM_RESULT_TOO_LATE
+            else:
+                entry.confirmed_at = func.now()
+                outcome = CONFIRM_RESULT_CONFIRMED
+
+        db.session.commit()
+        return outcome
+
+    except Exception:
+        db.session.rollback()
+        raise
+
+
+def _turn_has_run_out(seconds_called):
+    """True once a player's minute to say they're here is over."""
+    return seconds_called is not None and seconds_called >= READY_CHECK_SECONDS
+
+
+def _seconds_left(seconds_called):
+    """How long a player whose turn has come still has to say they're here."""
+    return max(0, READY_CHECK_SECONDS - max(0, int(seconds_called or 0)))
+
+
 def get_queue_status(user_id, table_id):
     """
     None if the player isn't queued, otherwise:
-        {queue_position, seconds_waiting, can_leave, leave_unlocks_in}
+        {queue_position, seconds_waiting, can_leave, leave_unlocks_in,
+         called, confirmed, seconds_left}
+
+    called / confirmed / seconds_left are the ready check: whether the
+    player's turn has come, whether they've said they're here, and how
+    long they have left to (None once they have, or before their turn).
+    A player whose turn has come may always leave.
 
     The elapsed time is computed BY THE DATABASE, not in Python. Both
     timestamps then come from one clock in one timezone.
@@ -230,10 +314,12 @@ def get_queue_status(user_id, table_id):
     goes negative, and the leave button never unlocks.
     """
     try:
-        seconds_expr = seconds_since(QueueEntry.joined_at).label("seconds_waiting")
-
         row = db.session.execute(
-            db.select(QueueEntry.queue_id, QueueEntry.queue_position, seconds_expr).where(
+            db.select(
+                QueueEntry,
+                seconds_since(QueueEntry.joined_at),
+                seconds_since(QueueEntry.called_at),
+            ).where(
                 QueueEntry.user_id == user_id,
                 QueueEntry.table_id == table_id,
             )
@@ -257,13 +343,16 @@ def get_queue_status(user_id, table_id):
             "seconds_waiting": LEAVE_UNLOCK_SECONDS,
             "can_leave": True,
             "leave_unlocks_in": 0,
+            "called": entry.is_called,
+            "confirmed": entry.is_confirmed,
+            "seconds_left": None if entry.is_confirmed or not entry.is_called else READY_CHECK_SECONDS,
         }
 
     if row is None:
         return None
 
-    queue_id, stored_position, seconds_waiting = row
-    queue_position = _place_in_line(queue_id, stored_position, table_id)
+    entry, seconds_waiting, seconds_called = row
+    queue_position = _place_in_line(entry.queue_id, entry.queue_position, table_id)
 
     if seconds_waiting is None:
         # Row predates joined_at being populated. Don't trap someone in a
@@ -271,13 +360,18 @@ def get_queue_status(user_id, table_id):
         seconds_waiting = LEAVE_UNLOCK_SECONDS
 
     seconds_waiting = max(0, int(seconds_waiting))
-    leave_unlocks_in = max(0, LEAVE_UNLOCK_SECONDS - seconds_waiting)
+    leave_unlocks_in = 0 if entry.is_called else max(0, LEAVE_UNLOCK_SECONDS - seconds_waiting)
 
     return {
         "queue_position": queue_position,
         "seconds_waiting": seconds_waiting,
         "can_leave": leave_unlocks_in == 0,
         "leave_unlocks_in": leave_unlocks_in,
+        "called": entry.is_called,
+        "confirmed": entry.is_confirmed,
+        "seconds_left": (
+            _seconds_left(seconds_called) if entry.is_called and not entry.is_confirmed else None
+        ),
     }
 
 
@@ -313,14 +407,24 @@ def attempt_matchmaking(table_id):
     THE SINGLE SOURCE OF TRUTH for matchmaking. Two cases:
 
       1. A king is holding the table (Active match, no challenger yet) and
-         somebody is queued -> pull in the next challenger.
-      2. The table is free and two or more people are queued -> pair the
-         first two.
+         somebody is queued -> the next in line is up to challenge.
+      2. The table is free and two or more people are queued -> the first
+         two are up to play each other.
 
     Case 1 is the one the old /queue/join route didn't handle, which is
     why players piled up in the queue behind a king and no match ever
-    started. Both callers - joining, and finishing a match - come through
-    here, so the two cases can't drift apart again.
+    started. Every caller - joining, confirming, finishing or giving up a
+    match, a waiting player's status poll - comes through here, so the
+    cases can't drift apart again.
+
+    The ready check: being up isn't enough to play. Each player who is up
+    has READY_CHECK_SECONDS to say they're here (confirm_here); the game
+    starts once all of them have. Anyone who lets the time run out is
+    taken out of the queue, and the next in line is up in their place. A
+    player who joined or confirmed in the last RECENTLY_HERE_SECONDS is
+    taken to be here without being asked. If there stop being enough
+    people for a game, whoever was up goes back to waiting at the front
+    of the line, and is asked again when their turn next comes.
     """
     try:
         _lock_table(table_id)
@@ -331,26 +435,35 @@ def attempt_matchmaking(table_id):
             db.session.commit()
             return False
 
-        waiting = _eligible_queue(table_id)
+        clocks = _turn_clocks(table_id)
+        waiting = _without_missed_turns(_eligible_queue(table_id), clocks)
+        seats = 1 if active is not None else 2
+
+        # Anyone further back isn't up, whatever was true a moment ago.
+        for entry in waiting[seats:]:
+            entry.called_at = None
+
+        if len(waiting) < seats:
+            for entry in waiting:
+                entry.called_at = None
+            db.session.commit()
+            return False
+
+        up = waiting[:seats]
+        if not _call_up(up, clocks):
+            db.session.commit()
+            return False
 
         # --- Case 1: a king is waiting for a challenger ---
         if active is not None:
-            if not waiting:
-                db.session.commit()
-                return False
-
-            challenger = waiting[0]
+            challenger = up[0]
             active.player_two_id = challenger.user_id
             db.session.delete(challenger)
             db.session.commit()
             return True
 
         # --- Case 2: free table, pair the first two waiting ---
-        if len(waiting) < 2:
-            db.session.commit()
-            return False
-
-        first, second = waiting[0], waiting[1]
+        first, second = up
         match = Match(
             table_id=table_id,
             player_one_id=first.user_id,
@@ -366,6 +479,70 @@ def attempt_matchmaking(table_id):
     except Exception:
         db.session.rollback()
         raise
+
+
+def _turn_clocks(table_id):
+    """
+    For each queue entry at a table: (seconds since their turn came,
+    seconds since they last showed they were here). Either is None when
+    there is no such moment.
+
+    A locked read, like _eligible_queue's: a plain read could answer from
+    a snapshot taken before this request waited for the table's lock, and
+    time a turn that has since been taken back and given again.
+    """
+    last_here = func.coalesce(QueueEntry.confirmed_at, QueueEntry.joined_at)
+    rows = db.session.execute(
+        db.select(
+            QueueEntry.queue_id,
+            seconds_since(QueueEntry.called_at),
+            seconds_since(last_here),
+        )
+        .where(QueueEntry.table_id == table_id)
+        .with_for_update()
+    )
+    return {queue_id: (called, here) for queue_id, called, here in rows}
+
+
+def _without_missed_turns(waiting, clocks):
+    """
+    The queue minus anyone whose turn came and went without them saying
+    they were here. Those entries are deleted: the player is out of the
+    queue, and everyone behind them moves up.
+    """
+    still_waiting = []
+    for entry in waiting:
+        seconds_called, _ = clocks.get(entry.queue_id, (None, None))
+        if entry.is_called and not entry.is_confirmed and _turn_has_run_out(seconds_called):
+            log.info("%r didn't confirm in time; taking them out of the queue", entry)
+            db.session.delete(entry)
+            continue
+        still_waiting.append(entry)
+    return still_waiting
+
+
+def _call_up(entries, clocks):
+    """
+    Make it these players' turn. Returns True if every one of them has
+    said they're here, so the game can start.
+
+    A player newly up who joined or confirmed recently counts as here
+    already; anyone else is asked, and has READY_CHECK_SECONDS from now.
+    """
+    everyone_here = True
+    for entry in entries:
+        if not entry.is_called:
+            _, seconds_since_here = clocks.get(entry.queue_id, (None, None))
+            recently_here = (
+                seconds_since_here is not None and seconds_since_here < RECENTLY_HERE_SECONDS
+            )
+            entry.called_at = func.now()
+            entry.confirmed_at = func.now() if recently_here else None
+            if not recently_here:
+                everyone_here = False
+        elif not entry.is_confirmed:
+            everyone_here = False
+    return everyone_here
 
 
 def _eligible_queue(table_id):
@@ -416,7 +593,7 @@ def _eligible_queue(table_id):
 
 def get_player_status(user_id, table_id):
     """
-    The /match/status payload: exactly one of idle / queued /
+    The /match/status payload: exactly one of idle / queued / your_turn /
     waiting_for_challenger / playing (see AGENTS.md).
 
     Also the queue's safety net. If this player is waiting - in the queue,
@@ -444,18 +621,90 @@ def get_player_status(user_id, table_id):
         league = league_for_table(match.table_id)
         if match.is_in_progress:
             return match.to_playing_dict(user_id, league)
-        return match.to_waiting_dict(league)
+        return {**match.to_waiting_dict(league), **_up_next(match.table_id)}
 
     queue_status = get_queue_status(user_id, table_id)
-    if queue_status:
-        return {
-            "status": "queued",
-            "table_id": table_id,
-            "league_type": league_for_table(table_id),
-            **queue_status,
-        }
+    if queue_status is None:
+        return {"status": "idle"}
 
-    return {"status": "idle"}
+    league = league_for_table(table_id)
+    if queue_status["called"]:
+        return {
+            "status": "your_turn",
+            "table_id": table_id,
+            "league_type": league,
+            "confirmed": queue_status["confirmed"],
+            "seconds_left": queue_status["seconds_left"],
+            **_opponent_when_up(user_id, table_id),
+        }
+    return {
+        "status": "queued",
+        "table_id": table_id,
+        "league_type": league,
+        "queue_position": queue_status["queue_position"],
+        "seconds_waiting": queue_status["seconds_waiting"],
+        "can_leave": queue_status["can_leave"],
+        "leave_unlocks_in": queue_status["leave_unlocks_in"],
+    }
+
+
+def _turns(table_id):
+    """
+    Everyone whose turn it is at a table, front of the line first, as
+    (entry, seconds left to say they're here - None once they have).
+    """
+    rows = db.session.execute(
+        db.select(QueueEntry, seconds_since(QueueEntry.called_at))
+        .where(QueueEntry.table_id == table_id, QueueEntry.called_at.isnot(None))
+        .order_by(QueueEntry.queue_position.asc(), QueueEntry.queue_id.asc())
+    ).all()
+    return [
+        (entry, None if entry.is_confirmed else _seconds_left(seconds_called))
+        for entry, seconds_called in rows
+    ]
+
+
+def _up_next(table_id):
+    """
+    For a king waiting at the table: who is up to challenge them, and how
+    long they have left to say they're here.
+    """
+    turns = _turns(table_id)
+    if not turns:
+        return {"up_next": None, "up_next_seconds_left": None}
+    entry, seconds_left = turns[0]
+    return {"up_next": entry.player.username, "up_next_seconds_left": seconds_left}
+
+
+def _opponent_when_up(user_id, table_id):
+    """
+    Who a player whose turn has come will play: the king holding the
+    table, or the other player up at a free one - and whether they're
+    ready. The king always is: they're at the table already.
+    """
+    active = _active_match_for_table(table_id)
+    if active is not None and active.player_one is not None:
+        return {
+            "opponent": active.player_one.username,
+            "opponent_id": active.player_one_id,
+            "opponent_confirmed": True,
+            "opponent_seconds_left": None,
+        }
+    other = next(((e, left) for e, left in _turns(table_id) if e.user_id != user_id), None)
+    if other is None:
+        return {
+            "opponent": None,
+            "opponent_id": None,
+            "opponent_confirmed": False,
+            "opponent_seconds_left": None,
+        }
+    entry, seconds_left = other
+    return {
+        "opponent": entry.player.username,
+        "opponent_id": entry.user_id,
+        "opponent_confirmed": entry.is_confirmed,
+        "opponent_seconds_left": seconds_left,
+    }
 
 
 def _is_queued(user_id, table_id):

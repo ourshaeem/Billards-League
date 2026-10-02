@@ -22,29 +22,55 @@ from flask_jwt_extended import (
     jwt_required,
 )
 from werkzeug.exceptions import HTTPException
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from database import configure_app, describe_database, is_production, prepare_database, reset_session
 from logic.auth import login_user, register_user
+from logic.cancel_match import (
+    CANCEL_RESULT_ALREADY_REQUESTED,
+    CANCEL_RESULT_CANCELLED,
+    CANCEL_RESULT_GAME_OVER,
+    CANCEL_RESULT_NO_OPPONENT,
+    CANCEL_RESULT_REQUESTED,
+    KEEP_RESULT_GAME_OVER,
+    KEEP_RESULT_KEPT,
+    KEEP_RESULT_NOTHING_TO_KEEP,
+    keep_playing,
+    request_cancel,
+)
 from logic.countries import country_list
 from logic.leaderboard import top50_leaderboard
-from logic.match_history import DEFAULT_LIMIT, MAX_LIMIT, league_history, player_history
+from logic.match_history import (
+    DEFAULT_LIMIT,
+    MAX_LIMIT,
+    league_history,
+    player_history,
+    player_opponents,
+)
 from logic.account import (
     DELETE_RESULT_DELETED,
     DELETE_RESULT_IN_GAME,
     DELETE_RESULT_WRONG_PASSWORD,
     delete_account,
 )
+from logic.pictures import MAX_UPLOAD_BYTES, picture_path, save_uploaded_picture, stored_picture
 from logic.privacy import privacy_policy_html
 from logic.seasons import league_standings, reset_league_standings
-from logic.profile import EDITABLE_FIELDS, get_profile, update_profile
+from logic.profile import EDITABLE_FIELDS, get_profile, get_public_profile, update_profile
 from logic.tables import default_table_for, list_leagues, table_snapshot
 from models import BILLIARDS, LEAGUE_NAMES, LEAGUE_TYPES, Player, db
 from logic.manage_queue import (
+    CONFIRM_RESULT_ALREADY_CONFIRMED,
+    CONFIRM_RESULT_CONFIRMED,
+    CONFIRM_RESULT_NOT_YOUR_TURN,
+    CONFIRM_RESULT_TOO_LATE,
     JOIN_RESULT_ALREADY_PLAYING,
     JOIN_RESULT_ALREADY_QUEUED,
+    READY_CHECK_SECONDS,
     STEP_DOWN_RESULT_IN_GAME,
     STEP_DOWN_RESULT_NOT_HOLDING,
     attempt_matchmaking,
+    confirm_here,
     get_player_status,
     get_pool_table,
     get_queue_status,
@@ -88,6 +114,18 @@ def create_app():
 
     app.config["JWT_SECRET_KEY"] = jwt_secret()
     app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=24)
+    # The largest request accepted: a picture upload at its limit, as
+    # base64 (a third bigger), with room for the JSON around it. Anything
+    # larger is refused before it's read.
+    app.config["MAX_CONTENT_LENGTH"] = (MAX_UPLOAD_BYTES * 4) // 3 + 64 * 1024
+
+    if is_production():
+        # The host's proxy talks to this app over plain http and passes on
+        # how the player connected in X-Forwarded-Proto. Without this the
+        # links built for uploaded pictures would start http://, which
+        # the apps won't load from a https:// page. Only in production:
+        # with no proxy in front, anyone could set that header.
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1)
 
     register_jwt_errors(JWTManager(app))
     CORS(app, origins=cors_origins())
@@ -251,6 +289,7 @@ def register_error_handlers(app):
         friendly = {
             404: "That page or action doesn't exist.",
             405: "That action isn't allowed here.",
+            413: "That's too big to upload. Pick a smaller picture.",
         }
         return error(friendly.get(e.code, e.description or GENERIC_ERROR), e.code)
 
@@ -369,6 +408,37 @@ def read_table_and_league(source, must_exist=False):
     return table_id, table_league, None
 
 
+def read_match_id(source):
+    """
+    The game a request is about, as the player saw it: (match_id or None,
+    None) or (None, error_response). Optional - older apps don't send it.
+    """
+    raw = source.get("match_id")
+    if raw is None:
+        return None, None
+    try:
+        return read_whole_number(raw), None
+    except ValueError:
+        return None, error("match_id must be a whole number.", 400)
+
+
+def read_player_id(source, key):
+    """
+    A player id from a query string: (id or None, None) or (None, error).
+    None when the request didn't send one.
+    """
+    raw = source.get(key)
+    if raw is None or raw == "":
+        return None, None
+    try:
+        value = read_whole_number(raw)
+    except ValueError:
+        value = 0
+    if value < 1:
+        return None, error(f"{key} must be a player's id, a whole number.", 400)
+    return value, None
+
+
 def read_limit(source):
     """How many history entries to return: (limit, None) or (None, error)."""
     problem = f"limit must be a whole number from 1 to {MAX_LIMIT}."
@@ -429,6 +499,18 @@ def register_routes(app):
         if result == JOIN_RESULT_ALREADY_PLAYING:
             return error("You're already playing or holding a table.", 409)
 
+        if result == JOIN_RESULT_ALREADY_QUEUED:
+            # Tapping Join again when it's your turn says you're here, as
+            # "I'm here" does. It's the only way an app from before the
+            # ready check has to say so: it shows a player whose turn has
+            # come the Join button. Too late, and they join again at the
+            # back of the line - which is what they asked for.
+            try:
+                if confirm_here(user_id, table_id) == CONFIRM_RESULT_TOO_LATE:
+                    result = join_queue(user_id, table_id)
+            except Exception:
+                log.exception("confirming on a repeat join failed (user %s)", user_id)
+
         # Always attempt matchmaking, whether this call freshly joined or
         # found the player already waiting. That is what makes the queue
         # self-healing: anyone stuck behind a king from before the fix
@@ -450,6 +532,65 @@ def register_routes(app):
 
         return jsonify(
             {"message": message, "status": result, "match_started": match_started}
+        )
+
+    # 3a. "I'M HERE" - THE READY CHECK (Protected)
+    # When a player's turn comes they have READY_CHECK_SECONDS to say
+    # they're here, or they're taken out of the queue.
+    @app.route("/queue/confirm", methods=["POST"])
+    @jwt_required()
+    def confirm_in_queue():
+        user_id = int(get_jwt_identity())
+
+        table_id, _league, bad = read_table_and_league(json_body())
+        if bad:
+            return bad
+
+        try:
+            outcome = confirm_here(user_id, table_id)
+        except Exception:
+            log.exception("confirm_here failed (user %s, table %s)", user_id, table_id)
+            reset_session()
+            return error("Couldn't confirm just now. Please try again.", 500)
+
+        if outcome == CONFIRM_RESULT_NOT_YOUR_TURN:
+            return error("It isn't your turn yet - we'll ask when it is.", 409)
+        if outcome == CONFIRM_RESULT_TOO_LATE:
+            # The minute was up, so they've been taken out of the queue;
+            # the next in line is up instead.
+            try:
+                attempt_matchmaking(table_id)
+            except Exception:
+                log.exception("matchmaking after a late confirm failed (table %s)", table_id)
+            return error(
+                f"Sorry - that was more than {READY_CHECK_SECONDS} seconds, so you were taken "
+                "out of the queue. Join again to get back in line.",
+                409,
+            )
+        if outcome not in (CONFIRM_RESULT_CONFIRMED, CONFIRM_RESULT_ALREADY_CONFIRMED):
+            return error(
+                "You're not in the queue any more. If it was your turn, the time to "
+                "confirm may have run out - join again to get back in line.",
+                404,
+            )
+
+        try:
+            match_started = attempt_matchmaking(table_id)
+        except Exception:
+            # Confirmed all the same; the next status poll starts the game.
+            log.exception("matchmaking after a confirm failed (table %s)", table_id)
+            match_started = False
+
+        return jsonify(
+            {
+                "message": (
+                    "You're on - get to the table!"
+                    if match_started
+                    else "Thanks - waiting for your opponent to confirm."
+                ),
+                "status": outcome,
+                "match_started": match_started,
+            }
         )
 
     # 3b. LEAVE QUEUE (Protected)
@@ -483,6 +624,13 @@ def register_routes(app):
             return error("Couldn't take you out of the queue just now. Please try again.", 500)
 
         if removed:
+            # If it was their turn, the next in line is up now rather than
+            # at the next status poll.
+            if status["called"]:
+                try:
+                    attempt_matchmaking(table_id)
+                except Exception:
+                    log.exception("matchmaking after leaving failed (table %s)", table_id)
             return jsonify({"message": "You left the queue."})
         # Matchmaking got there first.
         return error("You're not in the queue any more - you may have just been matched.", 404)
@@ -579,12 +727,9 @@ def register_routes(app):
             return error("Both scores are required, as whole numbers.", 400)
 
         # Which game the player is reporting - see report_result.
-        expected_match_id = data.get("match_id")
-        if expected_match_id is not None:
-            try:
-                expected_match_id = read_whole_number(expected_match_id)
-            except ValueError:
-                return error("match_id must be a whole number.", 400)
+        expected_match_id, bad = read_match_id(data)
+        if bad:
+            return bad
 
         try:
             outcome, details = report_result(
@@ -612,6 +757,66 @@ def register_routes(app):
             return error("You don't have an opponent yet - waiting on the queue.", 409)
         return error("You don't have a game in progress to report.", 404)
 
+    # 6a. CALL A GAME OFF - BOTH PLAYERS MUST AGREE (Protected)
+    # The first player to ask records a request; the other agreeing (the
+    # same call) cancels the game. Nothing is recorded either way.
+    @app.route("/match/cancel", methods=["POST"])
+    @jwt_required()
+    def cancel_match():
+        user_id = int(get_jwt_identity())
+        expected_match_id, bad = read_match_id(json_body())
+        if bad:
+            return bad
+
+        try:
+            outcome = request_cancel(user_id, expected_match_id)
+        except Exception:
+            log.exception("cancelling a game failed (user %s)", user_id)
+            reset_session()
+            return error("Couldn't cancel the game just now. Please try again.", 500)
+
+        if outcome == CANCEL_RESULT_CANCELLED:
+            return jsonify({"message": "Game cancelled - nothing was recorded.", "status": outcome})
+        if outcome in (CANCEL_RESULT_REQUESTED, CANCEL_RESULT_ALREADY_REQUESTED):
+            return jsonify(
+                {
+                    "message": "Asked to cancel. The game is called off once your opponent agrees.",
+                    "status": outcome,
+                }
+            )
+        if outcome == CANCEL_RESULT_GAME_OVER:
+            return error("That game has already finished.", 409)
+        if outcome == CANCEL_RESULT_NO_OPPONENT:
+            return error(
+                "You don't have a game to cancel - nobody has challenged you yet. "
+                "You can give up the table instead.",
+                409,
+            )
+        return error("You don't have a game in progress to cancel.", 404)
+
+    # 6a2. KEEP PLAYING (Protected)
+    # Take back your own request to cancel, or turn down your opponent's.
+    @app.route("/match/keep", methods=["POST"])
+    @jwt_required()
+    def keep_match():
+        user_id = int(get_jwt_identity())
+        expected_match_id, bad = read_match_id(json_body())
+        if bad:
+            return bad
+
+        try:
+            outcome = keep_playing(user_id, expected_match_id)
+        except Exception:
+            log.exception("keeping a game failed (user %s)", user_id)
+            reset_session()
+            return error("Couldn't update the game just now. Please try again.", 500)
+
+        if outcome in (KEEP_RESULT_KEPT, KEEP_RESULT_NOTHING_TO_KEEP):
+            return jsonify({"message": "The game is on.", "status": outcome})
+        if outcome == KEEP_RESULT_GAME_OVER:
+            return error("That game has already finished.", 409)
+        return error("You don't have a game in progress.", 404)
+
     # 6b. MATCH HISTORY (Public)
     # The latest finished games in a league - or at one table, which
     # implies its league.
@@ -635,6 +840,7 @@ def register_routes(app):
         )
 
     # 6c. ONE PLAYER'S MATCH HISTORY (Public)
+    # opponent_id narrows it to the games between those two: head to head.
     @app.route("/players/<int:user_id>/matches", methods=["GET"])
     def get_player_matches(user_id):
         league, bad = read_league(request.args)
@@ -643,7 +849,40 @@ def register_routes(app):
         limit, bad = read_limit(request.args)
         if bad:
             return bad
+        opponent_id, bad = read_player_id(request.args, "opponent_id")
+        if bad:
+            return bad
 
+        if db.session.get(Player, user_id) is None:
+            return error("That player doesn't exist.", 404)
+
+        league = league or BILLIARDS
+        body = {
+            "user_id": user_id,
+            "league_type": league,
+            "matches": player_history(user_id, league, limit, opponent_id),
+        }
+        if opponent_id is not None:
+            body["opponent_id"] = opponent_id
+        return jsonify(body)
+
+    # 6c2. A PLAYER'S PROFILE (Public)
+    # Their picture, flag and both leagues' standings - never their name.
+    @app.route("/players/<int:user_id>", methods=["GET"])
+    def get_player_profile(user_id):
+        profile = get_public_profile(user_id)
+        if profile is None:
+            if db.session.get(Player, user_id) is not None:
+                return error("This player has deleted their account.", 404)
+            return error("That player doesn't exist.", 404)
+        return jsonify({"player": profile})
+
+    # 6c3. A PLAYER'S RECORD AGAINST EVERYONE THEY'VE PLAYED (Public)
+    @app.route("/players/<int:user_id>/opponents", methods=["GET"])
+    def get_player_opponents(user_id):
+        league, bad = read_league(request.args)
+        if bad:
+            return bad
         if db.session.get(Player, user_id) is None:
             return error("That player doesn't exist.", 404)
 
@@ -652,9 +891,26 @@ def register_routes(app):
             {
                 "user_id": user_id,
                 "league_type": league,
-                "matches": player_history(user_id, league, limit),
+                "opponents": player_opponents(user_id, league),
             }
         )
+
+    # 6c4. AN UPLOADED PROFILE PICTURE (Public, an image)
+    # The link carries the picture's version (?v=...), so a new picture
+    # has a new link and the old one can be cached for good.
+    @app.route("/players/<int:user_id>/picture", methods=["GET"])
+    def get_player_picture(user_id):
+        picture = stored_picture(user_id)
+        if picture is None:
+            return error("That player doesn't have an uploaded picture.", 404)
+        image, digest = picture
+        response = Response(image, mimetype="image/jpeg")
+        if request.args.get("v") == picture_path(user_id, digest).rpartition("=")[2]:
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        else:
+            response.headers["Cache-Control"] = "no-cache"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
 
     # 6d. YOUR PROFILE (Protected)
     @app.route("/profile", methods=["GET"])
@@ -689,6 +945,33 @@ def register_routes(app):
         if profile is None:
             return error(ACCOUNT_GONE, 404)
         return jsonify({"message": "Profile saved.", "profile": profile})
+
+    # 6e2. UPLOAD A PROFILE PICTURE (Protected)
+    # Body {"image": "<base64>"} - a data: URL is fine too. The server
+    # turns it into a small square JPEG with no metadata (see
+    # logic/pictures.py), replacing any picture or link the player had.
+    # Removing it is PATCH /profile with profile_picture null.
+    @app.route("/profile/picture", methods=["POST"])
+    @jwt_required()
+    def upload_my_picture():
+        user_id = int(get_jwt_identity())
+        # Read outside the try: a body over MAX_CONTENT_LENGTH raises 413
+        # here, which must reach the error handler as "too big", not be
+        # caught below as a failure to save.
+        image = json_body().get("image")
+
+        try:
+            problem, profile = save_uploaded_picture(user_id, image)
+        except Exception:
+            log.exception("saving an uploaded picture failed (user %s)", user_id)
+            reset_session()
+            return error("Couldn't save your picture just now. Please try again.", 500)
+
+        if problem:
+            return error(problem["message"], 400, field=problem["field"])
+        if profile is None:
+            return error(ACCOUNT_GONE, 404)
+        return jsonify({"message": "Picture saved.", "profile": profile})
 
     # 6g. DELETE YOUR ACCOUNT (Protected)
     # Asks for the password again. A wrong one is 403, not 401: to the

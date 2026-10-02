@@ -353,9 +353,12 @@ class ViewQueueTests(BaseTestCase):
         self.assertEqual([q["queue_position"] for q in queue], [1, 2])
 
     def test_queue_dict_has_exactly_the_keys_the_frontend_reads(self):
-        """Guards the API contract: extra or renamed keys break React."""
+        """Guards the API contract both apps read (see AGENTS.md)."""
         join_queue(self.alice, 1)
-        self.assertEqual(set(view_queue(1)[0].keys()), {"queue_position", "username"})
+        self.assertEqual(
+            set(view_queue(1)[0].keys()),
+            {"queue_position", "user_id", "username", "called", "confirmed"},
+        )
 
     def test_empty_queue_returns_empty_list(self):
         self.assertEqual(view_queue(1), [])

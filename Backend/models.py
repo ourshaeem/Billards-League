@@ -26,11 +26,30 @@ Written in the classic `db.Column` style rather than SQLAlchemy 2.0's
 versions, which matters because this code could not be executed in the
 environment it was written in.
 """
+from flask import has_request_context, request
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import func
+from sqlalchemy.dialects.mysql import MEDIUMBLOB
 from sqlalchemy.orm import synonym
 
 db = SQLAlchemy()
+
+
+def public_url(link):
+    """
+    A picture link any client can load.
+
+    An uploaded picture is stored as a path on this API
+    ("/players/7/picture?v=..."). The web app and the phones live on other
+    hosts, where a bare path would point at the wrong server, so a path is
+    made absolute against the address the request came in on - which is
+    the address that client already reaches this API by. Outside a
+    request (scripts, some tests) it stays a path. Anything else - a
+    web link, or None - is returned unchanged.
+    """
+    if link and link.startswith("/") and has_request_context():
+        return request.host_url.rstrip("/") + link
+    return link
 
 # Where every new player's rating starts. Matches the database's own
 # column default and the Ranks table, whose lowest tier begins at 0.
@@ -98,6 +117,11 @@ class Player(db.Model):
     # ISO 3166-1 alpha-2 code ("US"), not the emoji itself: a code can be
     # checked against a list, and the flag is drawn from it by the client.
     country_flag = db.Column(db.String(2), nullable=True)
+    # Either an http(s) link the player gave, or - for a picture they
+    # uploaded - the path it's served from on this API, which carries the
+    # picture's version so a new one isn't hidden behind a cached old one.
+    # One column for both, so a player has exactly one picture. Read it
+    # through picture_url, never directly, when sending it to a client.
     profile_picture = db.Column(db.String(512), nullable=True)
 
     # When the player deleted their account, or None. The row stays, with
@@ -116,6 +140,11 @@ class Player(db.Model):
     def display_name(self):
         """The name other people see: DELETED_NAME once the account is gone."""
         return self.DELETED_NAME if self.is_deleted else self.username
+
+    @property
+    def picture_url(self):
+        """The player's picture as a link a client can load, or None."""
+        return public_url(self.profile_picture)
 
     # Where each league keeps its numbers, so code that works for either
     # league reads one table instead of branching everywhere.
@@ -149,14 +178,19 @@ class Player(db.Model):
 
     def to_leaderboard_dict(self, league=BILLIARDS):
         """
-        Exactly the shape /leaderboard already returns, for either league.
+        One row of /leaderboard, the same shape for either league. user_id,
+        flag and picture let the ladder draw each player and open their
+        profile.
 
         "Unranked" mirrors the LEFT JOIN in the old SQL: a player whose
         rank hasn't been calculated yet still has to appear on the ladder.
         """
         standing = self.standing(league)
         return {
+            "user_id": self.user_id,
             "username": self.username,
+            "country_flag": self.country_flag,
+            "profile_picture": self.picture_url,
             "elo_rating": standing["elo"],
             "total_wins": standing["wins"],
             "total_losses": standing["losses"],
@@ -172,21 +206,42 @@ class Player(db.Model):
             "user_id": self.user_id,
             "username": self.display_name,
             "country_flag": self.country_flag,
-            "profile_picture": self.profile_picture,
+            "profile_picture": self.picture_url,
             "league_type": league,
             **self.standing(league),
         }
 
-    def to_profile_dict(self):
-        """The signed-in player's own profile, with both leagues."""
+    def to_public_profile_dict(self):
+        """
+        A player's profile as anyone may see it: both leagues' standings,
+        but not their real name - that stays between them and the league.
+        """
         return {
             "user_id": self.user_id,
+            "username": self.display_name,
+            "country_flag": self.country_flag,
+            "profile_picture": self.picture_url,
+            "leagues": {league: self.standing(league) for league in LEAGUE_TYPES},
+        }
+
+    @property
+    def has_uploaded_picture(self):
+        """The picture is a photo they uploaded, served by this API - not a link."""
+        return bool(self.profile_picture) and self.profile_picture.startswith("/")
+
+    def to_profile_dict(self):
+        """
+        The signed-in player's own profile, with both leagues.
+        picture_uploaded says the picture is a photo they uploaded rather
+        than a link, so the form doesn't offer the photo's address back to
+        them as a link to edit.
+        """
+        return {
+            **self.to_public_profile_dict(),
             "username": self.username,
             "first_name": self.first_name,
             "last_name": self.last_name,
-            "country_flag": self.country_flag,
-            "profile_picture": self.profile_picture,
-            "leagues": {league: self.standing(league) for league in LEAGUE_TYPES},
+            "picture_uploaded": self.has_uploaded_picture,
         }
 
     def __repr__(self):
@@ -302,6 +357,14 @@ class QueueEntry(db.Model):
         db.DateTime, nullable=False, server_default=func.current_timestamp()
     )
 
+    # The ready check (see manage_queue.attempt_matchmaking). called_at is
+    # when this player's turn came - NULL while they're only waiting in
+    # line. confirmed_at is when they last showed they were here, by
+    # tapping "I'm here" or by joining recently enough that nobody needs
+    # to ask; with called_at set, it means they're ready to play.
+    called_at = db.Column(db.DateTime, nullable=True)
+    confirmed_at = db.Column(db.DateTime, nullable=True)
+
     player = db.relationship("Player", lazy="joined")
 
     # Declared as indexes (not a table constraint) so ensure_schema() can
@@ -312,15 +375,29 @@ class QueueEntry(db.Model):
         db.Index("idx_queue_table", "table_id", "queue_position"),
     )
 
+    @property
+    def is_called(self):
+        """This player's turn has come: they're up to play next."""
+        return self.called_at is not None
+
+    @property
+    def is_confirmed(self):
+        """Their turn has come and they've said they're here."""
+        return self.called_at is not None and self.confirmed_at is not None
+
     def to_dict(self, place=None):
         """
-        Exactly the shape /queue/<table_id> already returns. `place` is the
-        player's actual place in line; queue_position on its own is only a
-        sort key and drifts upwards over an evening.
+        One line of /queue/<table_id>. `place` is the player's actual place
+        in line; queue_position on its own is only a sort key and drifts
+        upwards over an evening. called / confirmed let everyone watching
+        see whose turn it is and whether they've said they're here.
         """
         return {
             "queue_position": place if place is not None else self.queue_position,
+            "user_id": self.user_id,
             "username": self.player.username,
+            "called": self.is_called,
+            "confirmed": self.is_confirmed,
         }
 
     def __repr__(self):
@@ -346,6 +423,10 @@ class Match(db.Model):
                       [king_balls / challenger_balls] The reported score.
       match_status    'Active' or 'Finished'. (The column also allows
                       'Upcoming', which nothing uses.)
+      cancel_requested_by
+                      While a game is on: the player who has asked to
+                      call it off, waiting for the other to agree. NULL
+                      when nobody has. See logic/cancel_match.py.
 
     Compare with the old design, where winner_id meant "seat one" during
     a match and "the winner" afterwards. Reading a row used to require
@@ -379,6 +460,9 @@ class Match(db.Model):
     )
     elo_change = db.Column(db.Integer, nullable=True)
     played_at = db.Column(db.DateTime, nullable=True, server_default=func.current_timestamp())
+    # A plain number, not a foreign key: it is only ever one of the two
+    # seats above, and it only means anything while the game is on.
+    cancel_requested_by = db.Column(db.Integer, nullable=True)
 
     # Four foreign keys point at Players, so each relationship has to say
     # which one it follows.
@@ -443,8 +527,15 @@ class Match(db.Model):
     # with billiards rules because the screen happened to be on billiards.
 
     def to_playing_dict(self, user_id, league=BILLIARDS):
-        """The 'playing' response, byte-for-byte as the frontend expects."""
+        """
+        The 'playing' response. cancel_requested_by says who, if anyone,
+        has asked to call the game off: "you", "opponent" or None.
+        """
         opponent = self.player_two if self.player_one_id == user_id else self.player_one
+        if self.cancel_requested_by is None:
+            cancel_requested_by = None
+        else:
+            cancel_requested_by = "you" if self.cancel_requested_by == user_id else "opponent"
         return {
             "status": "playing",
             "opponent": opponent.username if opponent else None,
@@ -452,6 +543,7 @@ class Match(db.Model):
             "match_id": self.match_id,
             "table_id": self.table_id,
             "league_type": league,
+            "cancel_requested_by": cancel_requested_by,
         }
 
     def to_waiting_dict(self, league=BILLIARDS):
@@ -493,3 +585,27 @@ class Match(db.Model):
             f"<Match {self.match_id} table={self.table_id} status={self.match_status} "
             f"p1={self.player_one_id} p2={self.player_two_id} winner={self.winner_id}>"
         )
+
+
+class PlayerPicture(db.Model):
+    """
+    A profile picture a player uploaded, as the server re-encoded it: a
+    small square JPEG (see logic/pictures.py). At most one per player.
+
+    Kept in the database rather than on disk because the host's disk is
+    wiped on every deploy. Player.profile_picture holds the path it is
+    served from; this row holds the picture itself.
+    """
+
+    __tablename__ = "Player_Pictures"
+
+    user_id = db.Column(db.Integer, db.ForeignKey("Players.user_id"), primary_key=True)
+    # MEDIUMBLOB on MySQL: a plain BLOB stops at 64 KB, which a detailed
+    # photo can pass even at this size.
+    image = db.Column(db.LargeBinary().with_variant(MEDIUMBLOB(), "mysql"), nullable=False)
+    # A hash of the image, which goes in the picture's link: a new picture
+    # gets a new link, so nobody keeps seeing a cached old one.
+    digest = db.Column(db.String(64), nullable=False)
+
+    def __repr__(self):
+        return f"<PlayerPicture user={self.user_id} {len(self.image or b'')} bytes>"

@@ -7,8 +7,10 @@
  *   loading                - the server hasn't answered yet
  *   idle                   - not queued, not playing
  *   queued                 - waiting for an opponent
+ *   your_turn              - up to play: say "I'm here" within the minute
  *   waiting_for_challenger - won the last game, holding the table
- *   playing                - a game is on, report the score
+ *   playing                - a game is on, report the score (or agree
+ *                            with the opponent to call it off)
  *
  * `league` is the league on screen. A game or a held table is reported
  * with its own league_type, which can be the other league; the scorecard
@@ -24,6 +26,41 @@ import { useTheme } from '../state/LeagueContext';
 import { fonts, radius, type } from '../theme';
 import { Button, Field, FieldError } from './ui';
 
+/** "0:42" from a number of seconds. */
+function clockText(seconds) {
+  const whole = Math.max(0, Math.round(seconds ?? 0));
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
+}
+
+/**
+ * A countdown that ticks every second between polls, re-synced to the
+ * server's number each time it changes. Display only: the server keeps
+ * its own clock for every rule. null in, null out - no countdown running.
+ */
+function useCountdown(serverSeconds) {
+  const target = typeof serverSeconds === 'number' ? serverSeconds : null;
+  const [synced, setSynced] = useState(target);
+  const [left, setLeft] = useState(target);
+
+  // Adjusting state during render when a prop changes, which React
+  // recommends over mirroring props into state inside an effect.
+  if (target !== synced) {
+    setSynced(target);
+    setLeft(target);
+  }
+
+  const running = left !== null && left > 0;
+  useEffect(() => {
+    if (!running) return undefined;
+    const timer = setInterval(() => {
+      setLeft((remaining) => (remaining === null ? null : Math.max(0, remaining - 1)));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [running]);
+
+  return left;
+}
+
 export function StatusPanel({
   status,
   problem,
@@ -32,7 +69,10 @@ export function StatusPanel({
   queueLength,
   onJoin,
   onLeave,
+  onConfirm,
   onRecord,
+  onCancelGame,
+  onKeepPlaying,
   onStepDown,
   onSwitchLeague,
   busy,
@@ -55,7 +95,8 @@ export function StatusPanel({
       style={[
         styles.panel,
         {
-          backgroundColor: state === 'playing' ? theme.panelBgPlaying : theme.panelBg,
+          backgroundColor:
+            state === 'playing' || state === 'your_turn' ? theme.panelBgPlaying : theme.panelBg,
           borderColor: theme.panelBorder,
           boxShadow: theme.panelShadow,
         },
@@ -88,11 +129,21 @@ export function StatusPanel({
           status={status}
           league={status.league_type || league}
           onRecord={onRecord}
+          onCancelGame={onCancelGame}
+          onKeepPlaying={onKeepPlaying}
           busy={busy}
         />
       )}
+      {state === 'your_turn' && (
+        <YourTurnState status={status} onConfirm={onConfirm} onLeave={onLeave} busy={busy} />
+      )}
       {state === 'waiting_for_challenger' && (
-        <HoldingTableState queueLength={queueLength} onStepDown={onStepDown} busy={busy} />
+        <HoldingTableState
+          status={status}
+          queueLength={queueLength}
+          onStepDown={onStepDown}
+          busy={busy}
+        />
       )}
       {state === 'queued' && (
         <QueuedState status={status} onLeave={onLeave} busy={busy} queueLength={queueLength} />
@@ -187,29 +238,10 @@ function IdleState({ onJoin, busy, queueLength, tableName }) {
 }
 
 function QueuedState({ status, onLeave, busy, queueLength }) {
-  const unlockIn = status.leave_unlocks_in ?? 0;
-
-  // The countdown ticks locally so the number moves every second rather
-  // than lurching with each poll. It's display only - the server
-  // enforces the wait, so drift here can't let anyone leave early.
-  const [prevUnlockIn, setPrevUnlockIn] = useState(unlockIn);
-  const [secondsLeft, setSecondsLeft] = useState(unlockIn);
-
-  // Adjusting state during render when a prop changes, which React
-  // recommends over mirroring props into state inside an effect. Each
-  // poll re-syncs this to the server's number.
-  if (unlockIn !== prevUnlockIn) {
-    setPrevUnlockIn(unlockIn);
-    setSecondsLeft(unlockIn);
-  }
-
-  useEffect(() => {
-    if (secondsLeft <= 0) return undefined;
-    const timer = setInterval(() => {
-      setSecondsLeft((remaining) => Math.max(0, remaining - 1));
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [secondsLeft]);
+  // Ticks locally so the number moves every second rather than lurching
+  // with each poll. The server enforces the wait itself, so drift here
+  // can't let anyone leave early.
+  const secondsLeft = useCountdown(status.leave_unlocks_in ?? 0) ?? 0;
 
   const canLeave = secondsLeft <= 0;
   const position = status.queue_position;
@@ -220,8 +252,8 @@ function QueuedState({ status, onLeave, busy, queueLength }) {
       <Headline>{ahead === 0 ? "You're up next" : `You're number ${position} in line`}</Headline>
       <Sub>
         {ahead === 0
-          ? 'Stay close to the table. You go on as soon as an opponent is free.'
-          : `${ahead} ${ahead === 1 ? 'player' : 'players'} ahead of you. This screen updates on its own.`}
+          ? "Stay close to the table. When it's your turn you'll have a minute to say you're here - keep the app open."
+          : `${ahead} ${ahead === 1 ? 'player' : 'players'} ahead of you. When it's your turn you'll have a minute to say you're here - keep the app open.`}
       </Sub>
 
       <View style={styles.actions}>
@@ -253,15 +285,25 @@ function QueuedState({ status, onLeave, busy, queueLength }) {
   );
 }
 
-function HoldingTableState({ queueLength, onStepDown, busy }) {
+function HoldingTableState({ status, queueLength, onStepDown, busy }) {
+  const upNextLeft = useCountdown(status.up_next_seconds_left ?? null);
+
+  let sub;
+  if (status.up_next) {
+    sub =
+      upNextLeft === null
+        ? `${status.up_next} is up next - get ready.`
+        : `${status.up_next} is up next and has ${clockText(upNextLeft)} to say they're here. If they don't, the next in line is asked.`;
+  } else if (queueLength === 0) {
+    sub = 'You stay on. The next person to join the queue plays you.';
+  } else {
+    sub = 'You stay on. Your next challenger is being matched now.';
+  }
+
   return (
     <>
       <Headline icon="crown-outline">You hold the table</Headline>
-      <Sub>
-        {queueLength === 0
-          ? 'You won, so you stay on. The next person to join the queue plays you.'
-          : 'You won, so you stay on. Your next challenger is being matched now.'}
-      </Sub>
+      <Sub>{sub}</Sub>
       <View style={styles.actions}>
         <Meta icon="users">{`${queueLength} waiting to challenge you`}</Meta>
         {/* Without this, whoever won the last game of the night held the
@@ -277,7 +319,7 @@ function HoldingTableState({ queueLength, onStepDown, busy }) {
   );
 }
 
-function PlayingState({ status, league, onRecord, busy }) {
+function PlayingState({ status, league, onRecord, onCancelGame, onKeepPlaying, busy }) {
   const theme = useTheme();
   const [scores, setScores] = useState({ mine: '', theirs: '' });
   const [error, setError] = useState(null);
@@ -317,10 +359,52 @@ function PlayingState({ status, league, onRecord, busy }) {
   };
 
   const onlyDigits = (value) => value.replace(/[^0-9]/g, '');
+  const cancelAsked = status.cancel_requested_by;
 
   return (
     <>
       <Headline icon="sword-cross">You're playing {status.opponent}</Headline>
+
+      {cancelAsked === 'opponent' ? (
+        <Notice>
+          <Text style={[styles.noticeText, { color: theme.panelText }]}>
+            <Text style={styles.noticeStrong}>{status.opponent} wants to cancel this game.</Text> If
+            you agree, it's called off: nothing is recorded and nobody's points change.
+          </Text>
+          <View style={styles.noticeActions}>
+            <Button
+              variant="panelPrimary"
+              size="sm"
+              title="Agree to cancel"
+              onPress={() => onCancelGame(status.match_id)}
+              disabled={busy}
+            />
+            <Button
+              variant="panelQuiet"
+              size="sm"
+              title="Keep playing"
+              onPress={() => onKeepPlaying(status.match_id)}
+              disabled={busy}
+            />
+          </View>
+        </Notice>
+      ) : null}
+      {cancelAsked === 'you' ? (
+        <Notice>
+          <Text style={[styles.noticeText, { color: theme.panelText }]}>
+            You asked to cancel this game. It's called off once {status.opponent} agrees.
+          </Text>
+          <View style={styles.noticeActions}>
+            <Button
+              variant="panelQuiet"
+              size="sm"
+              title="Take it back - keep playing"
+              onPress={() => onKeepPlaying(status.match_id)}
+              disabled={busy}
+            />
+          </View>
+        </Notice>
+      ) : null}
       <Sub>
         {info.name}, table {status.table_id}. When the game is done,{' '}
         {unit === 'points'
@@ -389,6 +473,113 @@ function PlayingState({ status, league, onRecord, busy }) {
         onPress={submit}
         disabled={busy}
       />
+
+      {!cancelAsked ? (
+        <View style={styles.cancelRow}>
+          <Sub style={styles.cancelText}>
+            Can't finish the game? It's only called off if you both agree, and then nothing is
+            recorded.
+          </Sub>
+          <Button
+            variant="panelQuiet"
+            size="sm"
+            title={`Ask ${status.opponent} to cancel`}
+            onPress={() => onCancelGame(status.match_id)}
+            disabled={busy}
+          />
+        </View>
+      ) : null}
+    </>
+  );
+}
+
+/** A question on the panel that needs an answer. */
+function Notice({ children }) {
+  const theme = useTheme();
+  return (
+    <View
+      accessibilityLiveRegion="polite"
+      style={[styles.notice, { backgroundColor: theme.panelFill, borderColor: theme.panelLine }]}
+    >
+      {children}
+    </View>
+  );
+}
+
+/**
+ * Up to play. The player has a minute to say they're here, or they're
+ * taken out of the queue and the next in line is asked. Once they have,
+ * they wait for their opponent to do the same - unless that's the king,
+ * who is at the table already.
+ */
+function YourTurnState({ status, onConfirm, onLeave, busy }) {
+  const theme = useTheme();
+  const mine = useCountdown(status.confirmed ? null : status.seconds_left);
+  const theirs = useCountdown(status.opponent_confirmed ? null : status.opponent_seconds_left);
+  const opponent = status.opponent;
+
+  if (status.confirmed) {
+    return (
+      <>
+        <Headline>You're in - get ready</Headline>
+        <Sub>
+          {opponent ? `Waiting for ${opponent} to say they're here` : 'Waiting for your opponent'}
+          {theirs !== null ? ` - they have ${clockText(theirs)} left.` : '.'} The game starts the
+          moment they do. If they don't, the next player in line is asked instead.
+        </Sub>
+        <Button variant="panelQuiet" title="Leave the queue" onPress={onLeave} disabled={busy} />
+      </>
+    );
+  }
+
+  const left = Math.max(0, mine ?? 0);
+  return (
+    <>
+      <Headline icon="bell-ring-outline">It's your turn</Headline>
+      <Sub>
+        {opponent ? `You're up against ${opponent}. Tap "I'm here" to play.` : 'Tap "I\'m here" to play.'}{' '}
+        If you don't in time, you're taken out of the queue and the next player is asked.
+      </Sub>
+
+      <View style={styles.meter}>
+        <View
+          accessible
+          accessibilityRole="progressbar"
+          accessibilityLabel="Time left to confirm"
+          accessibilityValue={{ min: 0, max: 60, now: left, text: `${left} seconds left` }}
+          style={[styles.meterTrack, { backgroundColor: theme.panelFillStrong }]}
+        >
+          <View
+            style={[
+              styles.meterFill,
+              { width: `${(left / 60) * 100}%`, backgroundColor: theme.panelCtaBg },
+            ]}
+          />
+        </View>
+        <Text
+          importantForAccessibility="no"
+          accessibilityElementsHidden
+          style={[styles.meterClock, { color: theme.panelText }]}
+        >
+          {clockText(left)}
+        </Text>
+      </View>
+
+      <View style={styles.actions}>
+        <Button
+          variant="panelPrimary"
+          size="lg"
+          title={busy ? 'Confirming...' : "I'm here"}
+          onPress={onConfirm}
+          disabled={busy}
+        />
+        <Button
+          variant="panelQuiet"
+          title="Can't play now - leave the queue"
+          onPress={onLeave}
+          disabled={busy}
+        />
+      </View>
     </>
   );
 }
@@ -440,4 +631,14 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
     marginBottom: 14,
   },
+  notice: { borderWidth: 1, borderRadius: radius.sm, padding: 12, marginBottom: 16, gap: 10 },
+  noticeText: { fontFamily: fonts.regular, fontSize: type.small, lineHeight: 19 },
+  noticeStrong: { fontFamily: fonts.semibold },
+  noticeActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  cancelRow: { marginTop: 18, gap: 8, alignItems: 'flex-start' },
+  cancelText: { fontSize: type.small, lineHeight: 19, marginBottom: 0 },
+  meter: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 20 },
+  meterTrack: { flex: 1, height: 10, borderRadius: radius.pill, overflow: 'hidden' },
+  meterFill: { height: '100%', borderRadius: radius.pill },
+  meterClock: { fontFamily: fonts.bold, fontSize: 24, fontVariant: ['tabular-nums'], minWidth: 56 },
 });

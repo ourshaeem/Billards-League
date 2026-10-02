@@ -160,6 +160,12 @@ class PrivacyPolicy(ApiTestCase):
         self.assertIn("Delete account", page)
         self.assertNotIn("mailto:", page, "no contact address unless one is configured")
 
+    def test_the_page_describes_uploaded_photos(self):
+        """Photos are a kind of data the app stores now, so the policy must say so."""
+        page = self.client.get("/privacy").get_data(as_text=True)
+        self.assertIn("photo you upload", page)
+        self.assertIn("where the photo", page)
+
     def test_the_contact_address_comes_from_the_environment(self):
         with mock.patch.dict(os.environ, {"PRIVACY_CONTACT_EMAIL": "league@example.com"}):
             page = self.client.get("/privacy").get_data(as_text=True)

@@ -4,10 +4,10 @@
  * the saved session at launch.
  */
 import React from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, Text, View, useColorScheme } from 'react-native';
 
 import { useTheme } from '../state/LeagueContext';
-import { fonts, palette } from '../theme';
+import { fonts, themeFor } from '../theme';
 
 /** The current league's ball, drawn from theme tokens. */
 export function LeagueBall({ size = 18, theme: override }) {
@@ -57,10 +57,15 @@ export function Wordmark({ title, size = 26 }) {
   );
 }
 
+/**
+ * Shown for a moment at launch, before the saved settings are read - so
+ * it follows the phone's own light or dark setting.
+ */
 export function Splash() {
+  const colors = themeFor(null, useColorScheme() === 'dark' ? 'dark' : 'light');
   return (
-    <View style={styles.splash} accessibilityLabel="Loading">
-      <ActivityIndicator size="large" color={palette.purple600} />
+    <View style={[styles.splash, { backgroundColor: colors.page }]} accessibilityLabel="Loading">
+      <ActivityIndicator size="large" color={colors.accent} />
     </View>
   );
 }
@@ -68,5 +73,5 @@ export function Splash() {
 const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', gap: 10, flexShrink: 1 },
   title: { fontFamily: fonts.display, flexShrink: 1 },
-  splash: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: palette.white },
+  splash: { flex: 1, alignItems: 'center', justifyContent: 'center' },
 });

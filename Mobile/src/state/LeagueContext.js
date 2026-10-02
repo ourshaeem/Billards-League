@@ -13,12 +13,14 @@ import * as api from '../api';
 import { LEAGUES_RETRY_MS } from '../config';
 import { isLeague, leagueInfo } from '../leagues';
 import { themeFor } from '../theme';
+import { useAppearance } from './AppearanceContext';
 import { useSession } from './SessionContext';
 
 const LeagueContext = createContext(null);
 
 export function LeagueProvider({ children }) {
   const { league } = useSession();
+  const { scheme } = useAppearance();
   // { billiards: {league_type, name, table_id, table_name}, ping_pong: {...} }
   const [tables, setTables] = useState(null);
   const [unreachable, setUnreachable] = useState(false);
@@ -63,9 +65,9 @@ export function LeagueProvider({ children }) {
       // True while the league list can't be fetched at all - the server
       // is unreachable or still waking up.
       unreachable,
-      theme: themeFor(league),
+      theme: themeFor(league, scheme),
     };
-  }, [league, tables, unreachable]);
+  }, [league, tables, unreachable, scheme]);
 
   return <LeagueContext.Provider value={value}>{children}</LeagueContext.Provider>;
 }
@@ -75,7 +77,7 @@ export function useLeague() {
   return useContext(LeagueContext);
 }
 
-/** The current league's colours and roles (theme.js). */
+/** The current league's colours and roles (theme.js), by day or by night. */
 export function useTheme() {
   return useContext(LeagueContext).theme;
 }

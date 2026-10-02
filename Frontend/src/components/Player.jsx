@@ -1,7 +1,7 @@
 /**
  * How a player appears anywhere other people can see them: picture (or
  * initials), name and flag - and, on hover, their standing in the league
- * being shown.
+ * being shown. Clicking or tapping one opens their full profile.
  *
  * Everything here draws from a "player card" the backend sends with the
  * data (see Player.to_card in Backend/models.py), so hovering never
@@ -11,6 +11,7 @@ import React, { useEffect, useId, useRef, useState } from 'react';
 
 import { flagEmoji } from '../flags.js';
 import { leagueInfo } from '../leagues.js';
+import { useOpenPlayer } from '../openPlayer.js';
 
 function initialOf(name) {
   const first = Array.from((name || '').trim())[0];
@@ -58,11 +59,14 @@ function AvatarImage({ src, name, size, label }) {
  * Avatar, name and flag, with a card showing the player's rank, rating
  * and record in `league`.
  *
- * The card opens on mouse hover, on keyboard focus, and on tap - touch
- * screens have no hover, and without the tap a phone could never see it.
- * Escape, tapping elsewhere or moving away closes it.
+ * The card opens on mouse hover and on keyboard focus. A click, Enter or
+ * a tap opens the player's full profile - which shows everything the card
+ * does and more, so a touch screen loses nothing by having no hover.
+ * Without a profile to open, a tap shows the card instead. Escape,
+ * tapping elsewhere or moving away closes it.
  */
 export function PlayerChip({ player, league, size = 'md', align = 'start', isYou = false }) {
+  const openPlayer = useOpenPlayer();
   const [open, setOpen] = useState(false);
   const wrapRef = useRef(null);
   // How the current press started. Mouse and keyboard already opened the
@@ -122,6 +126,11 @@ export function PlayerChip({ player, league, size = 'md', align = 'start', isYou
         onClick={(e) => {
           const press = pressRef.current;
           pressRef.current = null;
+          if (openPlayer && player.user_id) {
+            setOpen(false);
+            openPlayer(player.user_id);
+            return;
+          }
           // e.detail is 0 for a click made with Enter or Space.
           if (press === 'mouse' || e.detail === 0) return;
           setOpen((current) => !current);
@@ -147,8 +156,28 @@ export function PlayerChip({ player, league, size = 'md', align = 'start', isYou
           <span className="tooltip-record">
             {wins} won &middot; {losses} lost
           </span>
+          {openPlayer && <span className="tooltip-hint">Click for their profile and games</span>}
         </span>
       )}
     </span>
+  );
+}
+
+/**
+ * A player's name as a link to their profile, for lists that have a name
+ * but no card to hover - the queue.
+ */
+export function PlayerLink({ userId, name, isYou = false }) {
+  const openPlayer = useOpenPlayer();
+  if (!openPlayer || !userId) return <span className="player-name">{name}</span>;
+  return (
+    <button
+      type="button"
+      className="player-link"
+      data-you={isYou ? 'true' : undefined}
+      onClick={() => openPlayer(userId)}
+    >
+      {name}
+    </button>
   );
 }

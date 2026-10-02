@@ -5,7 +5,7 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.yungmetronome.billiardspingpong"
@@ -25,7 +25,15 @@
     },
     "plugins": [
       "expo-secure-store",
-      "expo-font"
+      "expo-font",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "The app opens your photos only when you choose a profile picture, and only the photo you pick is uploaded.",
+          "cameraPermission": false,
+          "microphonePermission": false
+        }
+      ]
     ],
     "description": "Queue up for the pool or ping pong table, report your score, and track the ladder.",
     "extra": {

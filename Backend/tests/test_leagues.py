@@ -325,7 +325,7 @@ class LeaderboardByLeague(ApiTestCase):
         self.assertEqual(billiards[0]["username"], "alice")
         self.assertEqual(
             set(ping_pong[0].keys()),
-            {"username", "elo_rating", "total_wins", "total_losses", "rank_name"},
+            set(billiards[0].keys()),
             "the ladder has the same shape in both leagues",
         )
 

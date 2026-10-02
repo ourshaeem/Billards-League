@@ -16,6 +16,7 @@ import { ConnectionBanner } from '../components/Feedback';
 import { Button, Screen, Txt } from '../components/ui';
 import { LeagueBall } from '../components/Wordmark';
 import { LEAGUE_ORDER, LEAGUES } from '../leagues';
+import { useAppearance } from '../state/AppearanceContext';
 import { useLeague } from '../state/LeagueContext';
 import { useSession } from '../state/SessionContext';
 import { pointsText } from '../format';
@@ -24,6 +25,7 @@ import { fonts, radius, themeFor, type } from '../theme';
 export function LeagueSelectScreen({ navigation, route }) {
   const { league: current, chooseLeague, user, signOut } = useSession();
   const { tables, unreachable } = useLeague();
+  const { scheme } = useAppearance();
   const [profile, setProfile] = useState(null);
   const isModal = route.name === 'SwitchLeague';
 
@@ -44,7 +46,7 @@ export function LeagueSelectScreen({ navigation, route }) {
   const content = (
     <Screen contentStyle={styles.content}>
       <View style={styles.head}>
-        <Txt variant="display" accessibilityRole="header" color={themeFor(null).textStrong} style={styles.center}>
+        <Txt variant="display" accessibilityRole="header" color={themeFor(null, scheme).textStrong} style={styles.center}>
           Which league are you playing?
         </Txt>
         <Txt muted style={styles.center}>
@@ -56,7 +58,8 @@ export function LeagueSelectScreen({ navigation, route }) {
 
       {LEAGUE_ORDER.map((key) => {
         const info = LEAGUES[key];
-        const preview = themeFor(key);
+        // Each league's own colours, in the scheme the app is in.
+        const preview = themeFor(key, scheme);
         const standing = profile?.leagues?.[key];
         const table = tables?.[key];
         // A league the venue hasn't given a table can't be played yet.

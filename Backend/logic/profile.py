@@ -1,5 +1,6 @@
 """
 A player's own profile: reading it, and changing their flag and picture.
+Uploading a picture, rather than linking one, is in pictures.py.
 
 update_profile() says which field a problem concerns, so the frontend can
 put the message beside that field rather than in a toast about the form.
@@ -8,6 +9,7 @@ import logging
 from urllib.parse import urlsplit
 
 from logic.countries import COUNTRIES
+from logic.pictures import forget_uploaded_picture
 from models import Player, db
 
 log = logging.getLogger(__name__)
@@ -22,6 +24,18 @@ def get_profile(user_id):
     """The player's profile dict, or None if the account no longer exists."""
     player = db.session.get(Player, user_id)
     return player.to_profile_dict() if player is not None else None
+
+
+def get_public_profile(user_id):
+    """
+    Another player's profile, as anyone may see it, or None if there is
+    no such player. A deleted account has no profile: what was in it is
+    gone, and its games show it only as "Deleted player".
+    """
+    player = db.session.get(Player, user_id)
+    if player is None or player.is_deleted:
+        return None
+    return player.to_public_profile_dict()
 
 
 def clean_country_flag(value):
@@ -97,6 +111,10 @@ def update_profile(user_id, data):
     try:
         for field, value in cleaned.items():
             setattr(player, field, value)
+        if "profile_picture" in cleaned:
+            # A new link, or none: an uploaded picture they had is replaced,
+            # and isn't kept once nothing shows it.
+            forget_uploaded_picture(user_id)
         db.session.commit()
     except Exception:
         db.session.rollback()
