@@ -8,6 +8,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, ImageUp, Trash2 } from 'lucide-react';
 
+import { emailProblem } from '../accountRules.js';
 import { PRIVACY_POLICY_URL } from '../api.js';
 import { flagEmoji } from '../flags.js';
 import { LEAGUE_ORDER, LEAGUES } from '../leagues.js';
@@ -37,6 +38,7 @@ export function ProfileSettings({
   profile,
   countries,
   onSave,
+  onSetEmail,
   onUploadPicture,
   onDeleteAccount,
   onBack,
@@ -235,6 +237,8 @@ export function ProfileSettings({
         </div>
       </section>
 
+      <EmailSetting email={profile.email} onSetEmail={onSetEmail} busy={busy} />
+
       <section className="card" aria-labelledby="appearance-heading">
         <div className="card-head">
           <h2 className="card-title" id="appearance-heading">
@@ -268,6 +272,112 @@ export function ProfileSettings({
         </a>
       </p>
     </main>
+  );
+}
+
+/**
+ * The account's email - where a reset code goes if the password is
+ * forgotten. Changing it asks for the password, so a computer left signed
+ * in can't be used to redirect those codes.
+ */
+function EmailSetting({ email, onSetEmail, busy }) {
+  const [editing, setEditing] = useState(false);
+  const [values, setValues] = useState({ email: '', password: '' });
+  const [errors, setErrors] = useState({});
+
+  const update = (field) => (e) => {
+    setValues((v) => ({ ...v, [field]: e.target.value }));
+    setErrors((prev) => (prev[field] ? { ...prev, [field]: null } : prev));
+  };
+
+  const close = () => {
+    setEditing(false);
+    setValues({ email: '', password: '' });
+    setErrors({});
+  };
+
+  const submit = async (e) => {
+    e.preventDefault();
+    const next = {};
+    const problem = emailProblem(values.email);
+    if (problem) next.email = problem;
+    if (email && !values.password) next.password = 'Enter your password to change your email.';
+    setErrors(next);
+    if (Object.keys(next).length) return;
+
+    const result = await onSetEmail(values.email.trim(), email ? values.password : undefined);
+    if (result.ok) close();
+    else if (result.field) setErrors({ [result.field]: result.message });
+  };
+
+  return (
+    <section className="card" aria-labelledby="email-heading">
+      <div className="card-head">
+        <h2 className="card-title" id="email-heading">
+          Email
+        </h2>
+      </div>
+      {!editing ? (
+        <>
+          <p className="email-current">{email || <span className="muted">No email yet</span>}</p>
+          <p className="muted small" style={{ marginBottom: 14 }}>
+            Where a code goes if you forget your password. Never shown to other players.
+          </p>
+          <button
+            type="button"
+            className="btn btn-quiet btn-small"
+            onClick={() => setEditing(true)}
+          >
+            {email ? 'Change email' : 'Add email'}
+          </button>
+        </>
+      ) : (
+        <form onSubmit={submit} noValidate>
+          <div className="field">
+            <label htmlFor="profile-email">{email ? 'New email' : 'Email'}</label>
+            <input
+              id="profile-email"
+              type="email"
+              inputMode="email"
+              autoComplete="email"
+              value={values.email}
+              onChange={update('email')}
+              aria-invalid={Boolean(errors.email)}
+              aria-describedby={errors.email ? 'profile-email-error' : undefined}
+            />
+            <FieldError id="profile-email-error" message={errors.email} />
+          </div>
+          {email && (
+            <div className="field">
+              <label htmlFor="profile-email-password">Your password</label>
+              <input
+                id="profile-email-password"
+                type="password"
+                autoComplete="current-password"
+                value={values.password}
+                onChange={update('password')}
+                aria-invalid={Boolean(errors.password)}
+                aria-describedby={errors.password ? 'profile-email-password-error' : undefined}
+              />
+              <FieldError id="profile-email-password-error" message={errors.password} />
+            </div>
+          )}
+          <div className="danger-zone-actions">
+            <button type="submit" className="btn btn-primary btn-small" disabled={busy}>
+              {busy ? 'Saving...' : 'Save email'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-quiet btn-small"
+              onClick={close}
+              disabled={busy}
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
+    </section>
   );
 }
 

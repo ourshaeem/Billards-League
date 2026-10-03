@@ -83,10 +83,22 @@ export function MatchHistoryCard({ history, loaded, league, currentUserId }) {
  * one player's side: yours by default ("You won"), or `subject`'s when
  * the list is another player's games ("alice won").
  */
+/**
+ * "±16 points" - or, when the loser stopped at the floor of 0 and lost
+ * less, "+16 / −3 points", or just "+16 points" if they lost nothing.
+ */
+function pointsMoved(gain, loss) {
+  if (loss === gain) return `±${gain} points`;
+  if (!loss) return `+${gain} points`;
+  return `+${gain} / −${loss} points`;
+}
+
 export function HistoryRow({ match, league, currentUserId, subject = null }) {
   const { winner, loser, winner_score: won, loser_score: lost, result } = match;
   const hasScore = typeof won === 'number' && typeof lost === 'number';
   const change = match.elo_change;
+  // A loser at the floor of 0 loses less than the winner gains.
+  const lossChange = match.loser_elo_change ?? change;
 
   return (
     <li className="history-row" data-result={result || undefined}>
@@ -135,10 +147,11 @@ export function HistoryRow({ match, league, currentUserId, subject = null }) {
         {result && (
           <strong className="history-outcome" data-result={result}>
             {subject ?? 'You'} {result === 'won' ? 'won' : 'lost'}
-            {typeof change === 'number' && ` ${result === 'won' ? '+' : '−'}${change}`}
+            {typeof change === 'number' &&
+              (result === 'won' ? ` +${change}` : lossChange ? ` −${lossChange}` : '')}
           </strong>
         )}
-        {!result && typeof change === 'number' && <span>&plusmn;{change} points</span>}
+        {!result && typeof change === 'number' && <span>{pointsMoved(change, lossChange)}</span>}
         <span>{timeAgo(match.seconds_ago)}</span>
       </p>
     </li>

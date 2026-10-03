@@ -1,40 +1,43 @@
 /**
  * Create an account. The checks here mirror the server's so people find
  * out before the round trip; the server still checks everything, and
- * its wording is shown when it refuses.
+ * its wording is shown when it refuses - beside the field it names.
+ *
+ * An email is required: one account per email is what stops a player
+ * who forgot their password making a second account.
  */
 import React, { useRef, useState } from 'react';
 import { Linking, StyleSheet, View } from 'react-native';
 
+import {
+  MAX_NAME,
+  MAX_USERNAME,
+  MIN_USERNAME,
+  emailProblem,
+  passwordProblem,
+} from '../accountRules';
 import * as api from '../api';
 import { Button, Field, Txt } from '../components/ui';
 import { useToast } from '../state/ToastContext';
 import { AuthShell } from './AuthShell';
 
-const MIN_USERNAME = 3;
-const MIN_PASSWORD = 6;
-// The database columns' limits.
-const MAX_USERNAME = 50;
-const MAX_NAME = 50;
-// bcrypt reads at most 72 bytes of a password, and the server refuses more.
-const MAX_PASSWORD_BYTES = 72;
-
-/** A string's length in UTF-8 bytes - what the server's limit counts. */
-function utf8Length(text) {
-  let bytes = 0;
-  for (const char of text) {
-    const code = char.codePointAt(0);
-    bytes += code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4;
-  }
-  return bytes;
-}
-
 export function RegisterScreen({ navigation }) {
   const toast = useToast();
-  const [values, setValues] = useState({ first_name: '', last_name: '', username: '', password: '' });
+  const [values, setValues] = useState({
+    first_name: '',
+    last_name: '',
+    username: '',
+    email: '',
+    password: '',
+  });
   const [errors, setErrors] = useState({});
   const [busy, setBusy] = useState(false);
-  const refs = { last_name: useRef(null), username: useRef(null), password: useRef(null) };
+  const refs = {
+    last_name: useRef(null),
+    username: useRef(null),
+    email: useRef(null),
+    password: useRef(null),
+  };
 
   const update = (field) => (text) => {
     setValues((v) => ({ ...v, [field]: text }));
@@ -55,22 +58,32 @@ export function RegisterScreen({ navigation }) {
     if (!username) next.username = 'Pick a username.';
     else if (username.length < MIN_USERNAME) next.username = `Usernames need at least ${MIN_USERNAME} characters.`;
     else if (username.length > MAX_USERNAME) next.username = `Usernames can be at most ${MAX_USERNAME} characters.`;
+    else if (username.includes('@')) next.username = "Usernames can't contain @.";
 
-    if (!values.password) next.password = 'Pick a password.';
-    else if (values.password.length < MIN_PASSWORD) next.password = `Passwords need at least ${MIN_PASSWORD} characters.`;
-    else if (utf8Length(values.password) > MAX_PASSWORD_BYTES) next.password = `Passwords can be at most ${MAX_PASSWORD_BYTES} characters.`;
+    const emailIssue = emailProblem(values.email);
+    if (emailIssue) next.email = emailIssue;
+    const passwordIssue = passwordProblem(values.password);
+    if (passwordIssue) next.password = passwordIssue;
 
     setErrors(next);
     if (Object.keys(next).length) return;
 
     setBusy(true);
-    const res = await api.register({ first_name: first, last_name: last, username, password: values.password });
+    const res = await api.register({
+      first_name: first,
+      last_name: last,
+      username,
+      email: values.email.trim(),
+      password: values.password,
+    });
     setBusy(false);
 
     if (!res.ok) {
-      // The server explains why (taken username, short password), so its
-      // wording goes straight through.
-      toast.push(res.message, 'error');
+      // The server explains why (taken username or email, short
+      // password), so its wording goes straight through - beside the
+      // field it names, when it names one.
+      if (res.data?.field) setErrors({ [res.data.field]: res.message });
+      else toast.push(res.message, 'error');
       return;
     }
     toast.push('Account created. Sign in to get playing.', 'success');
@@ -115,9 +128,35 @@ export function RegisterScreen({ navigation }) {
         autoComplete="username-new"
         textContentType="username"
         returnKeyType="next"
+        onSubmitEditing={nextField('email')}
+        submitBehavior="submit"
+      />
+      <Field
+        ref={refs.email}
+        label="Email"
+        value={values.email}
+        onChangeText={update('email')}
+        error={errors.email}
+        hint="For a code if you ever forget your password. Never shown to other players."
+        autoCapitalize="none"
+        autoCorrect={false}
+        autoComplete="email"
+        textContentType="emailAddress"
+        keyboardType="email-address"
+        inputMode="email"
+        returnKeyType="next"
         onSubmitEditing={nextField('password')}
         submitBehavior="submit"
       />
+      {errors.email?.includes('reset your password') ? (
+        <Button
+          variant="link"
+          size="sm"
+          title="Reset your password"
+          onPress={() => navigation.navigate('ForgotPassword')}
+          style={styles.resetLink}
+        />
+      ) : null}
       <Field
         ref={refs.password}
         label="Password"
@@ -162,6 +201,7 @@ export function RegisterScreen({ navigation }) {
 
 const styles = StyleSheet.create({
   submit: { marginTop: 4 },
+  resetLink: { alignSelf: 'flex-start', marginTop: -8, marginBottom: 10 },
   switchRow: {
     marginTop: 18,
     flexDirection: 'row',

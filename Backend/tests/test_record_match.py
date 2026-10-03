@@ -8,7 +8,7 @@ pull in the next challenger.
 import unittest
 
 from tests.conftest_base import BaseTestCase
-from models import Match, PoolTable, Player, db
+from models import Match, PoolTable, Player, Rank, db
 
 from logic.manage_queue import join_queue
 from logic.record_match import (
@@ -140,18 +140,23 @@ class RecordMatchTests(BaseTestCase):
 
         self.assertEqual(change, 16)
         self.assertEqual(self.player(self.alice).elo_rating, 16)
-        self.assertEqual(self.player(self.bob).elo_rating, -16)
+        self.assertEqual(self.player(self.bob).elo_rating, 0, "nobody goes below 0")
+        self.assertEqual(db.session.get(Match, match.match_id).loser_elo_change, 0)
 
     def test_dropping_below_every_tier_clears_the_rank(self):
+        """Possible when the lowest tier starts above the floor of 0."""
+        bronze = db.session.get(Rank, 1)
+        bronze.min_elo = 100
         bob = self.player(self.bob)
-        bob.elo_rating = 5
-        bob.rank_id = 1  # Bronze, min 0
+        bob.elo_rating = 105
+        bob.rank_id = 1  # Bronze
         db.session.commit()
 
         match = self.start_match(self.alice, self.bob)
         record_match_result(match, winner_id=self.alice, loser_id=self.bob, elo_change=20)
 
-        self.assertIsNone(self.player(self.bob).rank_id, "-15 is below Bronze's 0")
+        self.assertEqual(self.player(self.bob).elo_rating, 85)
+        self.assertIsNone(self.player(self.bob).rank_id, "85 is below Bronze's 100")
 
 
 class EloCalculationTests(BaseTestCase):

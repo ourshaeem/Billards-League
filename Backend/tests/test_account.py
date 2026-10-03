@@ -67,7 +67,13 @@ class DeleteAccount(ApiTestCase):
         self.delete()
         res = self.client.post(
             "/register",
-            json={"username": "alice", "first_name": "New", "last_name": "Alice", "password": "another1"},
+            json={
+                "username": "alice",
+                "first_name": "New",
+                "last_name": "Alice",
+                "password": "another1",
+                "email": "new-alice@example.com",
+            },
         )
         self.assertEqual(res.status_code, 201)
 
@@ -159,6 +165,13 @@ class PrivacyPolicy(ApiTestCase):
         page = res.get_data(as_text=True)
         self.assertIn("Delete account", page)
         self.assertNotIn("mailto:", page, "no contact address unless one is configured")
+
+    def test_the_page_describes_emails(self):
+        """Emails are stored now, and sent through Brevo, so the policy must say so."""
+        page = self.client.get("/privacy").get_data(as_text=True)
+        self.assertIn("email address", page)
+        self.assertIn("reset your password", page)
+        self.assertIn("Brevo", page)
 
     def test_the_page_describes_uploaded_photos(self):
         """Photos are a kind of data the app stores now, so the policy must say so."""

@@ -17,6 +17,7 @@ import { DeleteAccountSheet } from '../components/DeleteAccountSheet';
 import { Avatar, useOpenPlayer } from '../components/Player';
 import { Button, Card, Field, FieldError, Screen, Segmented, Txt } from '../components/ui';
 import { flagEmoji } from '../flags';
+import { emailProblem } from '../accountRules';
 import { LEAGUE_ORDER, LEAGUES } from '../leagues';
 import { PhotoProblem, pickSquarePhoto } from '../photo';
 import { APPEARANCE_OPTIONS, useAppearance } from '../state/AppearanceContext';
@@ -88,6 +89,7 @@ export function ProfileScreen() {
           <Txt muted>{problem ? `${problem} Try again in a moment.` : 'Loading your profile...'}</Txt>
         </Card>
       )}
+      {profile ? <EmailCard email={profile.email} onSaved={setProfile} /> : null}
       {profile ? <Standing profile={profile} /> : null}
       <AppearanceCard />
       <Button variant="quiet" icon="log-out" title="Sign out" onPress={signOut} style={styles.signOut} />
@@ -376,6 +378,106 @@ function PhotoPicker({ profile, onSaved }) {
   );
 }
 
+/**
+ * The account's email - where a reset code goes if the password is
+ * forgotten. Changing it asks for the password, so a phone left signed
+ * in can't be used to redirect those codes.
+ */
+function EmailCard({ email, onSaved }) {
+  const toast = useToast();
+  const [editing, setEditing] = useState(false);
+  const [values, setValues] = useState({ email: '', password: '' });
+  const [errors, setErrors] = useState({});
+  const [busy, setBusy] = useState(false);
+
+  const update = (field) => (text) => {
+    setValues((v) => ({ ...v, [field]: text }));
+    setErrors((prev) => (prev[field] ? { ...prev, [field]: null } : prev));
+  };
+
+  const close = () => {
+    setEditing(false);
+    setValues({ email: '', password: '' });
+    setErrors({});
+  };
+
+  const save = async () => {
+    const next = {};
+    const problem = emailProblem(values.email);
+    if (problem) next.email = problem;
+    if (email && !values.password) next.password = 'Enter your password to change your email.';
+    setErrors(next);
+    if (Object.keys(next).length) return;
+
+    setBusy(true);
+    const res = await api.setEmail(values.email.trim(), email ? values.password : undefined);
+    setBusy(false);
+    if (!res.ok) {
+      if (res.data?.field) setErrors({ [res.data.field]: res.message });
+      else if (res.kind !== api.ErrorKind.AUTH) toast.push(res.message, 'error');
+      return;
+    }
+    onSaved(res.data.profile);
+    toast.push('Email saved.', 'success');
+    close();
+  };
+
+  return (
+    <Card title="Email" icon="mail">
+      {!editing ? (
+        <>
+          <Txt weight="semibold" muted={!email} style={styles.email}>
+            {email || 'No email yet'}
+          </Txt>
+          <Txt variant="small" muted style={styles.emailHint}>
+            Where a code goes if you forget your password. Never shown to other players.
+          </Txt>
+          <Button
+            variant="quiet"
+            size="sm"
+            title={email ? 'Change email' : 'Add email'}
+            onPress={() => setEditing(true)}
+            style={styles.emailButton}
+          />
+        </>
+      ) : (
+        <>
+          <Field
+            label={email ? 'New email' : 'Email'}
+            value={values.email}
+            onChangeText={update('email')}
+            error={errors.email}
+            autoCapitalize="none"
+            autoCorrect={false}
+            autoComplete="email"
+            textContentType="emailAddress"
+            keyboardType="email-address"
+            inputMode="email"
+          />
+          {email ? (
+            <Field
+              label="Your password"
+              value={values.password}
+              onChangeText={update('password')}
+              error={errors.password}
+              secureTextEntry
+              autoCapitalize="none"
+              autoComplete="current-password"
+              textContentType="password"
+              returnKeyType="done"
+              onSubmitEditing={save}
+            />
+          ) : null}
+          <View style={styles.emailActions}>
+            <Button title={busy ? 'Saving...' : 'Save email'} size="sm" onPress={save} busy={busy} />
+            <Button variant="quiet" size="sm" title="Cancel" onPress={close} disabled={busy} />
+          </View>
+        </>
+      )}
+    </Card>
+  );
+}
+
 /** Light, dark, or whatever the phone is set to. Saved on this phone. */
 function AppearanceCard() {
   const { choice, setChoice } = useAppearance();
@@ -461,6 +563,10 @@ const styles = StyleSheet.create({
   photoActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   photoHint: { marginTop: 6 },
   appearanceHint: { marginTop: 10 },
+  email: { marginBottom: 2 },
+  emailHint: { marginBottom: 12 },
+  emailButton: { alignSelf: 'flex-start' },
+  emailActions: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   account: { marginBottom: 8 },
   accountText: { marginBottom: 14 },
   privacy: { alignSelf: 'center' },

@@ -27,7 +27,12 @@ import {
   watchSystemTheme,
 } from './theme.js';
 import { ToastStack, ConnectionBanner } from './components/Feedback.jsx';
-import { LoginScreen, RegisterScreen } from './components/AuthScreens.jsx';
+import {
+  AddEmailScreen,
+  ForgotPasswordScreen,
+  LoginScreen,
+  RegisterScreen,
+} from './components/AuthScreens.jsx';
 import { StatusPanel } from './components/StatusPanel.jsx';
 import { QueueCard, LeaderboardCard } from './components/Panels.jsx';
 import { ActiveTableCard } from './components/ActiveTable.jsx';
@@ -77,6 +82,10 @@ export default function App() {
   // From GET /leagues: { billiards: {table_id, table_name, ...}, ping_pong: {...} }
   const [leagueTables, setLeagueTables] = useState(null);
   const [profile, setProfile] = useState(null);
+  // Whether the signed-in account still needs an email (made before
+  // sign-up asked for one): null until known. True shows the add-email
+  // step before anything else.
+  const [emailMissing, setEmailMissing] = useState(null);
   const [countries, setCountries] = useState(null);
 
   const [queue, setQueue] = useState([]);
@@ -164,6 +173,7 @@ export default function App() {
     announcedMatchRef.current = null;
     lastStatusRef.current = null;
     setViewingPlayer(null);
+    setEmailMissing(null);
     setView('login');
   }, [switchLeague]);
 
@@ -278,7 +288,10 @@ export default function App() {
     if (!userId) return undefined;
     const controller = new AbortController();
     fetchProfile(controller.signal).then((next) => {
-      if (next && !controller.signal.aborted) setProfile(next);
+      if (next && !controller.signal.aborted) {
+        setProfile(next);
+        setEmailMissing(!next.email);
+      }
     });
     return () => controller.abort();
   }, [userId, view]);
@@ -460,30 +473,35 @@ export default function App() {
 
   // --- Actions ---------------------------------------------------------
 
+  /** Signed in - by password, or by a password reset, which answers the same way. */
+  const startSession = (data) => {
+    api.setSession({ token: data.access_token, userId: data.user_id, username: data.username });
+    // Every sign-in starts by choosing a league for the session.
+    api.setStoredLeague(null);
+    switchLeague(null);
+    // Earlier sign-in errors ("wrong password") no longer apply.
+    setToasts([]);
+    setUser({ user_id: data.user_id, username: data.username });
+    setEmailMissing(!data.email);
+    setView('league');
+  };
+
   const handleLogin = async (username, password) => {
     setBusy(true);
     const res = await api.login(username, password);
     setBusy(false);
 
     if (!res.ok) {
-      pushToast(res.status === 401 ? 'That username or password is wrong.' : res.message, 'error');
+      pushToast(
+        res.status === 401 ? 'That username, email or password is wrong.' : res.message,
+        'error',
+      );
       return;
     }
-
-    api.setSession({
-      token: res.data.access_token,
-      userId: res.data.user_id,
-      username: res.data.username,
-    });
-    // Every sign-in starts by choosing a league for the session.
-    api.setStoredLeague(null);
-    switchLeague(null);
-    // Earlier sign-in errors ("wrong password") no longer apply.
-    setToasts([]);
-    setUser({ user_id: res.data.user_id, username: res.data.username });
-    setView('league');
+    startSession(res.data);
   };
 
+  /** Returns { ok, field?, message? } so the form can put a problem beside its field. */
   const handleRegister = async (payload) => {
     setBusy(true);
     const res = await api.register(payload);
@@ -491,13 +509,56 @@ export default function App() {
 
     if (!res.ok) {
       // The server explains why (taken username, short password), so pass
-      // its wording straight through rather than inventing a vague one.
-      pushToast(res.message, 'error');
-      return;
+      // its wording straight through rather than inventing a vague one -
+      // beside its field when it names one.
+      if (!res.data?.field) pushToast(res.message, 'error');
+      return { ok: false, field: res.data?.field, message: res.message };
     }
 
     pushToast('Account created. Sign in to get playing.', 'success');
     setView('login');
+    return { ok: true };
+  };
+
+  /** Forgot your password, step 1. Returns { ok, message } or a refusal. */
+  const handleRequestCode = async (email) => {
+    setBusy(true);
+    const res = await api.forgotPassword(email);
+    setBusy(false);
+    if (!res.ok) {
+      if (!res.data?.field) pushToast(res.message, 'error');
+      return { ok: false, field: res.data?.field, message: res.message };
+    }
+    return { ok: true, message: res.data?.message };
+  };
+
+  /** Step 2: the code and a new password. Success signs the player in. */
+  const handleResetPassword = async (email, code, password) => {
+    setBusy(true);
+    const res = await api.resetPassword(email, code, password);
+    setBusy(false);
+    if (!res.ok) {
+      if (!res.data?.field) pushToast(res.message, 'error');
+      return { ok: false, field: res.data?.field, message: res.message };
+    }
+    startSession(res.data);
+    pushToast(res.data?.message || 'Password changed.', 'success');
+    return { ok: true };
+  };
+
+  /** Add or change the email. Returns { ok, field?, message? }. */
+  const handleSetEmail = async (email, password) => {
+    setBusy(true);
+    const res = await api.setEmail(email, password);
+    setBusy(false);
+    if (!res.ok) {
+      if (!res.data?.field && res.kind !== api.ErrorKind.AUTH) pushToast(res.message, 'error');
+      return { ok: false, field: res.data?.field, message: res.message };
+    }
+    setProfile(res.data.profile);
+    setEmailMissing(false);
+    pushToast('Email saved.', 'success');
+    return { ok: true };
   };
 
   const chooseLeague = (next) => {
@@ -627,8 +688,10 @@ export default function App() {
 
     const won = Number(myScore) > Number(oppScore);
     const change = res.data?.elo_change ?? 0;
+    // A loser at the floor of 0 loses less than the winner gains.
+    const lost = res.data?.loser_elo_change ?? change;
     pushToast(
-      won ? `You won. +${change} points.` : `Logged the loss. -${change} points.`,
+      won ? `You won. +${change} points.` : `Logged the loss. -${lost} points.`,
       won ? 'success' : 'info',
     );
 
@@ -689,12 +752,21 @@ export default function App() {
   // --- Render ----------------------------------------------------------
 
   // A dashboard with no league chosen can't show anything; ask instead.
-  const screen = user ? (view === 'dashboard' && !league ? 'league' : view) : view;
+  // An account without an email adds one before anything else.
+  const gated = Boolean(user) && emailMissing === true;
+  const screen = gated
+    ? 'add-email'
+    : user
+      ? view === 'dashboard' && !league
+        ? 'league'
+        : view
+      : view;
   const me = profile ?? (user ? { username: user.username } : null);
   const myFlag = flagEmoji(profile?.country_flag);
-  const showingPlayer = Boolean(user) && viewingPlayer !== null;
+  const showingPlayer = Boolean(user) && viewingPlayer !== null && !gated;
   // Away from the status panel, a turn coming up still needs answering.
-  const turnBanner = yourTurnNow && Boolean(user) && (showingPlayer || screen !== 'dashboard');
+  const turnBanner =
+    yourTurnNow && Boolean(user) && !gated && (showingPlayer || screen !== 'dashboard');
 
   /** Change screen from the masthead, closing any profile that's open. */
   const goTo = (next) => {
@@ -798,13 +870,37 @@ export default function App() {
         )}
 
         {screen === 'login' && !user && (
-          <LoginScreen onLogin={handleLogin} onSwitch={() => setView('register')} busy={busy} />
+          <LoginScreen
+            onLogin={handleLogin}
+            onSwitch={() => setView('register')}
+            onForgot={() => setView('forgot')}
+            busy={busy}
+          />
         )}
 
         {screen === 'register' && !user && (
           <RegisterScreen
             onRegister={handleRegister}
             onSwitch={() => setView('login')}
+            onForgot={() => setView('forgot')}
+            busy={busy}
+          />
+        )}
+
+        {screen === 'forgot' && !user && (
+          <ForgotPasswordScreen
+            onRequestCode={handleRequestCode}
+            onReset={handleResetPassword}
+            onBack={() => setView('login')}
+            busy={busy}
+          />
+        )}
+
+        {screen === 'add-email' && (
+          <AddEmailScreen
+            username={user.username}
+            onSave={(email) => handleSetEmail(email)}
+            onSignOut={signOut}
             busy={busy}
           />
         )}
@@ -829,6 +925,7 @@ export default function App() {
               profile={profile}
               countries={countries}
               onSave={handleSaveProfile}
+              onSetEmail={handleSetEmail}
               onUploadPicture={handleUploadPicture}
               onDeleteAccount={handleDeleteAccount}
               onBack={() => setView(league ? 'dashboard' : 'league')}

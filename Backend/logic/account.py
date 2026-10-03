@@ -5,10 +5,10 @@ Both app stores require that anyone who can create an account in the app
 can also delete it from the app. What deleting does:
 
   - Every personal detail on the Players row is wiped: username, first
-    and last name, flag, picture and password - and an uploaded photo is
-    deleted outright. The username becomes a random placeholder, so the
-    real one is free to be taken again, and other players see the
-    account as "Deleted player".
+    and last name, email, flag, picture and password - and an uploaded
+    photo and any password reset code are deleted outright. The username
+    becomes a random placeholder, so the real one is free to be taken
+    again, and other players see the account as "Deleted player".
   - The account can't sign in again, and login tokens already issued for
     it stop working at once (see register_jwt_errors in app.py).
   - The player leaves every queue and gives up any table they hold, and
@@ -29,6 +29,7 @@ from sqlalchemy import func
 from database import retry_on_deadlock
 from logic.auth import password_matches
 from logic.manage_queue import STEP_DOWN_RESULT_IN_GAME, leave_all_queues, step_down
+from logic.password_reset import forget_reset_code
 from logic.pictures import forget_uploaded_picture
 from models import Player, db
 
@@ -82,10 +83,12 @@ def _wipe(user_id):
         player.first_name = "Deleted"
         player.last_name = "Player"
         player.password_hash = WIPED_PASSWORD
+        player.email = None
         player.country_flag = None
         player.profile_picture = None
         # The photo itself, if they uploaded one - not just the link to it.
         forget_uploaded_picture(user_id)
+        forget_reset_code(user_id)
         player.deleted_at = func.now()
         db.session.commit()
     except Exception:

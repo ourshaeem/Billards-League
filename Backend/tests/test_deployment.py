@@ -49,7 +49,13 @@ class EmptyDatabase(ApiTestCase):
         # And the app works on it from the first request.
         res = self.client.post(
             "/register",
-            json={"username": "first", "first_name": "F", "last_name": "P", "password": "hunter22"},
+            json={
+                "username": "first",
+                "first_name": "F",
+                "last_name": "P",
+                "password": "hunter22",
+                "email": "first@example.com",
+            },
         )
         self.assertEqual(res.status_code, 201)
         first = db.session.scalars(db.select(Player).where(Player.username == "first")).one()

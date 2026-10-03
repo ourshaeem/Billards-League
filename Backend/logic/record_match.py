@@ -22,7 +22,7 @@ from sqlalchemy import func
 
 from database import retry_on_deadlock
 from logic.tables import league_for_table
-from models import BILLIARDS, PING_PONG, STARTING_ELO, Match, PoolTable, Player, Rank, db
+from models import BILLIARDS, ELO_FLOOR, PING_PONG, STARTING_ELO, Match, PoolTable, Player, Rank, db
 from logic.manage_queue import attempt_matchmaking, lock_active_match_for_player
 
 log = logging.getLogger(__name__)
@@ -163,6 +163,15 @@ def calculate_ping_pong_elo_change(winner, loser, winner_points, loser_points):
     return max(1, int(round(k * margin_multiplier * (1 - expected_win))))
 
 
+def lowered_rating(rating, points):
+    """
+    A rating after losing `points`, stopping at ELO_FLOOR. A rating already
+    below the floor (from before there was one) doesn't drop further, and
+    isn't raised either - ensure_schema() lifts those once.
+    """
+    return max(rating - points, min(rating, ELO_FLOOR))
+
+
 def update_player_rank(player, league=BILLIARDS):
     """
     Move a player into whatever rank their current ELO in `league`
@@ -181,7 +190,8 @@ def report_result(user_id, my_score, opp_score, expected_match_id=None, league_t
     actually being played - never the one the request claims.
 
     Returns (outcome, details): one of the REPORT_RESULT_* and, when
-    recorded, {"elo_change": int, "winner_id": int}. For WRONG_LEAGUE the
+    recorded, {"elo_change": int, "loser_elo_change": int, "winner_id":
+    int} - the loser's change being less when they hit the floor. For WRONG_LEAGUE the
     details are {"league_type": <the game's league>}, and for
     INVALID_SCORE {"problem": <a sentence to show the player>}.
 
@@ -240,10 +250,14 @@ def report_result(user_id, my_score, opp_score, expected_match_id=None, league_t
         db.session.rollback()
         raise
 
-    record_match_result(
+    loser_change = record_match_result(
         match, winner_id, loser_id, elo_change, winner_score, loser_score, league=league
     )
-    return REPORT_RESULT_RECORDED, {"elo_change": elo_change, "winner_id": winner_id}
+    return REPORT_RESULT_RECORDED, {
+        "elo_change": elo_change,
+        "loser_elo_change": loser_change,
+        "winner_id": winner_id,
+    }
 
 
 def record_match_result(
@@ -262,6 +276,10 @@ def record_match_result(
     ratings and records and leaves billiards alone, and vice versa.
     winner_balls / loser_balls are the score in that league's units -
     balls sunk, or points.
+
+    The winner gains elo_change. The loser loses it too, unless that would
+    take them below ELO_FLOOR, where they stop. Returns what the loser
+    actually lost.
     """
     fields = Player.LEAGUE_FIELDS[league]
     try:
@@ -289,13 +307,18 @@ def record_match_result(
             match.player_one_balls = winner_balls if winner_is_player_one else loser_balls
             match.player_two_balls = loser_balls if winner_is_player_one else winner_balls
 
-        # 2. Ratings and records, in this league only. Zero-sum: the
-        #    ladder stays balanced.
+        # 2. Ratings and records, in this league only. Zero-sum, except at
+        #    the floor: nobody's rating goes below ELO_FLOOR, and a loser
+        #    who reaches it loses only what they had.
         setattr(winner, fields["wins"], (getattr(winner, fields["wins"]) or 0) + 1)
         setattr(winner, fields["elo"], _rating(winner, league) + elo_change)
 
+        loser_before = _rating(loser, league)
+        loser_after = lowered_rating(loser_before, elo_change)
+        loser_change = loser_before - loser_after
+        match.loser_elo_change = loser_change
         setattr(loser, fields["losses"], (getattr(loser, fields["losses"]) or 0) + 1)
-        setattr(loser, fields["elo"], _rating(loser, league) - elo_change)
+        setattr(loser, fields["elo"], loser_after)
 
         update_player_rank(winner, league)
         update_player_rank(loser, league)
@@ -330,6 +353,8 @@ def record_match_result(
         refresh_table_state(match.table_id, winner_id)
     except Exception:
         log.exception("could not refresh the Pool_Tables cache (table %s)", match.table_id)
+
+    return loser_change
 
 
 def start_new_session(table_id):

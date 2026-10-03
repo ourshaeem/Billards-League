@@ -54,6 +54,9 @@ def public_url(link):
 # Where every new player's rating starts. Matches the database's own
 # column default and the Ranks table, whose lowest tier begins at 0.
 STARTING_ELO = 0
+# No rating goes below this. A loss that would take a player under it
+# stops at it; the winner still gains the full amount.
+ELO_FLOOR = 0
 
 # The two leagues. Each is the value of Pool_Tables.league_type and of the
 # `league_type` the API accepts. A table belongs to exactly one league, and
@@ -74,6 +77,12 @@ class Player(db.Model):
     username = db.Column(db.String(50), nullable=False, unique=True)
     first_name = db.Column(db.String(50), nullable=False)
     last_name = db.Column(db.String(50), nullable=False)
+    # Where a password reset code goes, stored lowercased. One account per
+    # email (the unique index below), which is what stops someone who
+    # forgot their password making a second account instead of resetting.
+    # NULL only for accounts made before sign-up asked for one; the apps
+    # ask those players to add it.
+    email = db.Column(db.String(254), nullable=True)
 
     # bcrypt hash, not a plain password. Stored as String because that is
     # what the column already is; auth.py handles MySQL handing this back
@@ -131,6 +140,8 @@ class Player(db.Model):
     # stop working, and they're left off the ladder.
     deleted_at = db.Column(db.DateTime, nullable=True)
     DELETED_NAME = "Deleted player"
+
+    __table_args__ = (db.Index("uq_players_email", "email", unique=True),)
 
     @property
     def is_deleted(self):
@@ -241,6 +252,7 @@ class Player(db.Model):
             "username": self.username,
             "first_name": self.first_name,
             "last_name": self.last_name,
+            "email": self.email,
             "picture_uploaded": self.has_uploaded_picture,
         }
 
@@ -459,6 +471,10 @@ class Match(db.Model):
         db.String(20), nullable=False, default=STATUS_ACTIVE, server_default=STATUS_ACTIVE
     )
     elo_change = db.Column(db.Integer, nullable=True)
+    # What the loser actually lost: elo_change, unless that would have taken
+    # them below ELO_FLOOR, where they stopped. NULL for games recorded
+    # before the floor, which all lost exactly elo_change.
+    loser_elo_change = db.Column(db.Integer, nullable=True)
     played_at = db.Column(db.DateTime, nullable=True, server_default=func.current_timestamp())
     # A plain number, not a foreign key: it is only ever one of the two
     # seats above, and it only means anything while the game is on.
@@ -555,6 +571,11 @@ class Match(db.Model):
             "league_type": league,
         }
 
+    @property
+    def loser_points_lost(self):
+        """What the loser lost - less than elo_change if they hit the floor."""
+        return self.elo_change if self.loser_elo_change is None else self.loser_elo_change
+
     def to_history_dict(self, league, seconds_ago=None, viewer_id=None):
         """
         One finished game for the history feeds.
@@ -574,6 +595,7 @@ class Match(db.Model):
             "winner_score": self.balls_for(self.winner_id),
             "loser_score": self.balls_for(self.loser_id),
             "elo_change": self.elo_change,
+            "loser_elo_change": self.loser_points_lost,
             "seconds_ago": seconds_ago,
         }
         if viewer_id is not None:
@@ -609,3 +631,27 @@ class PlayerPicture(db.Model):
 
     def __repr__(self):
         return f"<PlayerPicture user={self.user_id} {len(self.image or b'')} bytes>"
+
+
+
+class PasswordReset(db.Model):
+    """
+    A code emailed to a player who forgot their password - at most one per
+    player; asking again replaces it. See logic/password_reset.py.
+
+    The code itself isn't stored, only a hash of it, so even someone
+    reading the database can't use one. sent_at is written by the
+    database's clock, and the code's age is measured by it too (as the
+    queue timer is).
+    """
+
+    __tablename__ = "Password_Resets"
+
+    user_id = db.Column(db.Integer, db.ForeignKey("Players.user_id"), primary_key=True)
+    code_hash = db.Column(db.String(64), nullable=False)
+    sent_at = db.Column(db.DateTime, nullable=False, server_default=func.current_timestamp())
+    # Wrong guesses so far; enough of them and the code stops working.
+    attempts = db.Column(db.Integer, nullable=False, default=0, server_default="0")
+
+    def __repr__(self):
+        return f"<PasswordReset user={self.user_id} attempts={self.attempts}>"

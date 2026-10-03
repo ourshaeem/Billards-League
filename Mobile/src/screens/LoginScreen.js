@@ -26,7 +26,7 @@ export function LoginScreen({ navigation }) {
 
   const submit = async () => {
     const next = {};
-    if (!values.username.trim()) next.username = 'Enter your username.';
+    if (!values.username.trim()) next.username = 'Enter your username or email.';
     if (!values.password) next.password = 'Enter your password.';
     setErrors(next);
     if (Object.keys(next).length) return;
@@ -36,13 +36,16 @@ export function LoginScreen({ navigation }) {
     if (res.ok) return; // this screen is about to be replaced
     setBusy(false);
     // A 401 from /login means the password was wrong - not a lost session.
-    toast.push(res.status === 401 ? 'That username or password is wrong.' : res.message, 'error');
+    toast.push(
+      res.status === 401 ? 'That username, email or password is wrong.' : res.message,
+      'error',
+    );
   };
 
   return (
     <AuthShell title="Sign in" intro="Sign in to join the queue and report your scores.">
       <Field
-        label="Username"
+        label="Username or email"
         value={values.username}
         onChangeText={update('username')}
         error={errors.username}
@@ -50,6 +53,7 @@ export function LoginScreen({ navigation }) {
         autoCorrect={false}
         autoComplete="username"
         textContentType="username"
+        keyboardType="email-address"
         returnKeyType="next"
         onSubmitEditing={() => passwordRef.current?.focus()}
         submitBehavior="submit"
@@ -74,6 +78,13 @@ export function LoginScreen({ navigation }) {
         busy={busy}
         style={styles.submit}
       />
+      <Button
+        variant="link"
+        size="sm"
+        title="Forgot your password?"
+        onPress={() => navigation.navigate('ForgotPassword')}
+        style={styles.forgot}
+      />
       <View style={styles.switchRow}>
         <Txt variant="small" muted>
           New to the league?
@@ -86,6 +97,7 @@ export function LoginScreen({ navigation }) {
 
 const styles = StyleSheet.create({
   submit: { marginTop: 4 },
+  forgot: { alignSelf: 'center', marginTop: 12 },
   switchRow: {
     marginTop: 18,
     flexDirection: 'row',

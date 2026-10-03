@@ -13,7 +13,7 @@ from logic.record_match import record_match_result
 
 ENTRY_KEYS = {
     "match_id", "table_id", "league_type", "winner", "loser",
-    "winner_score", "loser_score", "elo_change", "seconds_ago",
+    "winner_score", "loser_score", "elo_change", "loser_elo_change", "seconds_ago",
 }
 CARD_KEYS = {
     "user_id", "username", "country_flag", "profile_picture",

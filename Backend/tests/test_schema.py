@@ -108,6 +108,9 @@ class EnsureSchemaTests(BaseTestCase):
 
     def test_columns_added_since_are_added_to_an_older_database(self):
         """A database from before profiles and ping pong gains the columns."""
+        # SQLite won't drop a column with an index on it; the index comes
+        # back with the column.
+        db.session.execute(db.text("DROP INDEX uq_players_email"))
         for table, column in (
             ("Players", "profile_picture"),
             ("Players", "country_flag"),
@@ -117,6 +120,8 @@ class EnsureSchemaTests(BaseTestCase):
             ("Queue", "called_at"),
             ("Queue", "confirmed_at"),
             ("Matches", "cancel_requested_by"),
+            ("Players", "email"),
+            ("Matches", "loser_elo_change"),
         ):
             db.session.execute(db.text(f"ALTER TABLE {table} DROP COLUMN {column}"))
         db.session.commit()
@@ -138,6 +143,17 @@ class EnsureSchemaTests(BaseTestCase):
         ensure_schema()
 
         self.assertTrue(check_schema())
+
+    def test_the_password_resets_table_and_email_index_appear_on_an_older_database(self):
+        db.session.execute(db.text("DROP TABLE Password_Resets"))
+        db.session.execute(db.text("DROP INDEX uq_players_email"))
+        db.session.commit()
+
+        ensure_schema()
+
+        self.assertTrue(check_schema())
+        indexes = {i["name"] for i in db.inspect(db.engine).get_indexes("Players")}
+        self.assertIn("uq_players_email", indexes, "one account per email, enforced by the database")
 
     def test_adds_a_ping_pong_table_when_there_is_none(self):
         db.session.execute(db.delete(PoolTable).where(PoolTable.league_type == PING_PONG))

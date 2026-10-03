@@ -164,6 +164,29 @@ DATABASE_URL="<the live DATABASE_URL, with ssl_ca pointing at a downloaded RDS b
 
 It prints which database and how many players before asking to confirm.
 
+### Emailing password reset codes
+
+Signing up takes an email, one account per email, so a player who forgets
+their password resets it ("Forgot your password?" on the sign-in screen)
+instead of making a second account. The code goes out through
+[Brevo](https://www.brevo.com) (free for 300 emails a day), over HTTPS:
+Render's free plan blocks the usual SMTP ports. To switch it on:
+
+1. Sign up at brevo.com. Under **Senders**, add the address the codes
+   should come from; Brevo emails it a confirmation link.
+2. Under **SMTP & API > API keys**, generate a key.
+3. In Render, add `BREVO_API_KEY` (the key) and `MAIL_FROM_ADDRESS` (the
+   sender) to the service's environment variables.
+
+Without a domain of your own, Brevo sends from a stand-in
+`@brevosend.com` address that may land in spam, which the app tells
+people to check. Until it's set up, "Forgot your password?" tells
+players to ask the organiser, who can set a new one from `Backend/`:
+
+```bash
+DATABASE_URL="<the live DATABASE_URL>" flask --app app set-password <username-or-email>
+```
+
 ### Taking back a game played by accident
 
 Removes one finished game from the history and undoes exactly what it
@@ -398,7 +421,10 @@ Backend/
     pictures.py             uploaded photos: checked, cropped, shrunk and
                             stripped of location data, kept in the database
     countries.py            the country list flags are picked from
-    auth.py                 registration and login
+    auth.py                 registration (email required, one account per
+                            email) and login (username or email)
+    password_reset.py       forgot your password: an emailed code
+    mailer.py               sending email through Brevo's HTTPS API
     leaderboard.py          top 50, per league
   tests/                    ORM tests against in-memory SQLite
 
@@ -469,6 +495,10 @@ leagues without knowing either exists. A match's league is its table's.
   league the request claims: billiards 0-8, no tie; ping pong one game to
   11, won by two (11-9, 12-10). A report sent with the wrong
   `league_type` is refused (409) and nothing is saved.
+- **Nobody goes below 0 points.** A loss that would take a player under
+  0 stops at 0; the winner still gains the full amount. The game
+  remembers what the loser really lost (`loser_elo_change`), which the
+  history shows - "+16 points" when the loser had nothing to lose.
 - **Ping pong ELO** uses the standard Elo expectation with tiered
   K-factors - 40 for a player's first 10 games, 24 after that, 16 from a
   rating of 1200 - averaged between the two players so the ladder stays

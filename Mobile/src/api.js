@@ -229,10 +229,31 @@ export const getCountries = (signal) => request('/countries', { signal });
 
 // --- Auth ---
 
+/**
+ * username may also be the account's email. The answer's email is null
+ * for an account made before sign-up asked for one - ask them to add it.
+ */
 export const login = (username, password) =>
   request('/login', { method: 'POST', body: { username, password } });
 
+/** payload: { username, first_name, last_name, email, password }. A refusal names data.field. */
 export const register = (payload) => request('/register', { method: 'POST', body: payload });
+
+/**
+ * Forgot your password, step 1: email a 6-digit code to the account with
+ * this email. Answers the same whether or not one exists. 503 when email
+ * isn't set up on the server (the message says to ask the organiser).
+ */
+export const forgotPassword = (email) =>
+  request('/password/forgot', { method: 'POST', body: { email } });
+
+/**
+ * Step 2: the code and a new password. Success answers like login (a
+ * token) - the player is signed in. A refusal names data.field: "code"
+ * or "password".
+ */
+export const resetPassword = (email, code, password) =>
+  request('/password/reset', { method: 'POST', body: { email, code, password } });
 
 // --- Profile ---
 
@@ -245,6 +266,14 @@ export const getProfile = (signal) => request('/profile', { auth: true, signal }
  */
 export const updateProfile = (changes) =>
   request('/profile', { method: 'PATCH', auth: true, body: changes });
+
+/**
+ * Add or change the account's email: { message, profile }. Changing one
+ * that's already set needs the password (a wrong one is 403 with field
+ * "password", never 401); adding the first doesn't.
+ */
+export const setEmail = (email, password) =>
+  request('/profile/email', { method: 'POST', auth: true, body: { email, password } });
 
 /**
  * Upload a photo as the profile picture: image is base64, or a data: URL.

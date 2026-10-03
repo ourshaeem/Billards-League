@@ -217,7 +217,7 @@ class MalformedInput(ApiTestCase):
     def test_register_with_numbers_instead_of_text(self):
         res = self.client.post(
             "/register",
-            json={"username": 12345, "first_name": 1, "last_name": 2, "password": 123456},
+            json={"username": 12345, "first_name": 1, "last_name": 2, "password": 123456, "email": 7},
         )
         self.assertEqual(res.status_code, 400)
         self.assertIn("text", res.get_json()["message"])
@@ -231,9 +231,16 @@ class MalformedInput(ApiTestCase):
             "username": ("u" * 51, "50"),
             "first_name": ("f" * 51, "50"),
             "password": ("p" * 73, "72"),
+            "email": ("e" * 250 + "@x.io", "254"),
         }
         for field, (value, limit) in cases.items():
-            body = {"username": "dave", "first_name": "D", "last_name": "S", "password": "hunter22"}
+            body = {
+                "username": "dave",
+                "first_name": "D",
+                "last_name": "S",
+                "password": "hunter22",
+                "email": "dave@example.com",
+            }
             body[field] = value
             res = self.client.post("/register", json=body)
             self.assertEqual(res.status_code, 400, field)
@@ -242,7 +249,13 @@ class MalformedInput(ApiTestCase):
     def test_login_with_an_overlong_password_is_just_wrong(self):
         self.client.post(
             "/register",
-            json={"username": "dave", "first_name": "D", "last_name": "S", "password": "hunter22"},
+            json={
+                "username": "dave",
+                "first_name": "D",
+                "last_name": "S",
+                "password": "hunter22",
+                "email": "dave@example.com",
+            },
         )
         res = self.client.post("/login", json={"username": "dave", "password": "p" * 100})
         self.assertEqual(res.status_code, 401)
@@ -410,7 +423,7 @@ class RecordMatchRoute(ApiTestCase):
 
         self.assertEqual(res.status_code, 200)
         body = res.get_json()
-        self.assertEqual(set(body.keys()), {"message", "elo_change", "winner_id"})
+        self.assertEqual(set(body.keys()), {"message", "elo_change", "loser_elo_change", "winner_id"})
         self.assertEqual(body["winner_id"], self.bob)
 
     def test_losing_is_recorded_against_the_right_player(self):
@@ -510,6 +523,7 @@ class AuthRoutes(ApiTestCase):
                 "first_name": "Dave",
                 "last_name": "Smith",
                 "password": "hunter22",
+                "email": "dave@example.com",
             },
         )
         self.assertEqual(res.status_code, 201)
@@ -520,8 +534,8 @@ class AuthRoutes(ApiTestCase):
         body = res.get_json()
         self.assertEqual(
             set(body.keys()),
-            {"message", "access_token", "user_id", "username"},
-            "App.jsx reads access_token, user_id and username",
+            {"message", "access_token", "user_id", "username", "email"},
+            "both apps read access_token, user_id, username and email",
         )
 
     def test_duplicate_username_says_so(self):
@@ -530,6 +544,7 @@ class AuthRoutes(ApiTestCase):
             "first_name": "Dave",
             "last_name": "Smith",
             "password": "hunter22",
+            "email": "dave@example.com",
         }
         self.client.post("/register", json=payload)
         res = self.client.post("/register", json=payload)
@@ -540,7 +555,13 @@ class AuthRoutes(ApiTestCase):
     def test_short_password_is_rejected_with_a_reason(self):
         res = self.client.post(
             "/register",
-            json={"username": "eve", "first_name": "E", "last_name": "V", "password": "123"},
+            json={
+                "username": "eve",
+                "first_name": "E",
+                "last_name": "V",
+                "password": "123",
+                "email": "eve@example.com",
+            },
         )
         self.assertEqual(res.status_code, 400)
         self.assertIn("password", res.get_json()["message"].lower())
@@ -553,6 +574,7 @@ class AuthRoutes(ApiTestCase):
                 "first_name": "Dave",
                 "last_name": "Smith",
                 "password": "hunter22",
+                "email": "dave@example.com",
             },
         )
         res = self.client.post("/login", json={"username": "dave", "password": "wrong"})
@@ -564,7 +586,13 @@ class AuthRoutes(ApiTestCase):
     def test_new_players_start_where_the_ladder_starts(self):
         self.client.post(
             "/register",
-            json={"username": "dave", "first_name": "D", "last_name": "S", "password": "hunter22"},
+            json={
+                "username": "dave",
+                "first_name": "D",
+                "last_name": "S",
+                "password": "hunter22",
+                "email": "dave@example.com",
+            },
         )
         dave = db.session.scalars(db.select(Player).where(Player.username == "dave")).one()
 

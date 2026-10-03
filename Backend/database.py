@@ -201,6 +201,8 @@ ADDED_COLUMNS = [
     ("Queue", "called_at", "DATETIME NULL"),
     ("Queue", "confirmed_at", "DATETIME NULL"),
     ("Matches", "cancel_requested_by", "INTEGER NULL"),
+    ("Players", "email", "VARCHAR(254) NULL"),
+    ("Matches", "loser_elo_change", "INTEGER NULL"),
 ]
 
 # The name ping pong's first table is given when ensure_schema creates it.
@@ -232,7 +234,8 @@ def ensure_schema():
          touches nothing else.
       2. Every column in ADDED_COLUMNS exists: the leave-queue timer, each
          table's league, the ping pong ratings, profile flag/picture, the
-         ready check's turn times, and a game's cancel request.
+         ready check's turn times, a game's cancel request, players'
+         emails and what a game's loser actually lost.
          Players.ping_pong_rank_id also gets its foreign key to Ranks.
       3. An empty Ranks table gets the DEFAULT_RANKS tiers.
       4. Table 1 exists in Pool_Tables. The UI plays on table 1, and Queue
@@ -249,12 +252,27 @@ def ensure_schema():
       8. Duplicate queue entries are removed, then every index the models
          declare is created if missing - including the unique index that
          stops a double-tapped Join queueing someone twice.
+      9. No rating is below ELO_FLOOR (0): any older one is raised to it,
+         with the rank that earns. Games no longer take anyone below it,
+         so after the first run this finds nothing.
 
     Never raises. Each step reports what it did, or why it couldn't.
     """
     # Imported here: models imports db from this module's neighbour, and
     # these are only needed once the app is configured.
-    from models import BILLIARDS, PING_PONG, STARTING_ELO, Match, Player, PoolTable, QueueEntry, Rank
+    from models import (
+        BILLIARDS,
+        ELO_FLOOR,
+        LEAGUE_NAMES,
+        LEAGUE_TYPES,
+        PING_PONG,
+        STARTING_ELO,
+        Match,
+        Player,
+        PoolTable,
+        QueueEntry,
+        Rank,
+    )
 
     def step(label, fn):
         try:
@@ -404,6 +422,19 @@ def ensure_schema():
                     added.append(index.name)
         return f"added index(es) {', '.join(added)}" if added else None
 
+    def raise_ratings_to_floor():
+        raised = []
+        floor_rank = Rank.for_elo(ELO_FLOOR)
+        for league in LEAGUE_TYPES:
+            fields = Player.LEAGUE_FIELDS[league]
+            elo = getattr(Player, fields["elo"])
+            below = list(db.session.scalars(db.select(Player).where(elo < ELO_FLOOR)))
+            for player in below:
+                raised.append(f"{player.username} ({LEAGUE_NAMES[league]}, {getattr(player, fields['elo'])})")
+                setattr(player, fields["elo"], ELO_FLOOR)
+                setattr(player, fields["rank_id"], floor_rank.rank_id if floor_rank else None)
+        return f"raised {len(raised)} rating(s) to {ELO_FLOOR}: {', '.join(raised)}" if raised else None
+
     # Tables and columns first: every later step reads models that map them.
     step("Missing tables", create_missing_tables)
     step("New columns", add_columns)
@@ -416,6 +447,7 @@ def ensure_schema():
     step("Old match rows", convert_legacy_matches)
     step("Duplicate queue entries", dedupe_queue)
     step("Indexes", add_indexes)
+    step("Ratings below the floor", raise_ratings_to_floor)
 
 
 def seconds_since(column):

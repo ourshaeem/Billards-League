@@ -99,6 +99,11 @@ app gets run - locally and in production.
   MySQL), never on disk: the host's disk is wiped on every deploy. In
   production the app trusts the proxy's `X-Forwarded-Proto` (ProxyFix),
   so the picture links it builds are `https://`.
+- Email (password reset codes) goes out through Brevo's HTTPS API
+  (`logic/mailer.py`), configured by `BREVO_API_KEY` and
+  `MAIL_FROM_ADDRESS` in the host's environment. Not SMTP: Render's free
+  plan blocks SMTP ports. Without them, production refuses to send and
+  the app says to ask the organiser (`flask --app app set-password`).
 - Production configuration comes only from environment variables. The
   image sets `APP_ENV=production`, which turns a missing `DATABASE_URL`
   or `JWT_SECRET_KEY` into a refusal to start - never a quiet fallback to
@@ -148,6 +153,17 @@ match history and player profiles. Tests: `tests/test_leagues.py`
 `PingPongEloTests`, `LeaderboardByLeague`, `TableSnapshotRoute`),
 `tests/test_match_history.py`, `tests/test_profile.py`, and the
 `ensure_schema` additions in `tests/test_schema.py`.
+
+**Shipped, handed to Backend 1 on 2026-10-03:** emails on accounts (sign-up
+needs one, one account per email, sign-in by username or email, adding
+or changing one), "Forgot your password?" by emailed code, the
+organiser's `set-password` command, and the rating floor of 0. Tests:
+`tests/test_email_accounts.py` (`SignUpWithEmail`, `SignInWithEmail`,
+`ChangingYourEmail`), `tests/test_password_reset.py` (`AskingForACode`,
+`ResettingThePassword`, `OrganiserSetsAPassword`),
+`tests/test_elo_floor.py` (`LosingAtTheBottom`, `SayingWhatWasLost`,
+`TakingBackAGameAtTheBottom`, `RatingsAlreadyBelowZero`), and the new
+columns, table and index in `tests/test_schema.py`.
 
 **Shipped, handed to Backend 1 on 2026-10-02:** `void-game`, the CLI
 command that takes back a finished game played by accident
@@ -329,6 +345,14 @@ of the queue); `404` not in the queue.
 server-side; the disabled button is only a courtesy. A player whose turn
 has come may leave at once, and the next in line is up straight away.
 
+### Ratings
+
+No rating goes below 0 (`ELO_FLOOR`). A loss that would take a player
+under it stops at it; the winner still gains the full `elo_change`. The
+game keeps what the loser really lost in `loser_elo_change` (null for
+games before the floor, which all lost `elo_change`). `ensure_schema()`
+raises any older rating below 0 to 0, with the rank that earns.
+
 ### `POST /match/record`
 
 Body `{ my_balls, opp_balls, match_id, league_type }`. The scores are
@@ -342,8 +366,9 @@ is saved. Without it, a late report lands on the sender's *next* game.
 `league_type` is the league the player thinks the game is in; if it's
 wrong the answer is `409` (body carries the real `league_type`) and
 nothing is saved. Both are optional for old clients, but the UI always
-sends them. Returns `{ message, elo_change, winner_id }`. `404` no game
-in progress, `409` no opponent yet.
+sends them. Returns `{ message, elo_change, loser_elo_change, winner_id }`
+- the loser's change less than `elo_change` when they stopped at 0.
+`404` no game in progress, `409` no opponent yet.
 
 ### `POST /match/cancel`, `POST /match/keep`
 
@@ -401,8 +426,9 @@ cards or null. `404` for an unknown table. Public.
 
 `{ league_type, matches: [...] }`, newest first. Each entry:
 `{ match_id, table_id, league_type, winner, loser, winner_score,
-loser_score, elo_change, seconds_ago }`, `winner` / `loser` being player
-cards. `seconds_ago` is measured by the database's clock (the same
+loser_score, elo_change, loser_elo_change, seconds_ago }`, `winner` /
+`loser` being player cards; `loser_elo_change` is what the loser really
+lost (see *Ratings*). `seconds_ago` is measured by the database's clock (the same
 reason as the queue timer), from when the game *finished*. `limit` is
 1-50, default 20. Public.
 
@@ -434,12 +460,20 @@ none. Public.
 country_flag, profile_picture, picture_uploaded, leagues: { billiards:
 {elo, rank_name, wins, losses}, ping_pong: {...} } } }`.
 `picture_uploaded` says the picture is an uploaded photo, not a link, so
-the form doesn't offer its address back as a link to edit. `PATCH` takes
+the form doesn't offer its address back as a link to edit. `email` is
+the account's own (null for one made before sign-up asked for it); it is
+never in any card or public profile. `PATCH` takes
 `{ country_flag?, profile_picture? }` (null or `""` clears one; a new
 link or none also deletes an uploaded photo) and returns `{ message,
 profile }`. A value that can't be saved is `400` with `field` naming it,
 so the form can show the message beside that field; nothing is saved.
 Only those two fields are editable. Both need a login.
+
+`POST /profile/email` adds or changes the email: `{ email, password? }`
+-> `{ message, profile }`. Adding the first needs no password; changing
+one does (`400` missing, `403` wrong - never 401 - both with `field:
+"password"`). A malformed email, or one another account uses, is `400`
+with `field: "email"`.
 
 `POST /profile/picture` uploads a photo: `{ image: "<base64>" }` (a
 `data:` URL is fine). The server decodes it, refuses anything that isn't
@@ -460,8 +494,8 @@ password, both with `field: "password"` (a 403, never a 401: to the apps
 a 401 means "session ended"); `409` a game in progress - report it first.
 
 Deleting wipes the Players row's personal details (username becomes a
-random placeholder, names, flag, picture - an uploaded photo is deleted
-outright - password) and sets `deleted_at`; the row stays so other players' history keeps working,
+random placeholder, names, email, flag, picture - an uploaded photo and
+any reset code are deleted outright - password) and sets `deleted_at`; the row stays so other players' history keeps working,
 shown as "Deleted player" (`Player.display_name`). The player leaves
 every queue, gives up a held table and drops off the ladder. Both app
 stores require this, in the app, for any app with sign-up.
@@ -469,6 +503,34 @@ stores require this, in the app, for any app with sign-up.
 A login token for a deleted - or never-existing - account is refused on
 every signed-in route with `401` (`token_in_blocklist_loader` in
 app.py), not honoured until it expires.
+
+### Signing up and signing in
+
+`POST /register` takes `{ username, first_name, last_name, email,
+password }`. The email is required, kept lowercased, and one account per
+email - what stops a player who forgot their password making a second
+account. Usernames can't contain `@`. `201 { message }`; a refusal is
+`400 { message, field }` naming the field, and a body with no `email` at
+all (an app from before) says to update the app.
+
+`POST /login` takes `{ username, password }`, where `username` may be
+the email: anything with an `@` is looked up as an email first, then as
+a username (some older accounts use an email address as their username). `200 { message, access_token, user_id,
+username, email }`; `email` is null for an account from before sign-up
+asked for one, and the apps then ask the player to add it (`POST
+/profile/email`) before anything else. `401` for wrong details.
+
+### `POST /password/forgot`, `POST /password/reset`
+
+Forgot your password. `forgot` takes `{ email }` and emails the account
+a 6-digit code (`logic/password_reset.py`); it answers `200 { message }`
+whether or not an account has that email, so it can't be used to find
+out who plays. A new code at most once a minute; it works for 15
+minutes and 5 tries. `503` when email isn't set up on the server, or
+can't be sent just then. `reset` takes `{ email, code, password }`:
+`200` answers exactly like `/login` - the player is signed in - and a
+refusal is `400` with `field` `code` (wrong, expired, too many tries, or
+none asked for) or `password`.
 
 ### `GET /privacy`
 

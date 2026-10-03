@@ -298,8 +298,10 @@ export function LiveProvider({ children }) {
       }
       const won = Number(myScore) > Number(oppScore);
       const change = res.data?.elo_change ?? 0;
+      // A loser at the floor of 0 loses less than the winner gains.
+      const lost = res.data?.loser_elo_change ?? change;
       toast.push(
-        won ? `You won. +${change} points.` : `Logged the loss. -${change} points.`,
+        won ? `You won. +${change} points.` : `Logged the loss. -${lost} points.`,
         won ? 'success' : 'info',
       );
       announcedRef.current = null;

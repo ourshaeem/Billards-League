@@ -1,6 +1,6 @@
 """
-A player's own profile: reading it, and changing their flag and picture.
-Uploading a picture, rather than linking one, is in pictures.py.
+A player's own profile: reading it, and changing their flag, picture and
+email. Uploading a picture, rather than linking one, is in pictures.py.
 
 update_profile() says which field a problem concerns, so the frontend can
 put the message beside that field rather than in a toast about the form.
@@ -8,6 +8,7 @@ put the message beside that field rather than in a toast about the form.
 import logging
 from urllib.parse import urlsplit
 
+from logic.auth import EMAIL_TAKEN, clean_email, email_in_use, password_matches
 from logic.countries import COUNTRIES
 from logic.pictures import forget_uploaded_picture
 from models import Player, db
@@ -83,6 +84,45 @@ def clean_profile_picture(value):
 
 
 CLEANERS = {"country_flag": clean_country_flag, "profile_picture": clean_profile_picture}
+
+
+def set_email(user_id, email, password=None):
+    """
+    Add or change a player's email - where password reset codes go.
+    Returns (problem, profile) like update_profile: problem is {field,
+    message} and nothing is saved; both None if the account is gone.
+
+    Adding the first email needs no password: whoever is signed in can
+    already do anything with the account, and accounts from before
+    sign-up asked for an email need one added. Changing an email that's
+    already there does need it - otherwise a phone left signed in could
+    redirect the reset codes, and with them the account.
+    """
+    player = db.session.get(Player, user_id)
+    if player is None or player.is_deleted:
+        return None, None
+
+    cleaned, problem = clean_email(email)
+    if problem:
+        return {"field": "email", "message": problem}, None
+    if player.email and cleaned != player.email:
+        if not isinstance(password, str) or not password:
+            return {"field": "password", "message": "Enter your password to change your email."}, None
+        if not password_matches(player, password):
+            # 403, not 401: to the apps a 401 means "your session ended".
+            return {"field": "password", "message": "That password isn't right.", "status": 403}, None
+    if email_in_use(cleaned, except_user_id=user_id):
+        return {"field": "email", "message": EMAIL_TAKEN}, None
+
+    try:
+        player.email = cleaned
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        if "Duplicate entry" in str(e) or "UNIQUE constraint" in str(e):
+            return {"field": "email", "message": EMAIL_TAKEN}, None
+        raise
+    return None, player.to_profile_dict()
 
 
 def update_profile(user_id, data):

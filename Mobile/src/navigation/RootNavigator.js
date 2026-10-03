@@ -3,7 +3,10 @@
  * recommended pattern for sign-in flows. The web app's single `view`
  * variable (login / register / league / dashboard / profile) becomes:
  *
- *   Signed out           SignIn, Register        (a stack)
+ *   Signed out           SignIn, Register,       (a stack)
+ *                        ForgotPassword
+ *   Signed in, no email  AddEmail                (accounts from before sign-up
+ *                                                 asked for one; once)
  *   Signed in, no league ChooseLeague
  *   Signed in, league    Main                    (tabs: Play, Games, Ladder, Profile)
  *                        Player                  (a player's profile, over the tabs)
@@ -25,6 +28,8 @@ import { StatusBar } from 'expo-status-bar';
 
 import { TurnBanner } from '../components/TurnBanner';
 import { Splash } from '../components/Wordmark';
+import { AddEmailScreen } from '../screens/AddEmailScreen';
+import { ForgotPasswordScreen } from '../screens/ForgotPasswordScreen';
 import { LoginScreen } from '../screens/LoginScreen';
 import { PlayerScreen } from '../screens/PlayerScreen';
 import { RegisterScreen } from '../screens/RegisterScreen';
@@ -39,7 +44,7 @@ const Stack = createNativeStackNavigator();
 const APP_NAME = 'Billiards & Ping Pong';
 
 export function AppNavigation() {
-  const { status, league } = useSession();
+  const { status, league, needsEmail } = useSession();
   const { theme, info } = useLeague();
   const navigationRef = useNavigationContainerRef();
   // The screen showing, for the turn banner, which isn't inside any one.
@@ -86,7 +91,10 @@ export function AppNavigation() {
           <>
             <Stack.Screen name="SignIn" component={LoginScreen} />
             <Stack.Screen name="Register" component={RegisterScreen} />
+            <Stack.Screen name="ForgotPassword" component={ForgotPasswordScreen} />
           </>
+        ) : needsEmail ? (
+          <Stack.Screen name="AddEmail" component={AddEmailScreen} />
         ) : !league ? (
           <Stack.Screen name="ChooseLeague" component={LeagueSelectScreen} />
         ) : (
@@ -111,7 +119,7 @@ export function AppNavigation() {
           </>
         )}
       </Stack.Navigator>
-      {status === 'signedIn' && league ? (
+      {status === 'signedIn' && league && !needsEmail ? (
         <TurnBanner
           routeName={routeName}
           overTabs={TAB_ROUTES.includes(routeName)}

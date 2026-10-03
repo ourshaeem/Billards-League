@@ -25,6 +25,16 @@ function timeAgo(seconds) {
 }
 
 /**
+ * "±16 points" - or, when the loser stopped at the floor of 0 and lost
+ * less, "+16 / −3 points", or just "+16 points" if they lost nothing.
+ */
+function pointsMoved(gain, loss) {
+  if (loss === gain) return `±${gain} points`;
+  if (!loss) return `+${gain} points`;
+  return `+${gain} / −${loss} points`;
+}
+
+/**
  * When the entry carries a "result", it's told from one player's side:
  * yours by default ("You won"), or `subject`'s when the list is another
  * player's games ("alice won").
@@ -34,6 +44,8 @@ export function GameRow({ match, league, currentUserId, last = false, subject = 
   const { winner, loser, winner_score: won, loser_score: lost, result } = match;
   const hasScore = typeof won === 'number' && typeof lost === 'number';
   const change = match.elo_change;
+  // A loser at the floor of 0 loses less than the winner gains.
+  const lossChange = match.loser_elo_change ?? change;
 
   return (
     <View style={[styles.row, !last && { borderBottomWidth: 1, borderBottomColor: theme.lineSoft }]}>
@@ -78,10 +90,18 @@ export function GameRow({ match, league, currentUserId, last = false, subject = 
             ]}
           >
             {subject ?? 'You'} {result === 'won' ? 'won' : 'lost'}
-            {typeof change === 'number' ? ` ${result === 'won' ? '+' : '−'}${change}` : ''}
+            {typeof change === 'number'
+              ? result === 'won'
+                ? ` +${change}`
+                : lossChange
+                  ? ` −${lossChange}`
+                  : ''
+              : ''}
           </Text>
         ) : typeof change === 'number' ? (
-          <Text style={[styles.metaText, { color: theme.textMuted }]}>±{change} points</Text>
+          <Text style={[styles.metaText, { color: theme.textMuted }]}>
+            {pointsMoved(change, lossChange)}
+          </Text>
         ) : null}
         <Text style={[styles.metaText, { color: theme.textMuted }]}>{timeAgo(match.seconds_ago)}</Text>
       </View>

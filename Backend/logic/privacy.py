@@ -11,7 +11,7 @@ so a personal address never has to be committed to the repository.
 import os
 from html import escape
 
-LAST_UPDATED = "2 October 2026"
+LAST_UPDATED = "3 October 2026"
 
 
 def privacy_policy_html():
@@ -61,9 +61,12 @@ stores about you, who can see it, and how to delete it.</p>
 
 <h2>What we store</h2>
 <ul>
-  <li><strong>Your account:</strong> your username, first and last name, and your
-  password. The password is stored only as a one-way hash (bcrypt), so nobody -
-  including us - can read it.</li>
+  <li><strong>Your account:</strong> your username, first and last name, email
+  address and password. The password is stored only as a one-way hash (bcrypt), so
+  nobody - including us - can read it.</li>
+  <li><strong>Password resets:</strong> when you ask to reset your password, a
+  short-lived code, kept only as a one-way hash and deleted once used or after 15
+  minutes.</li>
   <li><strong>Your profile, if you add one:</strong> a country flag and a profile
   picture - either a link to a picture, or a photo you upload from your phone or
   computer. An uploaded photo is cropped, shrunk and saved again before we store it,
@@ -83,20 +86,24 @@ choose a profile picture, and only the one photo you pick is uploaded.</p>
 <p>Other players can see your username, flag and profile picture, your ranks,
 ratings and win-loss records, your place in a queue, and the games you've played -
 including your record against each player. That is how the league works. Your first
-and last name and your password are never shown to other players.</p>
+and last name, your email address and your password are never shown to other
+players.</p>
 <p>A profile picture you give as a link is loaded from that web address, so whoever
 hosts that image can see when it's viewed. A photo you upload is served from our
 own server.</p>
 
 <h2>How we use it</h2>
 <p>Only to run the league: signing you in, queueing and matching players,
-recording scores and keeping the ladders. We don't sell your information or share
-it with advertisers.</p>
+recording scores and keeping the ladders. Your email address is used to sign in and
+to send you a code when you ask to reset your password - nothing else: no
+newsletters or marketing. We don't sell your information or share it with
+advertisers.</p>
 
 <h2>Where it's kept</h2>
 <p>Our database is hosted by Amazon Web Services and our server by Render, both in
-the United States. Connections between the app, the server and the database are
-encrypted.</p>
+the United States. Password reset emails are sent through Brevo, an email service,
+which receives the address and the email to deliver it. Connections between the
+app, the server, the database and Brevo are encrypted.</p>
 
 <h2>How long we keep it</h2>
 <p>Until you delete your account. Server logs are kept for a limited time by our
@@ -104,7 +111,7 @@ hosting provider and then deleted.</p>
 
 <h2>Deleting your account</h2>
 <p>In the app, open <strong>Profile</strong>, choose <strong>Delete account</strong>
-and enter your password. This removes your username, name, flag, picture
+and enter your password. This removes your username, name, email, flag, picture
 (deleting a photo you uploaded) and password straight away, takes you out of every queue and off the ladders, and
 signs you out everywhere. Games you played stay in other players' history, shown
 as "Deleted player" with nothing that identifies you. It can't be undone.{ask_by_email}</p>

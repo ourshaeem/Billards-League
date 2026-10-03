@@ -25,7 +25,14 @@ from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from database import configure_app, describe_database, is_production, prepare_database, reset_session
-from logic.auth import login_user, register_user
+from logic.auth import (
+    clean_email,
+    find_player,
+    hash_password,
+    login_user,
+    password_problem,
+    register_user,
+)
 from logic.cancel_match import (
     CANCEL_RESULT_ALREADY_REQUESTED,
     CANCEL_RESULT_CANCELLED,
@@ -54,10 +61,21 @@ from logic.account import (
     DELETE_RESULT_WRONG_PASSWORD,
     delete_account,
 )
+from logic.mailer import MailFailed, MailNotConfigured, mail_configured
+from logic.password_reset import (
+    CODE_LIFETIME_SECONDS,
+    RESET_DONE,
+    RESET_EXPIRED,
+    RESET_TOO_MANY_TRIES,
+    RESET_WRONG_CODE,
+    forget_reset_code,
+    request_reset,
+    reset_password,
+)
 from logic.pictures import MAX_UPLOAD_BYTES, picture_path, save_uploaded_picture, stored_picture
 from logic.privacy import privacy_policy_html
 from logic.seasons import league_standings, reset_league_standings
-from logic.profile import EDITABLE_FIELDS, get_profile, get_public_profile, update_profile
+from logic.profile import EDITABLE_FIELDS, get_profile, get_public_profile, set_email, update_profile
 from logic.tables import default_table_for, list_leagues, table_snapshot
 from models import BILLIARDS, LEAGUE_NAMES, LEAGUE_TYPES, Player, db
 from logic.manage_queue import (
@@ -81,6 +99,7 @@ from logic.manage_queue import (
     view_queue,
 )
 from logic.record_match import (
+    lowered_rating,
     REPORT_RESULT_ALREADY_REPORTED,
     REPORT_RESULT_INVALID_SCORE,
     REPORT_RESULT_NO_OPPONENT,
@@ -237,6 +256,33 @@ def register_commands(app):
             count = reset_league_standings(league)
             click.echo(f"Reset {count} players in the {LEAGUE_NAMES[league]}.")
 
+    @app.cli.command("set-password")
+    @click.argument("username")
+    @click.password_option(
+        prompt="New password for them", confirmation_prompt=True, help="The new password."
+    )
+    def set_password_command(username, password):
+        """
+        Give USERNAME (or the account with that email) a new password - for
+        a player who's forgotten theirs and can't get a reset email: no
+        email on the account, or email isn't set up on the server yet.
+        Tell them the new one and ask them to change it.
+        """
+        with app.app_context():
+            player = find_player(username)
+            if player is None or player.is_deleted:
+                raise click.ClickException(f"There's no account called {username!r}.")
+            problem = password_problem(password)
+            if problem:
+                raise click.ClickException(problem)
+            player.password_hash = hash_password(password)
+            forget_reset_code(player.user_id)
+            db.session.commit()
+            click.echo(
+                f"{player.username}'s password is changed, on "
+                f"{describe_database(app.config['SQLALCHEMY_DATABASE_URI'])}."
+            )
+
     @app.cli.command("void-game")
     @click.argument("match_id", type=int)
     @click.option("--yes", is_flag=True, help="Don't ask for confirmation.")
@@ -268,13 +314,15 @@ def register_commands(app):
                 if game["seconds_ago"] is not None
                 else "at an unknown time"
             )
+            lost = game["loser_elo_change"]
             click.echo(
                 f"Game #{match_id}, {game['league_name']}, {when}: {winner['username']} beat "
                 f"{loser['username']} {score}, moving {change} points.\n"
                 f"  {winner['username']}: {winner['elo']} points, {winner['wins']}-{winner['losses']}"
-                f" -> {winner['elo'] - change} points, {max(0, winner['wins'] - 1)}-{winner['losses']}\n"
+                f" -> {lowered_rating(winner['elo'], change)} points, "
+                f"{max(0, winner['wins'] - 1)}-{winner['losses']}\n"
                 f"  {loser['username']}: {loser['elo']} points, {loser['wins']}-{loser['losses']}"
-                f" -> {loser['elo'] + change} points, {loser['wins']}-{max(0, loser['losses'] - 1)}\n"
+                f" -> {loser['elo'] + lost} points, {loser['wins']}-{max(0, loser['losses'] - 1)}\n"
                 f"On {describe_database(app.config['SQLALCHEMY_DATABASE_URI'])}."
             )
             if not yes:
@@ -303,6 +351,19 @@ def register_commands(app):
 def error(message, status, **extra):
     """The one failure shape: {"message": ..., plus any data keys}."""
     return jsonify({"message": message, **extra}), status
+
+
+def signed_in(user):
+    """
+    The sign-in answer's data, shared by /login and a password reset:
+    {access_token, user_id, username, email}.
+    """
+    return {
+        "access_token": create_access_token(identity=str(user["user_id"])),
+        "user_id": user["user_id"],
+        "username": user["username"],
+        "email": user.get("email"),
+    }
 
 
 def register_jwt_errors(jwt):
@@ -719,6 +780,9 @@ def register_routes(app):
         return jsonify({"message": "You gave up the table. Thanks for playing!"})
 
     # 4. LOGIN (Token Generator)
+    # "username" may also be the account's email: anything with an @ is
+    # looked up as one. email in the answer is null for an account made
+    # before sign-up asked for one - the apps then ask for it.
     @app.route("/login", methods=["POST"])
     def login():
         data = json_body()
@@ -730,20 +794,84 @@ def register_routes(app):
         user = login_user(username, password)
 
         if user:
-            access_token = create_access_token(identity=str(user["user_id"]))
-            return (
-                jsonify(
-                    {
-                        "message": "Login successful",
-                        "access_token": access_token,
-                        "user_id": user["user_id"],
-                        "username": user["username"],
-                    }
-                ),
-                200,
-            )
+            return jsonify({"message": "Login successful", **signed_in(user)}), 200
 
         return error("Invalid credentials", 401)
+
+    # 4b. FORGOT YOUR PASSWORD? (Public)
+    # Step 1: a 6-digit code is emailed to the account with this email.
+    # The answer is the same whether or not one exists, so the form can't
+    # be used to find out who has an account.
+    @app.route("/password/forgot", methods=["POST"])
+    def forgot_password():
+        if not mail_configured():
+            return error(
+                "Resetting a password by email isn't set up yet. Ask the league organiser "
+                "to reset it for you.",
+                503,
+            )
+        email = json_body().get("email")
+        if clean_email(email)[1]:
+            return error(clean_email(email)[1], 400, field="email")
+
+        try:
+            request_reset(email)
+        except (MailNotConfigured, MailFailed):
+            reset_session()
+            return error("Couldn't send the email just now. Please try again in a minute.", 503)
+        except Exception:
+            log.exception("password reset request failed")
+            reset_session()
+            return error("Couldn't send a code just now. Please try again.", 500)
+
+        return jsonify(
+            {
+                "message": (
+                    "If that email belongs to an account, a code is on its way. "
+                    f"It works for {CODE_LIFETIME_SECONDS // 60} minutes - check your spam "
+                    "folder if it doesn't arrive."
+                )
+            }
+        )
+
+    # 4c. RESET THE PASSWORD WITH THE CODE (Public)
+    # Step 2: the emailed code and a new password. Success signs the
+    # player straight in, with the same answer as /login.
+    @app.route("/password/reset", methods=["POST"])
+    def reset_forgotten_password():
+        data = json_body()
+        email, code, password = data.get("email"), data.get("code"), data.get("password")
+        if clean_email(email)[1]:
+            return error(clean_email(email)[1], 400, field="email")
+        problem = password_problem(password)
+        if problem:
+            return error(problem, 400, field="password")
+        if not isinstance(code, (str, int)) or not str(code).strip():
+            return error("Enter the code from the email.", 400, field="code")
+
+        try:
+            outcome, player = reset_password(email, str(code), password)
+        except Exception:
+            log.exception("password reset failed")
+            reset_session()
+            return error("Couldn't reset your password just now. Please try again.", 500)
+
+        if outcome == RESET_DONE:
+            return jsonify(
+                {
+                    "message": "Password changed - you're signed in.",
+                    **signed_in(
+                        {"user_id": player.user_id, "username": player.username, "email": player.email}
+                    ),
+                }
+            )
+        if outcome == RESET_WRONG_CODE:
+            return error("That code isn't right. Check the email and try again.", 400, field="code")
+        if outcome == RESET_EXPIRED:
+            return error("That code has expired. Ask for a new one.", 400, field="code")
+        if outcome == RESET_TOO_MANY_TRIES:
+            return error("Too many wrong tries for that code. Ask for a new one.", 400, field="code")
+        return error("There's no reset code for that email. Ask for one first.", 400, field="code")
 
     # 5. MATCH STATUS (Protected)
     @app.route("/match/status", methods=["GET"])
@@ -1009,6 +1137,28 @@ def register_routes(app):
             return error(ACCOUNT_GONE, 404)
         return jsonify({"message": "Profile saved.", "profile": profile})
 
+    # 6e1. ADD OR CHANGE YOUR EMAIL (Protected)
+    # Body {email, password?}. Adding a first email needs no password;
+    # changing one does - see logic/profile.set_email. A wrong password is
+    # 403 with field "password" (never 401: that would sign the player out).
+    @app.route("/profile/email", methods=["POST"])
+    @jwt_required()
+    def set_my_email():
+        user_id = int(get_jwt_identity())
+        data = json_body()
+        try:
+            problem, profile = set_email(user_id, data.get("email"), data.get("password"))
+        except Exception:
+            log.exception("setting an email failed (user %s)", user_id)
+            reset_session()
+            return error("Couldn't save your email just now. Please try again.", 500)
+
+        if problem:
+            return error(problem["message"], problem.get("status", 400), field=problem["field"])
+        if profile is None:
+            return error(ACCOUNT_GONE, 404)
+        return jsonify({"message": "Email saved.", "profile": profile})
+
     # 6e2. UPLOAD A PROFILE PICTURE (Protected)
     # Body {"image": "<base64>"} - a data: URL is fine too. The server
     # turns it into a small square JPEG with no metadata (see
@@ -1078,6 +1228,9 @@ def register_routes(app):
         return jsonify({"countries": country_list()})
 
     # 7. REGISTER (Public)
+    # An email is required: one account per email is what stops a player
+    # who forgot their password making a second account. A refusal names
+    # its field, so the form can show it there.
     @app.route("/register", methods=["POST"])
     def register():
         data = json_body()
@@ -1086,12 +1239,22 @@ def register_routes(app):
             key in data for key in ["username", "first_name", "last_name", "password"]
         ):
             return error("All fields are required", 400)
+        if "email" not in data:
+            # What an app from before emails were asked for sends.
+            return error(
+                "Signing up needs an email address now. If you don't see an email box, "
+                "update the app.",
+                400,
+                field="email",
+            )
 
-        success, message = register_user(
-            data["username"], data["first_name"], data["last_name"], data["password"]
+        success, message, field = register_user(
+            data["username"], data["first_name"], data["last_name"], data["password"], data["email"]
         )
 
-        return jsonify({"message": message}), 201 if success else 400
+        if success:
+            return jsonify({"message": message}), 201
+        return error(message, 400, **({"field": field} if field else {}))
 
     # 8. HEALTH CHECK (Public)
     @app.route("/health", methods=["GET"])
