@@ -202,6 +202,26 @@ DATABASE_URL="<the live DATABASE_URL>" flask --app app void-game 33
 It shows the game and both players' numbers before and after, asks
 first, and saves a backup to `Backend/backups/`.
 
+### Deleting duplicate or joke accounts
+
+Deletes accounts exactly as if each player had deleted their own: their
+details are wiped, they leave every queue, a table they hold is given
+up, and they drop off both ladders. Games they played stay in everyone
+else's history as "Deleted player", and nobody's points change - to
+undo one of those games as well, use `void-game`. From `Backend/`,
+against the live database (as for a reset), naming each account by its
+exact username or its email:
+
+```bash
+DATABASE_URL="<the live DATABASE_URL>" flask --app app delete-player Parceval "someone@example.com"
+```
+
+It lists each account, how many games it played and whether it's at a
+table, and asks first. A name that matches nobody stops the whole run
+before anything is deleted, and a player in the middle of a game is
+skipped. The list - no names, emails or passwords - is saved to
+`Backend/backups/`. A deleted account can't be brought back.
+
 ### Tests
 
 ```bash

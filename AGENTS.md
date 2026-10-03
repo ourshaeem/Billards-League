@@ -154,6 +154,12 @@ match history and player profiles. Tests: `tests/test_leagues.py`
 `tests/test_match_history.py`, `tests/test_profile.py`, and the
 `ensure_schema` additions in `tests/test_schema.py`.
 
+**Shipped, handed to Backend 1 on 2026-10-03:** `delete-player`, the CLI
+command that deletes duplicate or joke accounts the way deleting your own
+does (`remove_account` in `logic/account.py`) - first used on seven
+accounts on 2026-10-03. Tests: `tests/test_account.py`
+(`OrganiserDeletesPlayers`).
+
 **Shipped, handed to Backend 1 on 2026-10-03:** emails on accounts (sign-up
 needs one, one account per email, sign-in by username or email, adding
 or changing one), "Forgot your password?" by emailed code, the

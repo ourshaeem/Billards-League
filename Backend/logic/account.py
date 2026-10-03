@@ -57,7 +57,24 @@ def delete_account(user_id, password):
         return DELETE_RESULT_NOT_FOUND
     if not password_matches(player, password):
         return DELETE_RESULT_WRONG_PASSWORD
+    return _delete(user_id)
 
+
+def remove_account(user_id):
+    """
+    The organiser deleting an account - a duplicate or a joke one - with
+    no password: exactly what deleting your own does, and nothing more.
+    Run from the CLI (`flask --app app delete-player`), never an endpoint.
+    Returns one of the DELETE_RESULT_* (never WRONG_PASSWORD).
+    """
+    player = db.session.get(Player, user_id)
+    if player is None or player.is_deleted:
+        return DELETE_RESULT_NOT_FOUND
+    return _delete(user_id)
+
+
+def _delete(user_id):
+    """The deletion itself, once it's allowed. Returns a DELETE_RESULT_*."""
     # Out of every queue first, so matchmaking can't pull the player into
     # a new game while the rest of this runs.
     leave_all_queues(user_id)

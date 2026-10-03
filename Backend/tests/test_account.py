@@ -150,6 +150,117 @@ class DeleteAccount(ApiTestCase):
         self.assertNotIn("mysql", res.get_json()["message"])
 
 
+class OrganiserDeletesPlayers(ApiTestCase):
+    """
+    flask --app app delete-player: the organiser removing duplicate or
+    joke accounts, without their passwords - exactly as if each had
+    deleted their own.
+    """
+
+    def setUp(self):
+        super().setUp()
+        import json as _json
+        import tempfile
+
+        self.json = _json
+        self.backups = tempfile.mkdtemp()
+        self.runner = self.app.test_cli_runner()
+        self.dave = self.add_player("dave")
+        db.session.get(Player, self.dave).email = "dave@example.com"
+        db.session.commit()
+
+    def run_command(self, *names, answer=None):
+        args = ["delete-player", *names, "--backup-dir", self.backups]
+        if answer is None:
+            args.append("--yes")
+        return self.runner.invoke(args=args, input=answer)
+
+    def player(self, user_id):
+        db.session.expire_all()
+        return db.session.get(Player, user_id)
+
+    def test_several_at_once_by_username_or_email(self):
+        result = self.run_command("bob", "DAVE@example.com")
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        for user_id in (self.bob, self.dave):
+            self.assertTrue(self.player(user_id).is_deleted)
+            self.assertIsNone(self.player(user_id).email)
+        self.assertFalse(self.player(self.alice).is_deleted, "only the ones named")
+        ladder = [p["username"] for p in self.client.get("/leaderboard").get_json()]
+        self.assertNotIn("bob", ladder)
+
+    def test_their_games_stay_and_nobodys_points_move(self):
+        from logic.record_match import record_match_result
+
+        record_match_result(self.start_match(self.alice, self.bob), self.alice, self.bob, 16)
+        alice_points = self.player(self.alice).elo_rating
+
+        self.run_command("bob")
+
+        self.assertEqual(self.player(self.alice).elo_rating, alice_points)
+        history = self.client.get("/matches/history").get_json()["matches"]
+        self.assertEqual(history[0]["loser"]["username"], "Deleted player")
+
+    def test_a_held_table_is_given_up_and_queues_left(self):
+        self.make_king(self.bob)
+        db.session.add(QueueEntry(user_id=self.dave, table_id=10, queue_position=1))
+        db.session.commit()
+
+        result = self.run_command("bob", "dave")
+
+        self.assertIn("gives it up", result.output)
+        self.assertIsNone(self.active_match(), "the table is free")
+        self.assertEqual(self.queued_user_ids(10), [])
+
+    def test_a_player_mid_game_is_skipped_and_the_rest_go(self):
+        self.start_match(self.alice, self.bob)
+
+        result = self.run_command("bob", "dave")
+
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertIn("SKIPPED bob", result.output)
+        self.assertFalse(self.player(self.bob).is_deleted)
+        self.assertTrue(self.player(self.dave).is_deleted)
+
+    def test_a_username_beats_someone_elses_email(self):
+        """Some usernames are email addresses - and that can be another player's email."""
+        bob = db.session.get(Player, self.bob)
+        bob.username = "dave@example.com"
+        db.session.commit()
+
+        self.run_command("dave@example.com")
+
+        self.assertTrue(self.player(self.bob).is_deleted)
+        self.assertFalse(self.player(self.dave).is_deleted)
+
+    def test_an_unknown_name_deletes_nothing(self):
+        result = self.run_command("bob", "nobody")
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("'nobody'", result.output)
+        self.assertFalse(self.player(self.bob).is_deleted)
+        self.assertEqual(os.listdir(self.backups), [])
+
+    def test_answering_no_deletes_nothing(self):
+        result = self.run_command("bob", answer="n\n")
+
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertFalse(self.player(self.bob).is_deleted)
+        self.assertEqual(os.listdir(self.backups), [])
+
+    def test_the_saved_list_has_nothing_personal(self):
+        self.run_command("dave")
+
+        files = os.listdir(self.backups)
+        with open(os.path.join(self.backups, files[0])) as f:
+            saved = self.json.load(f)
+        entry = saved["players"][0]
+        self.assertEqual(entry["username"], "dave")
+        for personal in ("first_name", "last_name", "email", "password_hash"):
+            self.assertNotIn(personal, entry)
+
+
 class TokensForMissingAccounts(ApiTestCase):
     def test_a_token_for_an_account_that_never_existed_is_refused(self):
         self.login_as(9999)

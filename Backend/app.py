@@ -60,6 +60,7 @@ from logic.account import (
     DELETE_RESULT_IN_GAME,
     DELETE_RESULT_WRONG_PASSWORD,
     delete_account,
+    remove_account,
 )
 from logic.mailer import MailFailed, MailNotConfigured, mail_configured
 from logic.password_reset import (
@@ -77,7 +78,7 @@ from logic.privacy import privacy_policy_html
 from logic.seasons import league_standings, reset_league_standings
 from logic.profile import EDITABLE_FIELDS, get_profile, get_public_profile, set_email, update_profile
 from logic.tables import default_table_for, list_leagues, table_snapshot
-from models import BILLIARDS, LEAGUE_NAMES, LEAGUE_TYPES, Player, db
+from models import BILLIARDS, LEAGUE_NAMES, LEAGUE_TYPES, Match, Player, db
 from logic.manage_queue import (
     CONFIRM_RESULT_ALREADY_CONFIRMED,
     CONFIRM_RESULT_CONFIRMED,
@@ -283,6 +284,69 @@ def register_commands(app):
                 f"{describe_database(app.config['SQLALCHEMY_DATABASE_URI'])}."
             )
 
+    @app.cli.command("delete-player")
+    @click.argument("usernames", nargs=-1, required=True)
+    @click.option("--yes", is_flag=True, help="Don't ask for confirmation.")
+    @click.option(
+        "--backup-dir",
+        default="backups",
+        show_default=True,
+        help="Where to save a list of what was removed first.",
+    )
+    def delete_player_command(usernames, yes, backup_dir):
+        """
+        Delete the accounts USERNAMES (exact usernames, or emails) - for
+        the organiser removing duplicate or joke accounts. Each goes
+        exactly as if they'd deleted it themselves: their details wiped,
+        out of every queue, a table they hold given up, off the ladders.
+        Games they played stay in other players' history as "Deleted
+        player", and nobody's points change. A player mid-game is skipped:
+        report or cancel the game first. A list of what was removed - no
+        personal details - is saved to --backup-dir first.
+        """
+        with app.app_context():
+            players, unknown = [], []
+            for name in usernames:
+                # The exact username first: some usernames are email
+                # addresses, and someone else could have that as their email.
+                player = db.session.scalars(
+                    db.select(Player).where(Player.username == name.strip())
+                ).first() or find_player(name)
+                if player is None or player.is_deleted:
+                    unknown.append(name)
+                elif player.user_id not in {p.user_id for p in players}:
+                    players.append(player)
+            if unknown:
+                raise click.ClickException(
+                    "No such account (nothing was deleted): " + ", ".join(repr(n) for n in unknown)
+                )
+
+            summary = [_player_summary(player) for player in players]
+            click.echo(
+                f"Deleting {len(players)} account(s) on "
+                f"{describe_database(app.config['SQLALCHEMY_DATABASE_URI'])}:"
+            )
+            for line in summary:
+                click.echo(f"  #{line['user_id']} {line['username']}: {line['note']}")
+            if not yes:
+                click.confirm("Delete these accounts?", abort=True)
+
+            os.makedirs(backup_dir, exist_ok=True)
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            backup_path = os.path.join(backup_dir, f"deleted-players-{stamp}.json")
+            with open(backup_path, "w") as f:
+                json.dump({"deleted_at": stamp, "players": summary}, f, indent=2)
+            click.echo(f"Saved the list to {backup_path}")
+
+            for line in summary:
+                outcome = remove_account(line["user_id"])
+                if outcome == DELETE_RESULT_DELETED:
+                    click.echo(f"  deleted {line['username']}")
+                elif outcome == DELETE_RESULT_IN_GAME:
+                    click.echo(f"  SKIPPED {line['username']}: in a game - report or cancel it first")
+                else:
+                    click.echo(f"  SKIPPED {line['username']}: already gone")
+
     @app.cli.command("void-game")
     @click.argument("match_id", type=int)
     @click.option("--yes", is_flag=True, help="Don't ask for confirmation.")
@@ -351,6 +415,42 @@ def register_commands(app):
 def error(message, status, **extra):
     """The one failure shape: {"message": ..., plus any data keys}."""
     return jsonify({"message": message, **extra}), status
+
+
+def _player_summary(player):
+    """
+    What delete-player shows, and keeps in its backup, about an account:
+    who it was on the ladder, nothing personal (no names, email, password).
+    """
+    games = db.session.scalar(
+        db.select(db.func.count())
+        .select_from(Match)
+        .where(
+            Match.match_status == Match.STATUS_FINISHED,
+            db.or_(Match.winner_id == player.user_id, Match.loser_id == player.user_id),
+        )
+    )
+    at_table = db.session.scalars(
+        db.select(Match).where(
+            Match.match_status == Match.STATUS_ACTIVE,
+            db.or_(Match.player_one_id == player.user_id, Match.player_two_id == player.user_id),
+        )
+    ).first()
+    notes = [f"{games} game(s) played, kept as \"Deleted player\"" if games else "no games"]
+    if at_table is not None:
+        notes.append(
+            "MID-GAME - will be skipped"
+            if at_table.is_in_progress
+            else f"holding table {at_table.table_id} - gives it up"
+        )
+    return {
+        "user_id": player.user_id,
+        "username": player.username,
+        "country_flag": player.country_flag,
+        "leagues": {league: player.standing(league) for league in LEAGUE_TYPES},
+        "games": games,
+        "note": "; ".join(notes),
+    }
 
 
 def signed_in(user):
