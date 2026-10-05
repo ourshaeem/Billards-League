@@ -204,6 +204,10 @@ ADDED_COLUMNS = [
     ("Players", "email", "VARCHAR(254) NULL"),
     ("Matches", "loser_elo_change", "INTEGER NULL"),
     ("Players", "is_admin", "BOOLEAN NOT NULL DEFAULT 0"),
+    ("Players", "billiards_featured_badge", "VARCHAR(40) NULL"),
+    ("Players", "ping_pong_featured_badge", "VARCHAR(40) NULL"),
+    ("Matches", "winner_elo_before", "INTEGER NULL"),
+    ("Matches", "loser_elo_before", "INTEGER NULL"),
 ]
 
 # The name ping pong's first table is given when ensure_schema creates it.
@@ -236,7 +240,8 @@ def ensure_schema():
       2. Every column in ADDED_COLUMNS exists: the leave-queue timer, each
          table's league, the ping pong ratings, profile flag/picture, the
          ready check's turn times, a game's cancel request, players'
-         emails and what a game's loser actually lost.
+         emails, what a game's loser actually lost, each league's chosen
+         badge, and both players' ratings before each game.
          Players.ping_pong_rank_id also gets its foreign key to Ranks.
       3. An empty Ranks table gets the DEFAULT_RANKS tiers.
       4. Table 1 exists in Pool_Tables. The UI plays on table 1, and Queue
@@ -546,8 +551,26 @@ def prepare_database(app, require_connection=False):
         print(f"[schema] Database: {where}")
         ensure_schema()
         ok = check_schema()
+        _credit_past_games()
         db.session.remove()
     return ok
+
+
+def _credit_past_games():
+    """
+    Award achievements for games played before they existed (or while
+    awarding failed). Later results award their own, so after the first
+    start this finds nothing. Never stops the app starting.
+    """
+    try:
+        from logic.achievements import sync_achievements
+
+        awarded = sync_achievements()
+        if awarded:
+            print(f"[achievements] awarded {awarded} badge(s) from past games")
+    except Exception as e:
+        db.session.rollback()
+        print(f"[achievements] couldn't check past games: {e}")
 
 
 def reset_session():

@@ -10,6 +10,7 @@ import React, { useState } from 'react';
 import { Trophy, Users } from 'lucide-react';
 
 import { RemoveButton, RemoveConfirm } from './AdminControls.jsx';
+import { NameBadge } from './Badges.jsx';
 import { PlayerChip, PlayerLink } from './Player.jsx';
 
 /** Where someone whose turn has come stands: asked, or confirmed. */
@@ -177,6 +178,7 @@ export function LeaderboardCard({ players, loaded, league, currentUsername }) {
                         size="sm"
                         isYou={isYou}
                       />
+                      <NameBadge badge={player.badge} size={20} />
                       <span className="rank-name">{player.rank_name || 'Unranked'}</span>
                     </td>
                     <td className="elo">{player.elo_rating}</td>

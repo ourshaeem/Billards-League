@@ -33,6 +33,12 @@ from logic.auth import (
     password_problem,
     register_user,
 )
+from logic.achievements import (
+    mark_badges_seen,
+    new_badges,
+    player_badges,
+    set_featured_badge,
+)
 from logic.cancel_match import (
     CANCEL_RESULT_ALREADY_REQUESTED,
     CANCEL_RESULT_CANCELLED,
@@ -1437,6 +1443,52 @@ def register_routes(app):
                 return error("This player has deleted their account.", 404)
             return error("That player doesn't exist.", 404)
         return jsonify({"player": profile})
+
+    # 6c2b. A PLAYER'S BADGES IN ONE LEAGUE, EARNED OR NOT (Public)
+    @app.route("/players/<int:user_id>/badges", methods=["GET"])
+    def get_player_badges(user_id):
+        league, bad = read_league(request.args)
+        if bad:
+            return bad
+        badges = player_badges(user_id, league or BILLIARDS)
+        if badges is None:
+            if db.session.get(Player, user_id) is not None:
+                return error("This player has deleted their account.", 404)
+            return error("That player doesn't exist.", 404)
+        return jsonify(badges)
+
+    # 6c2c. CHOOSE THE BADGE A LEAGUE SHOWS BY YOUR NAME (Protected)
+    # {"league_type": ..., "key": "<badge>" or null for automatic}
+    @app.route("/me/featured-badge", methods=["POST"])
+    @jwt_required()
+    def choose_featured_badge():
+        user_id = int(get_jwt_identity())
+        data = json_body()
+        league, bad = read_league(data)
+        if bad:
+            return bad
+        key = data.get("key")
+        if key is not None and not isinstance(key, str):
+            return error("key must be a badge, or null to pick automatically.", 400)
+
+        problem = set_featured_badge(user_id, league or BILLIARDS, key)
+        if problem:
+            return error(problem, 400)
+        return jsonify({"message": "Badge updated.", "featured": key})
+
+    # 6c2d. BADGES EARNED BUT NOT YET ANNOUNCED, IN ANY LEAGUE (Protected)
+    @app.route("/me/badges/new", methods=["GET"])
+    @jwt_required()
+    def get_new_badges():
+        return jsonify({"badges": new_badges(int(get_jwt_identity()))})
+
+    @app.route("/me/badges/seen", methods=["POST"])
+    @jwt_required()
+    def badges_seen():
+        ids = json_body().get("ids")
+        if not isinstance(ids, list):
+            return error("ids must be a list of badge ids.", 400)
+        return jsonify({"marked": mark_badges_seen(int(get_jwt_identity()), ids)})
 
     # 6c3. A PLAYER'S RECORD AGAINST EVERYONE THEY'VE PLAYED (Public)
     @app.route("/players/<int:user_id>/opponents", methods=["GET"])

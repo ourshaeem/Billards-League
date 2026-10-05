@@ -10,6 +10,7 @@ import React, { useState } from 'react';
 import { Crown, Swords } from 'lucide-react';
 
 import { RemoveButton, RemoveConfirm } from './AdminControls.jsx';
+import { NameBadge } from './Badges.jsx';
 import { PlayerChip } from './Player.jsx';
 
 const STATE_LABEL = {
@@ -80,6 +81,7 @@ export function ActiveTableCard({
             label="Holding the table"
             crown
             player={table.king}
+            badge={table.king_badge}
             league={league}
             currentUserId={currentUserId}
             removal={removal(table.king)}
@@ -91,6 +93,7 @@ export function ActiveTableCard({
             <Seat
               label="Challenger"
               player={table.challenger}
+              badge={table.challenger_badge}
               league={league}
               currentUserId={currentUserId}
               align="end"
@@ -122,7 +125,15 @@ export function ActiveTableCard({
 
       {loaded && table?.king_streak >= 2 && (
         <p className="small muted matchup-streak">
-          {table.king.username} has won {table.king_streak} in a row.
+          {table.king.username} has won {table.king_streak} in a row
+          {table.king_streak >= (table.table_record_streak ?? 0)
+            ? ' - the table record.'
+            : `. The table record is ${table.table_record_streak}.`}
+        </p>
+      )}
+      {loaded && !(table?.king_streak >= 2) && table?.table_record_streak >= 2 && (
+        <p className="small muted matchup-streak">
+          Table record: {table.table_record_streak} wins in a row.
         </p>
       )}
 
@@ -135,20 +146,23 @@ export function ActiveTableCard({
   );
 }
 
-function Seat({ label, crown = false, player, league, currentUserId, align = 'start', removal }) {
+function Seat({ label, crown = false, player, badge, league, currentUserId, align = 'start', removal }) {
   return (
     <div className="seat" data-align={align}>
       <span className="seat-label">
         {crown && <Crown size={14} aria-hidden="true" className="seat-crown" />}
         {label}
       </span>
-      <PlayerChip
-        player={player}
-        league={league}
-        size="lg"
-        align={align}
-        isYou={player?.user_id === currentUserId}
-      />
+      <span className="seat-player">
+        <PlayerChip
+          player={player}
+          league={league}
+          size="lg"
+          align={align}
+          isYou={player?.user_id === currentUserId}
+        />
+        <NameBadge badge={badge} size={26} />
+      </span>
       {removal && (
         <RemoveButton
           id={`remove-seat-${player.user_id}`}

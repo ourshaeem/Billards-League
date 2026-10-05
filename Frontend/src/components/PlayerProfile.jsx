@@ -12,6 +12,7 @@ import { ArrowLeft, History, Swords, Users } from 'lucide-react';
 import * as api from '../api.js';
 import { flagEmoji } from '../flags.js';
 import { LEAGUE_ORDER, LEAGUES } from '../leagues.js';
+import { BadgesCard } from './Badges.jsx';
 import { HistoryRow } from './MatchHistory.jsx';
 import { Avatar } from './Player.jsx';
 
@@ -93,6 +94,13 @@ export function PlayerProfile({ userId, league: startLeague, currentUserId, onBa
           </button>
         ))}
       </div>
+
+      <BadgesCard
+        key={`badges-${userId}-${league}`}
+        userId={userId}
+        league={league}
+        title={isYou ? 'Your badges' : `${player.username}'s badges`}
+      />
 
       {/* Keyed so a change of league starts each part over, rather than
           showing one league's numbers under the other's name. */}

@@ -1,13 +1,17 @@
 """The top 50 players by rating, in either league."""
 from sqlalchemy.orm import selectinload
 
+from logic.achievements import featured_badges
 from models import BILLIARDS, PING_PONG, Player, db
 
 
 def top50_leaderboard(league=BILLIARDS):
     """
     Returns the same list of dicts as before, for the given league:
-        [{username, elo_rating, total_wins, total_losses, rank_name}, ...]
+        [{username, elo_rating, total_wins, total_losses, rank_name, badge}, ...]
+
+    badge is the badge the player shows by their name in this league
+    ({key, name, tier}), or None before they've earned one.
 
     Billiards' Player.rank is lazy="joined", so the rank name comes back
     in the same query rather than one extra query per player; ping pong's
@@ -37,4 +41,8 @@ def top50_leaderboard(league=BILLIARDS):
         stmt = stmt.options(selectinload(Player.ping_pong_rank))
 
     players = db.session.scalars(stmt).all()
-    return [player.to_leaderboard_dict(league) for player in players]
+    badges = featured_badges(players, league)
+    return [
+        {**player.to_leaderboard_dict(league), "badge": badges[player.user_id]}
+        for player in players
+    ]
