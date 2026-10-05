@@ -11,6 +11,7 @@ import functools
 import os
 import random
 import time
+from urllib.parse import quote_plus
 
 from sqlalchemy import inspect, text
 from sqlalchemy.exc import DBAPIError
@@ -56,8 +57,10 @@ def get_database_uri():
     if override:
         return override
 
+    # Quoted, so a password containing @, / or # can't be read as part of
+    # the host or database name.
     return (
-        f"mysql+mysqlconnector://{DB_USER}:{DB_PASSWORD}"
+        f"mysql+mysqlconnector://{quote_plus(DB_USER)}:{quote_plus(DB_PASSWORD)}"
         f"@{DB_HOST}:{DB_PORT}/{DB_NAME}"
     )
 

@@ -569,5 +569,97 @@ class FullMatchFlow(ApiTestCase):
         self.assertEqual(self.get("/match/status").get_json()["opponent"], "bob")
 
 
+class TableRoute(ApiTestCase):
+    """GET /table/<id>: who holds the table, and their streak."""
+
+    def play(self, winner, loser):
+        """Queue both if needed, then report a win for `winner`."""
+        for player in (winner, loser):
+            self.login_as(player)
+            self.post("/queue/join", json={"table_id": 1})
+        self.login_as(winner)
+        self.post("/match/record", json={"my_balls": 8, "opp_balls": 3})
+
+    def test_shape(self):
+        res = self.client.get("/table/1")
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(
+            set(res.get_json().keys()),
+            {
+                "table_id",
+                "table_name",
+                "current_king",
+                "current_streak",
+                "table_record_streak",
+                "challenger",
+            },
+            "the React king banner reads exactly these keys",
+        )
+
+    def test_unknown_table_is_404(self):
+        self.assertEqual(self.client.get("/table/99").status_code, 404)
+
+    def test_no_king_before_any_game(self):
+        table = self.client.get("/table/1").get_json()
+        self.assertIsNone(table["current_king"])
+        self.assertEqual(table["current_streak"], 0)
+
+    def test_a_fresh_pairing_has_no_king(self):
+        """The first player off the queue sits in the king's seat, but hasn't won."""
+        for player in (self.alice, self.bob):
+            self.login_as(player)
+            self.post("/queue/join", json={"table_id": 1})
+
+        self.assertIsNone(self.client.get("/table/1").get_json()["current_king"])
+
+    def test_winner_is_king_and_streak_grows(self):
+        self.play(self.alice, self.bob)
+        table = self.client.get("/table/1").get_json()
+        self.assertEqual(table["current_king"], "alice")
+        self.assertEqual(table["current_streak"], 1)
+        self.assertIsNone(table["challenger"])
+
+        self.play(self.alice, self.carol)
+        table = self.client.get("/table/1").get_json()
+        self.assertEqual(table["current_streak"], 2)
+        self.assertEqual(table["table_record_streak"], 2)
+
+    def test_challenger_is_shown_mid_game(self):
+        self.play(self.alice, self.bob)
+        self.login_as(self.carol)
+        self.post("/queue/join", json={"table_id": 1})
+
+        table = self.client.get("/table/1").get_json()
+        self.assertEqual(table["current_king"], "alice")
+        self.assertEqual(table["challenger"], "carol")
+
+    def test_record_survives_the_king_losing(self):
+        self.play(self.alice, self.bob)
+        self.play(self.alice, self.carol)
+        self.play(self.bob, self.alice)
+
+        table = self.client.get("/table/1").get_json()
+        self.assertEqual(table["current_king"], "bob")
+        self.assertEqual(table["current_streak"], 1)
+        self.assertEqual(table["table_record_streak"], 2)
+
+    def test_no_king_after_stepping_down(self):
+        self.play(self.alice, self.bob)
+        self.login_as(self.alice)
+        self.post("/table/step-down", json={"table_id": 1})
+
+        table = self.client.get("/table/1").get_json()
+        self.assertIsNone(table["current_king"])
+        self.assertEqual(table["current_streak"], 0)
+
+    def test_stale_cache_without_a_match_shows_no_king(self):
+        """A cached king with no Active match isn't at the table."""
+        table = db.session.get(PoolTable, 1)
+        table.current_king_id, table.current_streak = self.alice, 5
+        db.session.commit()
+
+        self.assertIsNone(self.client.get("/table/1").get_json()["current_king"])
+
+
 if __name__ == "__main__":
     unittest.main()

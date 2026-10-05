@@ -15,12 +15,13 @@
  * checking - rather than guessing "idle" and offering that same button.
  */
 import React, { useEffect, useState } from 'react';
-import { Swords, Users, Clock, Crown, LoaderCircle } from 'lucide-react';
+import { Swords, Users, Clock, Crown, Flame, LoaderCircle } from 'lucide-react';
 
 export function StatusPanel({
   status,
   problem,
   queueLength,
+  kingStreak,
   onJoin,
   onLeave,
   onRecord,
@@ -52,7 +53,12 @@ export function StatusPanel({
         />
       )}
       {state === 'waiting_for_challenger' && (
-        <HoldingTableState queueLength={queueLength} onStepDown={onStepDown} busy={busy} />
+        <HoldingTableState
+          queueLength={queueLength}
+          streak={kingStreak}
+          onStepDown={onStepDown}
+          busy={busy}
+        />
       )}
       {state === 'queued' && (
         <QueuedState status={status} onLeave={onLeave} busy={busy} queueLength={queueLength} />
@@ -181,7 +187,7 @@ function QueuedState({ status, onLeave, busy, queueLength }) {
   );
 }
 
-function HoldingTableState({ queueLength, onStepDown, busy }) {
+function HoldingTableState({ queueLength, streak, onStepDown, busy }) {
   return (
     <>
       <h2 className="status-headline" id="status-headline">
@@ -194,6 +200,12 @@ function HoldingTableState({ queueLength, onStepDown, busy }) {
           : 'You won, so you stay on. Your next challenger is being matched now.'}
       </p>
       <div className="status-actions">
+        {streak > 1 && (
+          <span className="status-meta">
+            <Flame size={16} aria-hidden="true" />
+            {streak} wins in a row
+          </span>
+        )}
         <span className="status-meta">
           <Users size={16} aria-hidden="true" />
           {queueLength} waiting to challenge you

@@ -37,6 +37,7 @@ from logic.manage_queue import (
     leave_queue,
     step_down,
     view_queue,
+    view_table,
 )
 from logic.record_match import (
     REPORT_RESULT_ALREADY_REPORTED,
@@ -187,6 +188,14 @@ def register_routes(app):
     @app.route("/queue/<int:table_id>", methods=["GET"])
     def get_queue(table_id):
         return jsonify(view_queue(table_id))
+
+    # 2b. TABLE - king and streaks (Public)
+    @app.route("/table/<int:table_id>", methods=["GET"])
+    def get_table(table_id):
+        table = view_table(table_id)
+        if table is None:
+            return error("That table doesn't exist.", 404)
+        return jsonify(table)
 
     # 3. JOIN QUEUE (Protected)
     @app.route("/queue/join", methods=["POST"])

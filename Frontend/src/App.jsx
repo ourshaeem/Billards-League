@@ -12,7 +12,7 @@ import * as api from './api.js';
 import { ToastStack, ConnectionBanner } from './components/Feedback.jsx';
 import { LoginScreen, RegisterScreen } from './components/AuthScreens.jsx';
 import { StatusPanel } from './components/StatusPanel.jsx';
-import { QueueCard, LeaderboardCard } from './components/Panels.jsx';
+import { QueueCard, LeaderboardCard, KingBanner } from './components/Panels.jsx';
 
 const TABLE_ID = 1;
 const POLL_INTERVAL_MS = 2500;
@@ -25,6 +25,8 @@ export default function App() {
 
   const [queue, setQueue] = useState([]);
   const [leaderboard, setLeaderboard] = useState([]);
+  // Who holds the table and their streak. null until the first answer.
+  const [table, setTable] = useState(null);
   // null until the server has answered. Starting at 'idle' flashed a Join
   // button at people who were actually mid-game or holding the table.
   const [matchStatus, setMatchStatus] = useState(null);
@@ -84,9 +86,10 @@ export default function App() {
 
   const refresh = useCallback(
     async (signal) => {
-      const [queueRes, boardRes] = await Promise.all([
+      const [queueRes, boardRes, tableRes] = await Promise.all([
         api.getQueue(TABLE_ID, signal),
         api.getLeaderboard(signal),
+        api.getTable(TABLE_ID, signal),
       ]);
 
       if (signal?.aborted) return;
@@ -105,6 +108,9 @@ export default function App() {
       if (boardRes.ok) {
         setLeaderboard(Array.isArray(boardRes.data) ? boardRes.data : []);
         setLoaded((l) => (l.leaderboard ? l : { ...l, leaderboard: true }));
+      }
+      if (tableRes.ok && tableRes.data) {
+        setTable(tableRes.data);
       }
 
       if (!api.getToken()) return;
@@ -320,12 +326,15 @@ export default function App() {
             status={matchStatus}
             problem={statusProblem}
             queueLength={queue.length}
+            kingStreak={table?.current_streak ?? 0}
             onJoin={handleJoin}
             onLeave={handleLeave}
             onRecord={handleRecord}
             onStepDown={handleStepDown}
             busy={busy}
           />
+
+          <KingBanner table={table} currentUsername={user.username} />
 
           <div className="grid">
             <QueueCard queue={queue} loaded={loaded.queue} currentUsername={user.username} />

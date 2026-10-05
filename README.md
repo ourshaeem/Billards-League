@@ -17,8 +17,13 @@ pip install -r requirements.txt
 
 cp .env.example .env      # then edit .env with your database password
 
+python setup_db.py        # first time on a new machine only
 python app.py             # http://localhost:5000
 ```
+
+`setup_db.py` creates the `ranked_billards` database, its tables, the
+rank tiers and Table 1. It's safe to re-run: on a machine that already
+has the database it changes nothing.
 
 There is no SQL to run by hand. On startup `ensure_schema()` (in
 `Backend/database.py`) brings an existing database up to date, and
@@ -55,6 +60,13 @@ on the same wifi, where `localhost` means the phone itself), create
 ```
 VITE_API_BASE=http://192.168.1.50:5000
 ```
+
+**On a Mac, if the app says "Can't reach the server"** while the backend
+is clearly running: macOS's AirPlay Receiver also listens on port 5000
+and answers the browser instead. Either turn it off (System Settings →
+General → AirDrop & Handoff → AirPlay Receiver), or move the backend by
+setting `PORT=5001` in `Backend/.env` and
+`VITE_API_BASE=http://127.0.0.1:5001` in `Frontend/.env`.
 
 ### Tests
 

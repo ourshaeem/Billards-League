@@ -533,3 +533,18 @@ def view_queue(table_id):
 def get_pool_table(table_id):
     """The PoolTable row, or None if the venue hasn't registered it."""
     return db.session.get(PoolTable, table_id)
+
+
+def view_table(table_id):
+    """
+    Who holds the table and their streak, or None for an unknown table:
+        {table_id, table_name, current_king, current_streak,
+         table_record_streak, challenger}
+
+    Display only, like the cache it reads. See PoolTable.to_dict for why
+    the king is checked against the Active match.
+    """
+    table = get_pool_table(table_id)
+    if table is None:
+        return None
+    return table.to_dict(_active_match_for_table(table_id))

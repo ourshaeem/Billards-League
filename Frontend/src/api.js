@@ -206,6 +206,9 @@ export const getLeaderboard = (signal) => request('/leaderboard', { signal });
 
 export const getQueue = (tableId = 1, signal) => request(`/queue/${tableId}`, { signal });
 
+/** Who holds the table, their win streak, and the table's record streak. */
+export const getTable = (tableId = 1, signal) => request(`/table/${tableId}`, { signal });
+
 export const checkHealth = (signal) => request('/health', { signal });
 
 // --- Auth ---

@@ -144,13 +144,31 @@ class PoolTable(db.Model):
 
     current_king = db.relationship("Player", foreign_keys=[current_king_id], lazy="joined")
 
-    def to_dict(self):
+    def to_dict(self, active_match=None):
+        """
+        The /table/<table_id> payload.
+
+        `active_match` is the table's Active match, which decides whether
+        the cached king is shown. The cache only says who won last; the
+        match says who is actually at the table. They disagree after a
+        fresh pairing from the queue (the first player off the queue sits
+        in the king's seat but hasn't won anything) or with leftovers from
+        an old row - and then nobody is shown as king, rather than a
+        player who isn't there.
+        """
+        holds_table = (
+            active_match is not None
+            and self.current_king_id is not None
+            and active_match.player_one_id == self.current_king_id
+        )
+        challenger = active_match.player_two if holds_table else None
         return {
             "table_id": self.table_id,
             "table_name": self.table_name,
-            "current_king": self.current_king.username if self.current_king else None,
-            "current_streak": self.current_streak or 0,
+            "current_king": self.current_king.username if holds_table else None,
+            "current_streak": (self.current_streak or 0) if holds_table else 0,
             "table_record_streak": self.table_record_streak or 0,
+            "challenger": challenger.username if challenger else None,
         }
 
     def __repr__(self):

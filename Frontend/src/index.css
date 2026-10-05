@@ -475,6 +475,75 @@ p {
   white-space: nowrap;
 }
 
+/* --- King banner --- */
+
+.king-banner {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+  padding: 16px 22px;
+}
+
+.king-crown {
+  flex: none;
+  color: var(--accent);
+}
+
+.king-crown[data-empty='true'] {
+  color: var(--gray-300);
+}
+
+.king-main {
+  flex: 1 1 200px;
+  min-width: 0;
+}
+
+.king-name {
+  font-size: var(--step-1);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.king-name-empty {
+  color: var(--text-muted);
+}
+
+.king-label {
+  margin-left: 8px;
+  font-size: var(--step--1);
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.king-stats {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.streak-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--step--1);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  padding: 4px 12px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--purple-700);
+  white-space: nowrap;
+}
+
+/* Matching or beating the table record gets the solid treatment. */
+.streak-pill[data-record='true'] {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
 /* --- Queue list --- */
 
 .queue-row {
@@ -861,5 +930,9 @@ input[aria-invalid='true'] {
 
   .status-actions .btn {
     flex: 1 1 auto;
+  }
+
+  .king-stats {
+    align-items: flex-start;
   }
 }
