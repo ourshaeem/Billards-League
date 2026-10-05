@@ -134,6 +134,7 @@ def ensure_schema():
     ever adds - no column or table is dropped.
 
     Steps:
+      0. New tables (Player_Achievements) and Players.featured_badge exist.
       1. Queue.joined_at exists (powers the leave-queue timer).
       2. Table 1 exists in Pool_Tables. The UI plays on table 1, and Queue
          and Matches both have foreign keys to it, so without the row
@@ -239,6 +240,23 @@ def ensure_schema():
                     added.append(index.name)
         return f"added index(es) {', '.join(added)}" if added else None
 
+    def add_new_tables():
+        # create_all only creates tables that don't exist yet; it never
+        # alters or drops one that does.
+        before = set(inspect(db.engine).get_table_names())
+        db.create_all()
+        added = sorted(set(inspect(db.engine).get_table_names()) - before)
+        return f"added table(s) {', '.join(added)}" if added else None
+
+    def add_featured_badge():
+        columns = {c["name"] for c in inspect(db.engine).get_columns("Players")}
+        if "featured_badge" in columns:
+            return None
+        db.session.execute(text("ALTER TABLE Players ADD COLUMN featured_badge VARCHAR(40) NULL"))
+        return "added Players.featured_badge"
+
+    step("New tables", add_new_tables)
+    step("Featured badge column", add_featured_badge)
     step("Queue timer column", add_joined_at)
     step("Table 1", add_table_one)
     step("Old match rows", convert_legacy_matches)

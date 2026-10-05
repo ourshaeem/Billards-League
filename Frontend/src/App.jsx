@@ -13,6 +13,7 @@ import { ToastStack, ConnectionBanner } from './components/Feedback.jsx';
 import { LoginScreen, RegisterScreen } from './components/AuthScreens.jsx';
 import { StatusPanel } from './components/StatusPanel.jsx';
 import { QueueCard, LeaderboardCard, KingBanner } from './components/Panels.jsx';
+import { BadgesCard } from './components/Badges.jsx';
 
 const TABLE_ID = 1;
 const POLL_INTERVAL_MS = 2500;
@@ -27,6 +28,8 @@ export default function App() {
   const [leaderboard, setLeaderboard] = useState([]);
   // Who holds the table and their streak. null until the first answer.
   const [table, setTable] = useState(null);
+  // The signed-in player's badges: null until loaded.
+  const [badges, setBadges] = useState(null);
   // null until the server has answered. Starting at 'idle' flashed a Join
   // button at people who were actually mid-game or holding the table.
   const [matchStatus, setMatchStatus] = useState(null);
@@ -38,6 +41,10 @@ export default function App() {
   const [offline, setOffline] = useState(false);
   const [busy, setBusy] = useState(false);
   const [toasts, setToasts] = useState([]);
+
+  // Badge keys already announced, so a slow "mark seen" can't make the
+  // next poll announce them twice.
+  const announcedBadgesRef = useRef(new Set());
 
   // Remembers the last match id we announced, so "match found" fires once
   // rather than on every poll for as long as the match is running.
@@ -63,6 +70,8 @@ export default function App() {
   const signOut = useCallback(() => {
     api.clearSession();
     setUser(null);
+    setBadges(null);
+    announcedBadgesRef.current = new Set();
     setMatchStatus(null);
     setStatusProblem(null);
     announcedMatchRef.current = null;
@@ -83,6 +92,47 @@ export default function App() {
   }, [pushToast]);
 
   // --- Polling ---------------------------------------------------------
+
+  const username = user?.username;
+  const loadBadges = useCallback(async () => {
+    if (!username) return;
+    const res = await api.getPlayerBadges(username);
+    if (res.ok && res.data) setBadges(res.data);
+  }, [username]);
+
+  // First load at sign-in; cancelled if they sign out before it lands.
+  useEffect(() => {
+    if (!username) return undefined;
+    const controller = new AbortController();
+    api.getPlayerBadges(username, controller.signal).then((res) => {
+      if (res.ok && res.data) setBadges(res.data);
+    });
+    return () => controller.abort();
+  }, [username]);
+
+  // Announce newly earned badges once each, then tell the server.
+  const announceBadges = useCallback(
+    async (signal) => {
+      const res = await api.getNewBadges(signal);
+      if (!res.ok || signal?.aborted) return;
+      const fresh = (res.data?.badges || []).filter(
+        (b) => !announcedBadgesRef.current.has(b.key),
+      );
+      if (fresh.length === 0) return;
+
+      fresh.forEach((b) => announcedBadgesRef.current.add(b.key));
+      // A pile of badges at once (credit for past games, say) gets one
+      // message instead of a wall of them.
+      if (fresh.length > 3) {
+        pushToast(`You unlocked ${fresh.length} badges. See them below.`, 'success');
+      } else {
+        fresh.forEach((b) => pushToast(`Badge unlocked: ${b.name}`, 'success'));
+      }
+      await api.markBadgesSeen(fresh.map((b) => b.key));
+      loadBadges();
+    },
+    [pushToast, loadBadges],
+  );
 
   const refresh = useCallback(
     async (signal) => {
@@ -124,6 +174,8 @@ export default function App() {
         return;
       }
 
+      announceBadges(signal);
+
       const next = statusRes.data || { status: 'idle' };
       setStatusProblem(null);
       setMatchStatus(next);
@@ -134,10 +186,13 @@ export default function App() {
         pushToast(`Match on: you're playing ${next.opponent}.`, 'success');
       }
       if (next.status !== 'playing') {
+        // A game just ended (either player reported it): progress bars
+        // have moved even if no badge unlocked.
+        if (announcedMatchRef.current !== null) loadBadges();
         announcedMatchRef.current = null;
       }
     },
-    [pushToast],
+    [pushToast, announceBadges, loadBadges],
   );
 
   useEffect(() => {
@@ -285,6 +340,23 @@ export default function App() {
 
     announcedMatchRef.current = null;
     refresh();
+    loadBadges();
+  };
+
+  const handleFeature = async (key) => {
+    setBusy(true);
+    const res = await api.setFeaturedBadge(key);
+    setBusy(false);
+
+    if (!res.ok) {
+      pushToast(res.message, 'error');
+      return;
+    }
+
+    const name = key && badges ? badges.badges.find((b) => b.key === key)?.name : null;
+    pushToast(name ? `${name} now shows next to your name.` : 'Your best badge will show automatically.', 'success');
+    loadBadges();
+    refresh();
   };
 
   // --- Render ----------------------------------------------------------
@@ -344,6 +416,13 @@ export default function App() {
               currentUsername={user.username}
             />
           </div>
+
+          <BadgesCard
+            data={badges}
+            loaded={badges !== null}
+            onFeature={handleFeature}
+            busy={busy}
+          />
         </main>
       )}
 

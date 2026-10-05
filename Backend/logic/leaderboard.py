@@ -1,11 +1,15 @@
 """The top 50 players by rating."""
+from logic.achievements import featured_badges
 from models import Player, db
 
 
 def top50_leaderboard():
     """
     Returns the same list of dicts as before:
-        [{username, elo_rating, total_wins, total_losses, rank_name}, ...]
+        [{username, elo_rating, total_wins, total_losses, rank_name, badge}, ...]
+
+    `badge` is the player's featured badge ({key, name, tier}), or None
+    before they've earned one.
 
     Player.rank is lazy="joined", so the rank name comes back in the same
     query rather than one extra query per player. The relationship is
@@ -23,4 +27,5 @@ def top50_leaderboard():
         .order_by(Player.elo_rating.desc(), Player.total_wins.desc(), Player.username)
         .limit(50)
     ).all()
-    return [player.to_leaderboard_dict() for player in players]
+    badges = featured_badges(players)
+    return [{**player.to_leaderboard_dict(), "badge": badges[player.user_id]} for player in players]

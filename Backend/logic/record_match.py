@@ -8,6 +8,7 @@ Sequence when a score is reported:
   4. Matchmaking runs, pulling the next person off the queue if anyone
      is waiting.
   5. Pool_Tables' display cache (king, streaks) is refreshed.
+  6. Achievements are awarded.
 
 Steps 1-3 happen in one transaction. If anything fails, none of it lands,
 so a match can never be half-recorded with one player's ELO moved.
@@ -16,6 +17,7 @@ import logging
 
 from database import retry_on_deadlock
 from models import STARTING_ELO, Match, PoolTable, Player, Rank, db
+from logic.achievements import sync_achievements
 from logic.manage_queue import attempt_matchmaking, lock_active_match_for_player
 
 log = logging.getLogger(__name__)
@@ -193,6 +195,12 @@ def record_match_result(match, winner_id, loser_id, elo_change, winner_balls=Non
         refresh_table_state(match.table_id, winner_id)
     except Exception:
         log.exception("could not refresh the Pool_Tables cache (table %s)", match.table_id)
+
+    # 6. Badges. Like the cache, never allowed to undo a recorded result.
+    try:
+        sync_achievements()
+    except Exception:
+        log.exception("result saved, but awarding achievements failed (match %s)", match.match_id)
 
 
 def start_new_session(table_id):

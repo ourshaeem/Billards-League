@@ -14,6 +14,7 @@ from sqlalchemy import func, text
 from sqlalchemy.exc import IntegrityError
 
 from database import retry_on_deadlock
+from logic.achievements import PATIENCE_WAIT_SECONDS, award, featured_badges
 from models import Match, PoolTable, QueueEntry, db
 
 log = logging.getLogger(__name__)
@@ -334,9 +335,11 @@ def attempt_matchmaking(table_id):
                 return False
 
             challenger = waiting[0]
+            patient = _waited_long([challenger])
             active.player_two_id = challenger.user_id
             db.session.delete(challenger)
             db.session.commit()
+            _award_patience(patient)
             return True
 
         # --- Case 2: free table, pair the first two waiting ---
@@ -345,6 +348,7 @@ def attempt_matchmaking(table_id):
             return False
 
         first, second = waiting[0], waiting[1]
+        patient = _waited_long([first, second])
         match = Match(
             table_id=table_id,
             player_one_id=first.user_id,
@@ -355,11 +359,42 @@ def attempt_matchmaking(table_id):
         db.session.delete(first)
         db.session.delete(second)
         db.session.commit()
+        _award_patience(patient)
         return True
 
     except Exception:
         db.session.rollback()
         raise
+
+
+def _waited_long(entries):
+    """
+    Which of these players waited long enough in the queue to earn
+    Patience. Read before their queue rows are deleted, since the wait is
+    only recorded there. Measured by the database's clock - see
+    get_queue_status for why.
+    """
+    ids = [e.queue_id for e in entries]
+    try:
+        rows = db.session.execute(
+            db.select(QueueEntry.user_id, _seconds_since(QueueEntry.joined_at)).where(
+                QueueEntry.queue_id.in_(ids)
+            )
+        ).all()
+    except Exception:
+        # A badge isn't worth failing a match over.
+        log.exception("could not read queue waits for patience")
+        return []
+    return [uid for uid, seconds in rows if seconds is not None and seconds >= PATIENCE_WAIT_SECONDS]
+
+
+def _award_patience(user_ids):
+    # After the match is committed, and never allowed to undo it.
+    for uid in user_ids:
+        try:
+            award(uid, "patience")
+        except Exception:
+            log.exception("could not award patience (user %s)", uid)
 
 
 def _eligible_queue(table_id):
@@ -491,6 +526,11 @@ def step_down(user_id):
         db.session.rollback()
         raise
 
+    try:
+        award(user_id, "abdication")
+    except Exception:
+        log.exception("could not award abdication (user %s)", user_id)
+
     # The table is free now; the first two waiting (if any) can play.
     try:
         attempt_matchmaking(table_id)
@@ -539,7 +579,7 @@ def view_table(table_id):
     """
     Who holds the table and their streak, or None for an unknown table:
         {table_id, table_name, current_king, current_streak,
-         table_record_streak, challenger}
+         table_record_streak, challenger, current_king_badge}
 
     Display only, like the cache it reads. See PoolTable.to_dict for why
     the king is checked against the Active match.
@@ -547,4 +587,7 @@ def view_table(table_id):
     table = get_pool_table(table_id)
     if table is None:
         return None
-    return table.to_dict(_active_match_for_table(table_id))
+    result = table.to_dict(_active_match_for_table(table_id))
+    king = table.current_king if result["current_king"] else None
+    result["current_king_badge"] = featured_badges([king])[king.user_id] if king else None
+    return result

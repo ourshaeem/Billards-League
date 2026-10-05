@@ -22,6 +22,13 @@ from flask_jwt_extended import (
 from werkzeug.exceptions import HTTPException
 
 from database import check_schema, configure_app, ensure_schema, reset_session
+from logic.achievements import (
+    mark_badges_seen,
+    new_badges,
+    player_badges,
+    set_featured_badge,
+    sync_achievements,
+)
 from logic.auth import login_user, register_user
 from logic.leaderboard import top50_leaderboard
 from logic.manage_queue import (
@@ -196,6 +203,42 @@ def register_routes(app):
         if table is None:
             return error("That table doesn't exist.", 404)
         return jsonify(table)
+
+    # 2c. BADGES - every badge for one player, earned or not (Public)
+    @app.route("/players/<username>/badges", methods=["GET"])
+    def get_player_badges(username):
+        badges = player_badges(username)
+        if badges is None:
+            return error("That player doesn't exist.", 404)
+        return jsonify(badges)
+
+    # 2d. FEATURED BADGE - choose the badge shown by your name (Protected)
+    @app.route("/me/featured-badge", methods=["POST"])
+    @jwt_required()
+    def choose_featured_badge():
+        user_id = int(get_jwt_identity())
+        key = json_body().get("key")
+        if key is not None and not isinstance(key, str):
+            return error("key must be a badge key, or null for automatic.", 400)
+
+        problem = set_featured_badge(user_id, key)
+        if problem:
+            return error(problem, 400)
+        return jsonify({"message": "Badge updated.", "featured": key})
+
+    # 2e. NEW BADGES - earned but not yet announced (Protected)
+    @app.route("/me/badges/new", methods=["GET"])
+    @jwt_required()
+    def get_new_badges():
+        return jsonify({"badges": new_badges(int(get_jwt_identity()))})
+
+    @app.route("/me/badges/seen", methods=["POST"])
+    @jwt_required()
+    def badges_seen():
+        keys = json_body().get("keys")
+        if not isinstance(keys, list):
+            return error("keys must be a list of badge keys.", 400)
+        return jsonify({"marked": mark_badges_seen(int(get_jwt_identity()), keys)})
 
     # 3. JOIN QUEUE (Protected)
     @app.route("/queue/join", methods=["POST"])
@@ -439,6 +482,14 @@ if __name__ == "__main__":
     with app.app_context():
         ensure_schema()
         check_schema()
+        # Credit for games played before achievements existed. Later
+        # results award their own, so this only ever finds the backlog.
+        try:
+            awarded = sync_achievements()
+            if awarded:
+                print(f"[achievements] awarded {awarded} badge(s) from past games")
+        except Exception as e:
+            print(f"[achievements] couldn't check past games: {e}")
 
     debug_mode = os.environ.get("FLASK_DEBUG", "1") == "1"
     app.run(debug=debug_mode, port=int(os.environ.get("PORT", 5000)))

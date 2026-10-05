@@ -10,6 +10,7 @@
  */
 import React from 'react';
 import { Crown, Flame, Trophy, Users } from 'lucide-react';
+import { NameBadge } from './Badges.jsx';
 
 export function KingBanner({ table, currentUsername }) {
   // Nothing to say until the first answer, and a one-line card that
@@ -35,6 +36,7 @@ export function KingBanner({ table, currentUsername }) {
         {king ? (
           <>
             <p className="king-name">
+              <NameBadge badge={table.current_king_badge} size={26} />
               {king}
               {isYou && <span className="tag-you">you</span>}
               <span className="king-label">holds the table</span>
@@ -159,6 +161,7 @@ export function LeaderboardCard({ players, loaded, currentUsername }) {
                   <tr key={player.username} data-self={isYou ? 'true' : 'false'}>
                     <td>{index + 1}</td>
                     <td>
+                      <NameBadge badge={player.badge} />
                       {player.username}
                       {isYou && <span className="tag-you">you</span>}
                       <span className="rank-name">{player.rank_name || 'Unranked'}</span>

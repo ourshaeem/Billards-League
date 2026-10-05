@@ -246,4 +246,20 @@ export const recordMatch = (myBalls, oppBalls, matchId) =>
 export const stepDown = (tableId = 1) =>
   request('/table/step-down', { method: 'POST', auth: true, body: { table_id: tableId } });
 
+// --- Badges ---
+
+/** Every badge for one player: earned, locked, progress, featured. */
+export const getPlayerBadges = (username, signal) =>
+  request(`/players/${encodeURIComponent(username)}/badges`, { signal });
+
+/** Badges earned since the screen last announced any. */
+export const getNewBadges = (signal) => request('/me/badges/new', { auth: true, signal });
+
+export const markBadgesSeen = (keys) =>
+  request('/me/badges/seen', { method: 'POST', auth: true, body: { keys } });
+
+/** Choose the badge shown by your name; null goes back to automatic. */
+export const setFeaturedBadge = (key) =>
+  request('/me/featured-badge', { method: 'POST', auth: true, body: { key } });
+
 export { API_BASE };

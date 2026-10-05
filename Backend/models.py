@@ -60,6 +60,11 @@ class Player(db.Model):
     rank_id = db.Column(db.Integer, db.ForeignKey("Ranks.rank_id"), nullable=True)
     rank = db.relationship("Rank", back_populates="players", lazy="joined")
 
+    # The badge the player chose to show next to their name, by
+    # achievement key. NULL means "pick my best one automatically".
+    # Added to existing databases by ensure_schema().
+    featured_badge = db.Column(db.String(40), nullable=True)
+
     def to_leaderboard_dict(self):
         """
         Exactly the shape /leaderboard already returns.
@@ -355,3 +360,41 @@ class Match(db.Model):
             f"<Match {self.match_id} table={self.table_id} status={self.match_status} "
             f"p1={self.player_one_id} p2={self.player_two_id} winner={self.winner_id}>"
         )
+
+
+class PlayerAchievement(db.Model):
+    """
+    One achievement one player has earned. A new table, created on
+    startup by ensure_schema().
+
+    Only earned achievements get a row. What each achievement *is* -
+    name, tier, rule - lives in logic/achievements.py, keyed by
+    `achievement_key`, so renaming a badge never needs a migration.
+    """
+
+    __tablename__ = "Player_Achievements"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("Players.user_id"), nullable=False)
+    achievement_key = db.Column(db.String(40), nullable=False)
+
+    # When it was earned: the start time of the match that earned it, or
+    # now for the few earned outside a match (stepping down, say).
+    earned_at = db.Column(
+        db.DateTime, nullable=False, server_default=func.current_timestamp()
+    )
+    # The match that earned it, if one did. No ForeignKey: a king's
+    # waiting row can be deleted, and the badge must outlive it.
+    match_id = db.Column(db.Integer, nullable=True)
+
+    # False until the player's screen has announced it.
+    seen = db.Column(db.Boolean, nullable=False, default=False, server_default="0")
+
+    __table_args__ = (
+        # Each achievement is earned once. Two results recorded at the
+        # same instant can't both award it.
+        db.Index("uq_achievement_user_key", "user_id", "achievement_key", unique=True),
+    )
+
+    def __repr__(self):
+        return f"<PlayerAchievement user={self.user_id} {self.achievement_key}>"

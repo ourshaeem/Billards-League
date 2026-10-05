@@ -47,7 +47,7 @@ class PublicRoutes(ApiTestCase):
         entry = res.get_json()[0]
         self.assertEqual(
             set(entry.keys()),
-            {"username", "elo_rating", "total_wins", "total_losses", "rank_name"},
+            {"username", "elo_rating", "total_wins", "total_losses", "rank_name", "badge"},
             "the React leaderboard table reads exactly these keys",
         )
 
@@ -592,6 +592,7 @@ class TableRoute(ApiTestCase):
                 "current_streak",
                 "table_record_streak",
                 "challenger",
+                "current_king_badge",
             },
             "the React king banner reads exactly these keys",
         )
