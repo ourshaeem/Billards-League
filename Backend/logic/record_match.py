@@ -8,6 +8,7 @@ Sequence when a score is reported:
   4. Matchmaking runs, pulling the next person off the queue if anyone
      is waiting.
   5. Pool_Tables' display cache (king, streaks) is refreshed.
+  6. Achievements in the game's league are awarded.
 
 Steps 1-3 happen in one transaction. If anything fails, none of it lands,
 so a match can never be half-recorded with one player's ELO moved.
@@ -21,6 +22,7 @@ import logging
 from sqlalchemy import func
 
 from database import retry_on_deadlock
+from logic.achievements import sync_achievements
 from logic.tables import league_for_table
 from models import BILLIARDS, ELO_FLOOR, PING_PONG, STARTING_ELO, Match, PoolTable, Player, Rank, db
 from logic.manage_queue import attempt_matchmaking, lock_active_match_for_player
@@ -183,6 +185,9 @@ def apply_result(match, winner, loser, elo_change, league):
     (corrections.add_past_games) both come here. Doesn't commit.
     """
     fields = Player.LEAGUE_FIELDS[league]
+    # Before anything moves: achievements judge upsets by these.
+    match.winner_elo_before = _rating(winner, league)
+    match.loser_elo_before = _rating(loser, league)
     setattr(winner, fields["wins"], (getattr(winner, fields["wins"]) or 0) + 1)
     setattr(winner, fields["elo"], _rating(winner, league) + elo_change)
 
@@ -371,6 +376,12 @@ def record_match_result(
         refresh_table_state(match.table_id, winner_id)
     except Exception:
         log.exception("could not refresh the Pool_Tables cache (table %s)", match.table_id)
+
+    # 6. Badges. Like the cache, never allowed to undo a recorded result.
+    try:
+        sync_achievements(league)
+    except Exception:
+        log.exception("result saved, but awarding achievements failed (match %s)", match.match_id)
 
     return loser_change
 

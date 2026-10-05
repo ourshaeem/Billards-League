@@ -284,6 +284,22 @@ export const getPlayer = (userId, signal) => request(`/players/${userId}`, { sig
 export const getPlayerOpponents = (userId, league, signal) =>
   request(withQuery(`/players/${userId}/opponents`, { league_type: league }), { signal });
 
+// --- Badges ---
+
+/** One player's badges in a league, earned or not: { badges, featured, chosen, ... } */
+export const getPlayerBadges = (userId, league, signal) =>
+  request(withQuery(`/players/${userId}/badges`, { league_type: league }), { signal });
+
+/** Badges earned in any league since the screen last announced any. */
+export const getNewBadges = (signal) => request('/me/badges/new', { auth: true, signal });
+
+export const markBadgesSeen = (ids) =>
+  request('/me/badges/seen', { method: 'POST', auth: true, body: { ids } });
+
+/** Choose the badge a league shows by your name; null picks automatically. */
+export const setFeaturedBadge = (league, key) =>
+  request('/me/featured-badge', { method: 'POST', auth: true, body: { league_type: league, key } });
+
 /** Country codes and names for the flag picker: { countries: [{code, name}] } */
 export const getCountries = (signal) => request('/countries', { signal });
 

@@ -712,6 +712,268 @@ p {
   white-space: nowrap;
 }
 
+/* --- Badges ---
+   Medal colours are fixed - bronze is bronze in either theme or league -
+   so each medallion carries its own ink. Everything around them uses the
+   theme's tokens. */
+
+.badge-emblem {
+  --emblem-size: 48px;
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: var(--emblem-size);
+  height: var(--emblem-size);
+  border-radius: 50%;
+  vertical-align: middle;
+  color: var(--emblem-ink);
+  background: radial-gradient(circle at 32% 26%, var(--emblem-shine) 0%, var(--emblem-base) 55%, var(--emblem-deep) 100%);
+  box-shadow:
+    inset 0 0 0 2px var(--emblem-ring),
+    inset 0 -3px 6px rgba(0, 0, 0, 0.18),
+    0 2px 6px rgba(0, 0, 0, 0.16);
+}
+
+.badge-emblem[data-tier='bronze'] {
+  --emblem-shine: #f1b98a;
+  --emblem-base: #b8733f;
+  --emblem-deep: #7c4822;
+  --emblem-ring: #e3a06c;
+  --emblem-ink: #fff8f1;
+}
+
+.badge-emblem[data-tier='silver'] {
+  --emblem-shine: #ffffff;
+  --emblem-base: #bfc5d0;
+  --emblem-deep: #7f8898;
+  --emblem-ring: #e6e9ef;
+  --emblem-ink: #2a2f3a;
+}
+
+.badge-emblem[data-tier='gold'] {
+  --emblem-shine: #fff1b8;
+  --emblem-base: #f0bd3a;
+  --emblem-deep: #a8740c;
+  --emblem-ring: #ffe28a;
+  --emblem-ink: #4a3100;
+}
+
+.badge-emblem[data-tier='legendary'] {
+  --emblem-shine: #e9ddff;
+  --emblem-base: #7c3aed;
+  --emblem-deep: #1e0b3d;
+  --emblem-ring: #c9b2ff;
+  --emblem-ink: #ffffff;
+  animation: legendary-glow 2.8s ease-in-out infinite;
+}
+
+@keyframes legendary-glow {
+  0%,
+  100% {
+    box-shadow:
+      inset 0 0 0 2px var(--emblem-ring),
+      0 0 0 0 rgba(124, 58, 237, 0.45);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 0 2px var(--emblem-ring),
+      0 0 14px 3px rgba(124, 58, 237, 0.55);
+  }
+}
+
+.badge-emblem[data-locked='true'] {
+  --emblem-shine: var(--fill-soft);
+  --emblem-base: var(--fill-soft);
+  --emblem-deep: var(--line);
+  --emblem-ring: var(--control-line);
+  --emblem-ink: var(--text-muted);
+  animation: none;
+  box-shadow: inset 0 0 0 2px var(--emblem-ring);
+}
+
+.ladder-player .badge-emblem {
+  margin-left: 6px;
+}
+
+.seat-player {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+}
+
+.badges-card {
+  margin-top: 20px;
+}
+
+.badges-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.badges-featured {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  font-size: var(--step--1);
+}
+
+.badge-group {
+  margin-top: 22px;
+}
+
+.badge-group-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: var(--step-0);
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+
+.badge-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr));
+  gap: 10px;
+}
+
+.badge-tile {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.badge-tile[data-earned='true'] {
+  border-color: var(--accent-line);
+  background: var(--accent-wash);
+}
+
+.badge-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.badge-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  font-weight: 600;
+}
+
+.badge-tile[data-earned='false'] .badge-name {
+  color: var(--text-muted);
+}
+
+.badge-tier {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 7px;
+  border-radius: 999px;
+}
+
+.badge-tier[data-tier='bronze'] {
+  background: #f8e6d6;
+  color: #7c4822;
+}
+
+.badge-tier[data-tier='silver'] {
+  background: #eceef2;
+  color: #3d4452;
+}
+
+.badge-tier[data-tier='gold'] {
+  background: #fdf0c4;
+  color: #6b4a00;
+}
+
+.badge-tier[data-tier='legendary'] {
+  background: #7c3aed;
+  color: #ffffff;
+}
+
+.badge-desc {
+  margin-top: 2px;
+  font-size: var(--step--1);
+  color: var(--text-muted);
+}
+
+.badge-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 10px;
+  margin-top: 8px;
+}
+
+.badge-feature {
+  border: 1px solid var(--accent-line);
+  background: var(--surface);
+  color: var(--accent-text);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.badge-feature:hover:not(:disabled) {
+  background: var(--accent-soft);
+}
+
+.badge-feature:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.badge-showing {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--accent-text);
+}
+
+.badge-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.badge-progress-bar {
+  flex: 1;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--fill-soft);
+  overflow: hidden;
+}
+
+.badge-progress-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+}
+
 /* --- Queue list --- */
 
 .queue-row {

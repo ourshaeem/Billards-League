@@ -36,6 +36,7 @@ import {
 import { StatusPanel } from './components/StatusPanel.jsx';
 import { QueueCard, LeaderboardCard } from './components/Panels.jsx';
 import { ActiveTableCard } from './components/ActiveTable.jsx';
+import { BadgesCard } from './components/Badges.jsx';
 import { MatchHistoryCard } from './components/MatchHistory.jsx';
 import { LeagueSelect } from './components/LeagueSelect.jsx';
 import { ProfileSettings } from './components/ProfileSettings.jsx';
@@ -109,10 +110,16 @@ export default function App() {
   const [theme, setTheme] = useState(() => resolveTheme(getThemeChoice()));
   // The player whose profile is open, over the current screen, or null.
   const [viewingPlayer, setViewingPlayer] = useState(null);
+  // Bumped whenever the signed-in player's badges may have changed, so
+  // their badge card loads again.
+  const [badgeVersion, setBadgeVersion] = useState(0);
 
   // Remembers the last match id we announced, so "match found" fires once
   // rather than on every poll for as long as the match is running.
   const announcedMatchRef = useRef(null);
+  // Badges already announced, so a slow "mark seen" can't make the next
+  // poll announce them twice.
+  const announcedBadgesRef = useRef(new Set());
   // The status before the latest one, to notice what just happened: a
   // turn arriving, a turn missed, a game called off.
   const lastStatusRef = useRef(null);
@@ -171,6 +178,7 @@ export default function App() {
     setProfile(null);
     switchLeague(null);
     announcedMatchRef.current = null;
+    announcedBadgesRef.current = new Set();
     lastStatusRef.current = null;
     setViewingPlayer(null);
     setEmailMissing(null);
@@ -344,6 +352,33 @@ export default function App() {
     [pushToast],
   );
 
+  /** Announce badges earned since the last look - in either league - once each. */
+  const announceBadges = useCallback(
+    async (signal) => {
+      const res = await api.getNewBadges(signal);
+      if (!res.ok || signal?.aborted) return;
+      const fresh = (res.data?.badges || []).filter((b) => !announcedBadgesRef.current.has(b.id));
+      if (fresh.length === 0) return;
+
+      fresh.forEach((b) => announcedBadgesRef.current.add(b.id));
+      // A pile at once (credit for past games, say) is one message, not a wall.
+      if (fresh.length > 3) {
+        pushToast(`You unlocked ${fresh.length} badges. See them on your dashboard.`, 'success');
+      } else {
+        fresh.forEach((b) => {
+          const where =
+            b.league_type !== leagueRef.current && isLeague(b.league_type)
+              ? ` (${leagueInfo(b.league_type).name})`
+              : '';
+          pushToast(`Badge unlocked: ${b.name}${where}`, 'success');
+        });
+      }
+      await api.markBadgesSeen(fresh.map((b) => b.id));
+      setBadgeVersion((v) => v + 1);
+    },
+    [pushToast],
+  );
+
   const refresh = useCallback(
     async (signal, { withHistory = false, statusOnly = false } = {}) => {
       if (!league || !tableId) return;
@@ -424,6 +459,7 @@ export default function App() {
       setMatchStatus(next);
       noticeStatusChange(lastStatusRef.current, next);
       lastStatusRef.current = next;
+      announceBadges(signal);
 
       // Tell someone their match started even if they were looking away.
       if (next.status === 'playing' && next.match_id !== announcedMatchRef.current) {
@@ -431,10 +467,13 @@ export default function App() {
         pushToast(`Match on: you're playing ${next.opponent}.`, 'success');
       }
       if (next.status !== 'playing') {
+        // A game just ended - either player may have reported it - so
+        // progress bars have moved even if no badge unlocked.
+        if (announcedMatchRef.current !== null) setBadgeVersion((v) => v + 1);
         announcedMatchRef.current = null;
       }
     },
-    [league, tableId, userId, pushToast, noticeStatusChange],
+    [league, tableId, userId, pushToast, noticeStatusChange, announceBadges],
   );
 
   // Polled on the dashboard, and - status only - everywhere else a league
@@ -727,9 +766,28 @@ export default function App() {
     );
 
     announcedMatchRef.current = null;
+    setBadgeVersion((v) => v + 1);
     refresh(undefined, { withHistory: true });
     // So the league picker and profile page show the new rating.
     fetchProfile().then((next) => next && setProfile(next));
+  };
+
+  /** Choose the badge this league shows by your name; null picks automatically. */
+  const handleFeature = async (key) => {
+    setBusy(true);
+    const res = await api.setFeaturedBadge(league, key);
+    setBusy(false);
+
+    if (!res.ok) {
+      pushToast(res.message, 'error');
+      return;
+    }
+    pushToast(
+      key ? 'Done - that badge now shows next to your name.' : 'Your best badge will show automatically.',
+      'success',
+    );
+    setBadgeVersion((v) => v + 1);
+    refresh();
   };
 
   /** Returns { ok, field?, message? } so the form can put a problem beside its field. */
@@ -1040,6 +1098,16 @@ export default function App() {
                   currentUsername={user.username}
                 />
               </div>
+
+              <BadgesCard
+                key={`badges-${userId}-${league}`}
+                userId={userId}
+                league={league}
+                version={badgeVersion}
+                title={`Your ${leagueInfo(league).name} badges`}
+                onFeature={handleFeature}
+                busy={busy}
+              />
             </main>
           )}
 

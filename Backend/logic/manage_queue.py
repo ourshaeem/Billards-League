@@ -14,6 +14,7 @@ from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 
 from database import retry_on_deadlock, seconds_since
+from logic.achievements import PATIENCE_WAIT_SECONDS, award
 from logic.tables import league_for_table
 from models import Match, PoolTable, QueueEntry, db
 
@@ -454,12 +455,15 @@ def attempt_matchmaking(table_id):
             db.session.commit()
             return False
 
+        patient = _waited_long(up)
+
         # --- Case 1: a king is waiting for a challenger ---
         if active is not None:
             challenger = up[0]
             active.player_two_id = challenger.user_id
             db.session.delete(challenger)
             db.session.commit()
+            _award_patience(patient, table_id)
             return True
 
         # --- Case 2: free table, pair the first two waiting ---
@@ -474,11 +478,40 @@ def attempt_matchmaking(table_id):
         db.session.delete(first)
         db.session.delete(second)
         db.session.commit()
+        _award_patience(patient, table_id)
         return True
 
     except Exception:
         db.session.rollback()
         raise
+
+
+def _waited_long(entries):
+    """
+    Which of these players waited long enough in the queue to earn
+    Patience. Read before their queue rows go, since that's the only place
+    the wait is recorded; measured by the database's clock (seconds_since).
+    """
+    try:
+        rows = db.session.execute(
+            db.select(QueueEntry.user_id, seconds_since(QueueEntry.joined_at)).where(
+                QueueEntry.queue_id.in_([e.queue_id for e in entries])
+            )
+        ).all()
+    except Exception:
+        # A badge isn't worth failing a game over.
+        log.exception("could not read queue waits for patience")
+        return []
+    return [uid for uid, seconds in rows if seconds is not None and seconds >= PATIENCE_WAIT_SECONDS]
+
+
+def _award_patience(user_ids, table_id):
+    # After the game is committed, and never allowed to undo it.
+    for uid in user_ids:
+        try:
+            award(uid, league_for_table(table_id), "patience")
+        except Exception:
+            log.exception("could not award patience (user %s)", uid)
 
 
 def _turn_clocks(table_id):
@@ -754,6 +787,11 @@ def step_down(user_id):
     except Exception:
         db.session.rollback()
         raise
+
+    try:
+        award(user_id, league_for_table(table_id), "abdication")
+    except Exception:
+        log.exception("could not award abdication (user %s)", user_id)
 
     # The table is free now; the first two waiting (if any) can play.
     try:

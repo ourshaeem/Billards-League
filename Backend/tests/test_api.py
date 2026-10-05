@@ -43,6 +43,8 @@ class PublicRoutes(ApiTestCase):
                 "total_wins",
                 "total_losses",
                 "rank_name",
+                # The web ladder's badge; the phone app ignores it.
+                "badge",
             },
             "the ladders in both apps read exactly these keys",
         )

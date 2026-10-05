@@ -21,7 +21,10 @@ The other way round, adding games that never reached the app - played
 while the server was down - is add_past_games:
     flask --app app add-games ping_pong --game Mel "Tom Holland" 11-1 ...
 """
+import logging
+
 from database import retry_on_deadlock, seconds_since
+from logic.achievements import sync_achievements
 from logic.manage_queue import _lock_table
 from logic.record_match import (
     apply_result,
@@ -32,6 +35,9 @@ from logic.record_match import (
 )
 from logic.tables import default_table_for, league_for_table
 from models import LEAGUE_NAMES, STARTING_ELO, Match, Player, db
+
+
+log = logging.getLogger(__name__)
 
 
 class GameProblem(ValueError):
@@ -228,4 +234,10 @@ def add_past_games(league, games):
     except Exception:
         db.session.rollback()
         raise
+
+    # Badges the added games earned. The games are saved either way.
+    try:
+        sync_achievements(league)
+    except Exception:
+        log.exception("games added, but awarding achievements failed")
     return results

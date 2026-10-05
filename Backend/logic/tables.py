@@ -8,6 +8,7 @@ matchmaking implementation in manage_queue serves both leagues without
 knowing either exists. This module is where a league becomes a table and
 a table becomes a league.
 """
+from logic.achievements import featured_badges
 from models import BILLIARDS, LEAGUE_NAMES, LEAGUE_TYPES, Match, PoolTable, db
 
 # The table a request means when it names neither a table nor a league -
@@ -66,11 +67,14 @@ def table_snapshot(table_id):
     just the players on it. None if the table doesn't exist.
 
         {table_id, table_name, league_type, state, match_id,
-         king, challenger, king_streak}
+         king, challenger, king_streak, table_record_streak,
+         king_badge, challenger_badge}
 
     state is "free", "waiting_for_challenger" or "playing". king and
     challenger are player cards (see Player.to_card) carrying their rank
-    and rating in this table's league.
+    and rating in this table's league; king_badge / challenger_badge are
+    the badge each shows by their name in it ({key, name, tier} or None).
+    table_record_streak is the longest run anyone has had here.
 
     A plain read, no locks: this is a display, and matchmaking - the only
     thing that changes who is at a table - never reads it.
@@ -99,6 +103,9 @@ def table_snapshot(table_id):
     # describes a reign that has already ended.
     king_id = active.player_one_id if active is not None else None
     streak = (table.current_streak or 0) if king_id and table.current_king_id == king_id else 0
+    king = active.player_one if active is not None else None
+    challenger = active.player_two if active is not None else None
+    badges = featured_badges([king, challenger], league)
 
     return {
         "table_id": table.table_id,
@@ -109,4 +116,7 @@ def table_snapshot(table_id):
         "king": active.player_one.to_card(league) if active and active.player_one else None,
         "challenger": active.player_two.to_card(league) if active and active.player_two else None,
         "king_streak": streak,
+        "table_record_streak": table.table_record_streak or 0,
+        "king_badge": badges.get(king.user_id) if king else None,
+        "challenger_badge": badges.get(challenger.user_id) if challenger else None,
     }

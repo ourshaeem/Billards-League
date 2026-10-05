@@ -147,6 +147,16 @@ class Player(db.Model):
     # admin request - never from the client or the login token.
     is_admin = db.Column(db.Boolean, nullable=False, default=False, server_default="0")
 
+    # The badge each league's ladder shows next to this player, by
+    # achievement key (see logic/achievements.py). NULL means "my best one,
+    # picked automatically".
+    billiards_featured_badge = db.Column(db.String(40), nullable=True)
+    ping_pong_featured_badge = db.Column(db.String(40), nullable=True)
+    FEATURED_BADGE_FIELDS = {
+        BILLIARDS: "billiards_featured_badge",
+        PING_PONG: "ping_pong_featured_badge",
+    }
+
     __table_args__ = (db.Index("uq_players_email", "email", unique=True),)
 
     @property
@@ -483,6 +493,12 @@ class Match(db.Model):
     # them below ELO_FLOOR, where they stopped. NULL for games recorded
     # before the floor, which all lost exactly elo_change.
     loser_elo_change = db.Column(db.Integer, nullable=True)
+    # Both players' ratings in this game's league just before it, written by
+    # apply_result. Achievements read them: a season reset wipes ratings but
+    # keeps games, so "rated 100+ above you" can't be worked out later from
+    # ratings as they are now. NULL for games recorded before these existed.
+    winner_elo_before = db.Column(db.Integer, nullable=True)
+    loser_elo_before = db.Column(db.Integer, nullable=True)
     played_at = db.Column(db.DateTime, nullable=True, server_default=func.current_timestamp())
     # A plain number, not a foreign key: it is only ever one of the two
     # seats above, and it only means anything while the game is on.
@@ -615,6 +631,39 @@ class Match(db.Model):
             f"<Match {self.match_id} table={self.table_id} status={self.match_status} "
             f"p1={self.player_one_id} p2={self.player_two_id} winner={self.winner_id}>"
         )
+
+
+class PlayerAchievement(db.Model):
+    """
+    One achievement one player has earned in one league. Only earned
+    achievements get a row; what each one *is* - name, tier, rule - lives
+    in logic/achievements.py, keyed by achievement_key, so renaming a badge
+    needs no migration. Each league's badges are earned separately.
+    """
+
+    __tablename__ = "Player_Achievements"
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("Players.user_id"), nullable=False)
+    league_type = db.Column(db.String(20), nullable=False)
+    achievement_key = db.Column(db.String(40), nullable=False)
+    # When it was earned: when the game that earned it finished, or when
+    # it was noticed for the few that no single game earns.
+    earned_at = db.Column(db.DateTime, nullable=False, server_default=func.current_timestamp())
+    # The game that earned it, if one did. Not a foreign key: a game can be
+    # voided, and the badge outlives it.
+    match_id = db.Column(db.Integer, nullable=True)
+    # False until the player's screen has announced it.
+    seen = db.Column(db.Boolean, nullable=False, default=False, server_default="0")
+
+    __table_args__ = (
+        # Each achievement is earned once per league, however many results
+        # are recorded at the same instant.
+        db.Index("uq_achievement", "user_id", "league_type", "achievement_key", unique=True),
+    )
+
+    def __repr__(self):
+        return f"<PlayerAchievement user={self.user_id} {self.league_type}:{self.achievement_key}>"
 
 
 class PlayerPicture(db.Model):
