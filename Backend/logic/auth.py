@@ -184,8 +184,9 @@ def find_player(identifier):
 
 def login_user(identifier, password_text):
     """
-    {user_id, username, email} on success, None on failure. identifier is
-    the username or the email - anything with an @ is read as an email.
+    {user_id, username, email, is_admin} on success, None on failure.
+    identifier is the username or the email - anything with an @ is read
+    as an email.
     """
     player = find_player(identifier)
 
@@ -195,7 +196,12 @@ def login_user(identifier, password_text):
         return None
 
     if password_matches(player, password_text):
-        return {"user_id": player.user_id, "username": player.username, "email": player.email}
+        return {
+            "user_id": player.user_id,
+            "username": player.username,
+            "email": player.email,
+            "is_admin": bool(player.is_admin),
+        }
     return None
 
 

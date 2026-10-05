@@ -369,4 +369,33 @@ export const PRIVACY_POLICY_URL = `${API_BASE}/privacy`;
 export const stepDown = (tableId) =>
   request('/table/step-down', { method: 'POST', auth: true, body: { table_id: tableId } });
 
+// --- The organiser's controls ---
+// Only for an account whose profile (or sign-in) says is_admin; the
+// server refuses anyone else (403) whatever the app shows.
+
+/**
+ * Take a player out of a table's queue: { message, status: "removed" }.
+ * 404 when they aren't in it any more.
+ */
+export const adminRemoveFromQueue = (userId, tableId, league) =>
+  request('/admin/queue/remove', {
+    method: 'POST',
+    auth: true,
+    body: { user_id: userId, table_id: tableId, league_type: league },
+  });
+
+/**
+ * Take a player off a table: { message, status: "table_freed" |
+ * "game_called_off" }. A game in progress is called off with nothing
+ * recorded, and the other player keeps the table. matchId is the game the
+ * organiser saw there: 409 if it has changed since, 404 if the player
+ * isn't at the table any more.
+ */
+export const adminRemoveFromTable = (userId, tableId, league, matchId) =>
+  request('/admin/table/remove', {
+    method: 'POST',
+    auth: true,
+    body: { user_id: userId, table_id: tableId, league_type: league, match_id: matchId },
+  });
+
 export { API_BASE };

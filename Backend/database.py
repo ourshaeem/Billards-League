@@ -203,6 +203,7 @@ ADDED_COLUMNS = [
     ("Matches", "cancel_requested_by", "INTEGER NULL"),
     ("Players", "email", "VARCHAR(254) NULL"),
     ("Matches", "loser_elo_change", "INTEGER NULL"),
+    ("Players", "is_admin", "BOOLEAN NOT NULL DEFAULT 0"),
 ]
 
 # The name ping pong's first table is given when ensure_schema creates it.

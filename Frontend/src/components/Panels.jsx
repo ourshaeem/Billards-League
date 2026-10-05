@@ -6,9 +6,10 @@
  * version showed "Loading leaderboard..." forever when the request had
  * actually failed, which reads as a hang rather than a problem.
  */
-import React from 'react';
+import React, { useState } from 'react';
 import { Trophy, Users } from 'lucide-react';
 
+import { RemoveButton, RemoveConfirm } from './AdminControls.jsx';
 import { PlayerChip, PlayerLink } from './Player.jsx';
 
 /** Where someone whose turn has come stands: asked, or confirmed. */
@@ -25,7 +26,14 @@ function TurnTag({ entry }) {
   );
 }
 
-export function QueueCard({ queue, loaded, currentUsername }) {
+/**
+ * onRemove is given for the organiser only: each waiting player then has
+ * a Remove button, which asks first.
+ */
+export function QueueCard({ queue, loaded, currentUsername, onRemove = null, busy = false }) {
+  // user_id of the player the organiser is asking to remove.
+  const [asking, setAsking] = useState(null);
+
   return (
     <section className="card" aria-labelledby="queue-heading">
       <div className="card-head">
@@ -48,6 +56,8 @@ export function QueueCard({ queue, loaded, currentUsername }) {
         <ol style={{ listStyle: 'none', margin: 0, padding: 0 }}>
           {queue.map((player, index) => {
             const isYou = currentUsername && player.username === currentUsername;
+            const removable = Boolean(onRemove && player.user_id);
+            const askingHere = removable && asking === player.user_id;
             return (
               <li
                 className="queue-row"
@@ -65,6 +75,34 @@ export function QueueCard({ queue, loaded, currentUsername }) {
                   <TurnTag entry={player} />
                 ) : (
                   index === 0 && <span className="up-next">up next</span>
+                )}
+                {removable && (
+                  <RemoveButton
+                    id={`remove-queued-${player.user_id}`}
+                    name={player.username}
+                    place="the queue"
+                    expanded={askingHere}
+                    controls={`remove-queued-${player.user_id}-confirm`}
+                    onClick={() => setAsking(askingHere ? null : player.user_id)}
+                  />
+                )}
+                {askingHere && (
+                  <RemoveConfirm
+                    id={`remove-queued-${player.user_id}-confirm`}
+                    triggerId={`remove-queued-${player.user_id}`}
+                    question={`Take ${player.username} out of the queue?`}
+                    consequence={
+                      player.called
+                        ? "It's their turn, so the next in line is up instead."
+                        : 'They lose their place in line.'
+                    }
+                    busy={busy}
+                    onCancel={() => setAsking(null)}
+                    onConfirm={async () => {
+                      await onRemove(player);
+                      setAsking(null);
+                    }}
+                  />
                 )}
               </li>
             );

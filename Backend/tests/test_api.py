@@ -534,8 +534,8 @@ class AuthRoutes(ApiTestCase):
         body = res.get_json()
         self.assertEqual(
             set(body.keys()),
-            {"message", "access_token", "user_id", "username", "email"},
-            "both apps read access_token, user_id, username and email",
+            {"message", "access_token", "user_id", "username", "email", "is_admin"},
+            "both apps read access_token, user_id, username, email and is_admin",
         )
 
     def test_duplicate_username_says_so(self):

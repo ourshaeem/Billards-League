@@ -3,10 +3,13 @@
  * players. The status panel answers "can I play?"; this answers "who's
  * on?", with each player's rank and rating a hover away, and their
  * profile a click.
+ *
+ * For the organiser (onRemove given), each player has a Remove button.
  */
-import React from 'react';
+import React, { useState } from 'react';
 import { Crown, Swords } from 'lucide-react';
 
+import { RemoveButton, RemoveConfirm } from './AdminControls.jsx';
 import { PlayerChip } from './Player.jsx';
 
 const STATE_LABEL = {
@@ -15,8 +18,45 @@ const STATE_LABEL = {
   playing: 'Game on',
 };
 
-export function ActiveTableCard({ table, loaded, league, tableName, currentUserId }) {
+/** What taking `player` off the table does, in a sentence. */
+function removalConsequence(table, player) {
+  if (table.state !== 'playing') return 'The table goes to the next in the queue.';
+  const other = player.user_id === table.king?.user_id ? table.challenger : table.king;
+  const name = other?.username ?? 'the other player';
+  return `Their game with ${name} is called off - nothing is recorded and no points move - and ${name} keeps the table.`;
+}
+
+export function ActiveTableCard({
+  table,
+  loaded,
+  league,
+  tableName,
+  currentUserId,
+  onRemove = null,
+  busy = false,
+}) {
   const state = table?.state;
+  // { userId, matchId } of the player the organiser is asking to remove.
+  // Tied to the game it was asked about: once that game is over, the
+  // question no longer applies.
+  const [asking, setAsking] = useState(null);
+  const asked =
+    asking && table?.match_id === asking.matchId
+      ? [table.king, table.challenger].find((p) => p?.user_id === asking.userId)
+      : null;
+
+  const removal = (player) =>
+    onRemove && player
+      ? {
+          expanded: asked?.user_id === player.user_id,
+          onAsk: () =>
+            setAsking(
+              asked?.user_id === player.user_id
+                ? null
+                : { userId: player.user_id, matchId: table.match_id },
+            ),
+        }
+      : null;
 
   return (
     <section className="card" aria-labelledby="table-heading">
@@ -42,6 +82,7 @@ export function ActiveTableCard({ table, loaded, league, tableName, currentUserI
             player={table.king}
             league={league}
             currentUserId={currentUserId}
+            removal={removal(table.king)}
           />
           <span className="matchup-vs" aria-hidden="true">
             vs
@@ -53,6 +94,7 @@ export function ActiveTableCard({ table, loaded, league, tableName, currentUserI
               league={league}
               currentUserId={currentUserId}
               align="end"
+              removal={removal(table.challenger)}
             />
           ) : (
             <div className="seat seat-empty" data-align="end">
@@ -61,6 +103,21 @@ export function ActiveTableCard({ table, loaded, league, tableName, currentUserI
             </div>
           )}
         </div>
+      )}
+
+      {asked && (
+        <RemoveConfirm
+          id="remove-from-table"
+          triggerId={`remove-seat-${asked.user_id}`}
+          question={`Take ${asked.username} off the table?`}
+          consequence={removalConsequence(table, asked)}
+          busy={busy}
+          onCancel={() => setAsking(null)}
+          onConfirm={async () => {
+            await onRemove(asked, table.match_id);
+            setAsking(null);
+          }}
+        />
       )}
 
       {loaded && table?.king_streak >= 2 && (
@@ -78,7 +135,7 @@ export function ActiveTableCard({ table, loaded, league, tableName, currentUserI
   );
 }
 
-function Seat({ label, crown = false, player, league, currentUserId, align = 'start' }) {
+function Seat({ label, crown = false, player, league, currentUserId, align = 'start', removal }) {
   return (
     <div className="seat" data-align={align}>
       <span className="seat-label">
@@ -92,6 +149,16 @@ function Seat({ label, crown = false, player, league, currentUserId, align = 'st
         align={align}
         isYou={player?.user_id === currentUserId}
       />
+      {removal && (
+        <RemoveButton
+          id={`remove-seat-${player.user_id}`}
+          name={player.username}
+          place="the table"
+          expanded={removal.expanded}
+          controls="remove-from-table"
+          onClick={removal.onAsk}
+        />
+      )}
     </div>
   );
 }

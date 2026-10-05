@@ -122,7 +122,7 @@ class ResettingThePassword(ResetTestCase):
 
         self.assertEqual(res.status_code, 200)
         body = res.get_json()
-        self.assertEqual(set(body), {"message", "access_token", "user_id", "username", "email"})
+        self.assertEqual(set(body), {"message", "access_token", "user_id", "username", "email", "is_admin"})
         self.assertTrue(self.password_is(NEW_PASSWORD))
         self.assertFalse(self.password_is(OLD_PASSWORD))
         self.assertIsNone(db.session.get(PasswordReset, self.alice), "a code works once")

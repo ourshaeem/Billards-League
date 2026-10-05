@@ -285,6 +285,41 @@ export function LiveProvider({ children }) {
     refresh();
   }, [perform, tableId, reportFailure, refresh, toast, setMatchStatus]);
 
+  // --- The organiser's controls: offered only to an admin; the server
+  // refuses anyone else regardless ---
+
+  const finishRemoval = useCallback(
+    (res, player) => {
+      // Already gone, say, or the game changed: the server says which.
+      if (!res.ok) reportFailure(res);
+      else toast.push(res.data?.message || `${player.username} was removed.`, 'info');
+      // An organiser who removes themselves didn't miss their turn.
+      if (player.user_id === user?.user_id) lastStatusRef.current = null;
+      refresh();
+    },
+    [reportFailure, toast, user, refresh],
+  );
+
+  /** Take a player out of this table's queue. */
+  const removeFromQueue = useCallback(
+    async (player) => {
+      const res = await perform(() => api.adminRemoveFromQueue(player.user_id, tableId, league));
+      finishRemoval(res, player);
+    },
+    [perform, tableId, league, finishRemoval],
+  );
+
+  /** Take a player off the table; matchId is the game the organiser saw there. */
+  const removeFromTable = useCallback(
+    async (player, matchId) => {
+      const res = await perform(() =>
+        api.adminRemoveFromTable(player.user_id, tableId, league, matchId),
+      );
+      finishRemoval(res, player);
+    },
+    [perform, tableId, league, finishRemoval],
+  );
+
   /** gameLeague is the league of the game itself, from the status payload. */
   const record = useCallback(
     async (myScore, oppScore, matchId, gameLeague) => {
@@ -326,6 +361,8 @@ export function LiveProvider({ children }) {
       record,
       cancelGame,
       keepPlaying,
+      removeFromQueue,
+      removeFromTable,
     };
   }, [
     live,
@@ -339,6 +376,8 @@ export function LiveProvider({ children }) {
     record,
     cancelGame,
     keepPlaying,
+    removeFromQueue,
+    removeFromTable,
   ]);
 
   return <LiveContext.Provider value={value}>{children}</LiveContext.Provider>;
@@ -347,7 +386,7 @@ export function LiveProvider({ children }) {
 /**
  * { matchStatus, statusProblem, queue, table, loaded, offline, busy,
  *   gamesVersion, refresh, join, leave, confirm, stepDown, record,
- *   cancelGame, keepPlaying }
+ *   cancelGame, keepPlaying, removeFromQueue, removeFromTable }
  */
 export function useLive() {
   return useContext(LiveContext);

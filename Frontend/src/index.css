@@ -1900,6 +1900,85 @@ select[aria-invalid='true'] {
   color: var(--on-accent);
 }
 
+/* --- The organiser's controls (admins only) ---
+   Quiet until used: gray like any secondary control, red only once it's
+   pointed at, and the question it opens is the one red block. */
+
+.admin-remove {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 30px;
+  padding: 3px 10px;
+  border: 1px solid var(--control-line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.admin-remove:hover,
+.admin-remove[aria-expanded='true'] {
+  border-color: var(--danger-line);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+/* On a phone, a queue row with a turn tag has no room for the word: the
+   button keeps its icon, and its label still names the player. */
+@media (max-width: 560px) {
+  .queue-row .admin-remove {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    justify-content: center;
+  }
+
+  .queue-row .admin-remove span {
+    display: none;
+  }
+}
+
+/* A long name gives way before the button does: .queue-name grows from
+   nothing (flex: 1), so wrapping only ever moves the question below. */
+.queue-row {
+  flex-wrap: wrap;
+}
+
+.admin-confirm {
+  flex-basis: 100%;
+  margin-top: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--danger-line);
+  border-radius: var(--radius);
+  background: var(--danger-soft);
+}
+
+.queue-row .admin-confirm {
+  margin-top: 2px;
+}
+
+.admin-confirm-question {
+  font-weight: 700;
+  color: var(--danger);
+  margin-bottom: 4px;
+}
+
+.admin-confirm-text {
+  color: var(--text);
+  margin-bottom: 12px;
+}
+
+.admin-confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 /* --- Names that open a profile --- */
 
 .player-link {

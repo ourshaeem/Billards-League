@@ -12,6 +12,9 @@
  *                           asked for one), before anything else
  *   signedIn, no league  -> choose a league
  *   signedIn, league     -> the league's tabs
+ *
+ * isAdmin says to show the organiser's controls (taking a player out of
+ * the queue or off the table). Only a courtesy: the server checks again.
  */
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -20,7 +23,7 @@ import { isLeague } from '../leagues';
 import { clearSession, loadSession, saveLeague, saveSession } from '../storage';
 import { useToast } from './ToastContext';
 
-const SIGNED_OUT = { status: 'signedOut', user: null, league: null, needsEmail: false };
+const SIGNED_OUT = { status: 'signedOut', user: null, league: null, needsEmail: false, isAdmin: false };
 
 const SessionContext = createContext(null);
 
@@ -31,6 +34,7 @@ export function SessionProvider({ children }) {
     user: null,
     league: null,
     needsEmail: false,
+    isAdmin: false,
   });
 
   // Read by the auth-failure handler, which must not be recreated (and
@@ -51,16 +55,21 @@ export function SessionProvider({ children }) {
           user: saved.user,
           league: isLeague(saved.league) ? saved.league : null,
           needsEmail: false,
+          isAdmin: false,
         });
         // Signed in before emails were asked for? Then ask now. If the
         // profile can't be loaded (offline), ask next time instead of
-        // blocking the app.
+        // blocking the app. The profile also says whether to show the
+        // organiser's controls - read fresh at every launch, so a change
+        // reaches the app without signing in again.
         api.getProfile().then((res) => {
-          if (!cancelled && res.ok && res.data?.profile && !res.data.profile.email) {
-            setSession((current) =>
-              current.status === 'signedIn' ? { ...current, needsEmail: true } : current,
-            );
-          }
+          const profile = res.ok ? res.data?.profile : null;
+          if (cancelled || !profile) return;
+          setSession((current) =>
+            current.status === 'signedIn'
+              ? { ...current, needsEmail: !profile.email, isAdmin: Boolean(profile.is_admin) }
+              : current,
+          );
         });
       } else {
         setSession(SIGNED_OUT);
@@ -102,7 +111,13 @@ export function SessionProvider({ children }) {
       toast.clear();
       // Every sign-in starts by choosing a league for the session - after
       // adding an email, for an account that has none.
-      setSession({ status: 'signedIn', user, league: null, needsEmail: !data.email });
+      setSession({
+        status: 'signedIn',
+        user,
+        league: null,
+        needsEmail: !data.email,
+        isAdmin: Boolean(data.is_admin),
+      });
     },
     [toast],
   );
@@ -146,7 +161,7 @@ export function SessionProvider({ children }) {
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }
 
-/** { status, user, league, needsEmail, signIn, resetPassword, signOut, chooseLeague, emailSaved } */
+/** { status, user, league, needsEmail, isAdmin, signIn, resetPassword, signOut, chooseLeague, emailSaved } */
 export function useSession() {
   return useContext(SessionContext);
 }

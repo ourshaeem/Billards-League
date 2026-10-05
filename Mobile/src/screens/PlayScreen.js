@@ -16,7 +16,7 @@ import { useSession } from '../state/SessionContext';
 export function PlayScreen({ navigation }) {
   const live = useLive();
   const { league, info, tables, tableId, tableName, unreachable } = useLeague();
-  const { user, chooseLeague } = useSession();
+  const { user, isAdmin, chooseLeague } = useSession();
   const [refreshing, setRefreshing] = useState(false);
 
   const onRefresh = async () => {
@@ -64,9 +64,17 @@ export function PlayScreen({ navigation }) {
         league={league}
         tableName={tableName}
         currentUserId={user?.user_id}
+        onRemove={isAdmin ? live.removeFromTable : null}
+        busy={live.busy}
       />
 
-      <QueueCard queue={live.queue} loaded={live.loaded.queue} currentUsername={user?.username} />
+      <QueueCard
+        queue={live.queue}
+        loaded={live.loaded.queue}
+        currentUsername={user?.username}
+        onRemove={isAdmin ? live.removeFromQueue : null}
+        busy={live.busy}
+      />
     </Screen>
   );
 }

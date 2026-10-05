@@ -141,6 +141,12 @@ class Player(db.Model):
     deleted_at = db.Column(db.DateTime, nullable=True)
     DELETED_NAME = "Deleted player"
 
+    # The organiser: may take any player out of a queue or off a table
+    # (logic/admin.py). Granted only from the command line (`flask --app
+    # app set-admin`), never by an endpoint, and read from here on every
+    # admin request - never from the client or the login token.
+    is_admin = db.Column(db.Boolean, nullable=False, default=False, server_default="0")
+
     __table_args__ = (db.Index("uq_players_email", "email", unique=True),)
 
     @property
@@ -245,7 +251,8 @@ class Player(db.Model):
         The signed-in player's own profile, with both leagues.
         picture_uploaded says the picture is a photo they uploaded rather
         than a link, so the form doesn't offer the photo's address back to
-        them as a link to edit.
+        them as a link to edit. is_admin tells the apps to show the
+        organiser's controls - which the server checks again regardless.
         """
         return {
             **self.to_public_profile_dict(),
@@ -254,6 +261,7 @@ class Player(db.Model):
             "last_name": self.last_name,
             "email": self.email,
             "picture_uploaded": self.has_uploaded_picture,
+            "is_admin": bool(self.is_admin),
         }
 
     def __repr__(self):

@@ -103,6 +103,7 @@ def _wipe(user_id):
         player.email = None
         player.country_flag = None
         player.profile_picture = None
+        player.is_admin = False
         # The photo itself, if they uploaded one - not just the link to it.
         forget_uploaded_picture(user_id)
         forget_reset_code(user_id)

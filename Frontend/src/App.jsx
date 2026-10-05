@@ -673,6 +673,37 @@ export default function App() {
     refresh(undefined, { withHistory: true });
   };
 
+  // --- The organiser's controls -----------------------------------------
+  // Offered only to an admin; the server refuses anyone else regardless.
+
+  const finishRemoval = (res, player) => {
+    if (!res.ok) {
+      // Already gone, say, or the game changed: the server says which.
+      if (res.kind !== api.ErrorKind.AUTH) pushToast(res.message, 'error');
+    } else {
+      pushToast(res.data?.message || `${player.username} was removed.`, 'info');
+    }
+    // An organiser who removes themselves didn't miss their turn.
+    if (player.user_id === userId) lastStatusRef.current = null;
+    refresh();
+  };
+
+  /** Take a player out of this table's queue. */
+  const handleRemoveFromQueue = async (player) => {
+    setBusy(true);
+    const res = await api.adminRemoveFromQueue(player.user_id, tableId, league);
+    setBusy(false);
+    finishRemoval(res, player);
+  };
+
+  /** Take a player off the table; matchId is the game the organiser saw there. */
+  const handleRemoveFromTable = async (player, matchId) => {
+    setBusy(true);
+    const res = await api.adminRemoveFromTable(player.user_id, tableId, league, matchId);
+    setBusy(false);
+    finishRemoval(res, player);
+  };
+
   const handleRecord = async (myScore, oppScore, matchId, gameLeague) => {
     setBusy(true);
     const res = await api.recordMatch(myScore, oppScore, matchId, gameLeague);
@@ -762,6 +793,7 @@ export default function App() {
         : view
       : view;
   const me = profile ?? (user ? { username: user.username } : null);
+  const isAdmin = Boolean(profile?.is_admin);
   const myFlag = flagEmoji(profile?.country_flag);
   const showingPlayer = Boolean(user) && viewingPlayer !== null && !gated;
   // Away from the status panel, a turn coming up still needs answering.
@@ -985,8 +1017,16 @@ export default function App() {
                   league={league}
                   tableName={tableName}
                   currentUserId={userId}
+                  onRemove={isAdmin ? handleRemoveFromTable : null}
+                  busy={busy}
                 />
-                <QueueCard queue={queue} loaded={loaded.queue} currentUsername={user.username} />
+                <QueueCard
+                  queue={queue}
+                  loaded={loaded.queue}
+                  currentUsername={user.username}
+                  onRemove={isAdmin ? handleRemoveFromQueue : null}
+                  busy={busy}
+                />
                 <MatchHistoryCard
                   history={history}
                   loaded={loaded.history}

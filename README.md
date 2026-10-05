@@ -202,6 +202,24 @@ DATABASE_URL="<the live DATABASE_URL>" flask --app app void-game 33
 It shows the game and both players' numbers before and after, asks
 first, and saves a backup to `Backend/backups/`.
 
+### The organiser's controls
+
+An admin sees a **Remove** button beside every player at the table and
+in the queue, in the web app and the phone app, for someone who has
+walked off. Taking a player out of the queue ignores the usual wait;
+taking one off the table gives it to the next in line, or - mid-game -
+calls the game off with nothing recorded, and their opponent keeps the
+table. The app asks first. To make someone an admin (or, with `--off`,
+stop them being one), from `Backend/`, against the live database:
+
+```bash
+DATABASE_URL="<the live DATABASE_URL>" flask --app app set-admin Shaeem
+```
+
+The server checks on every request, so the buttons appear the next time
+the app loads that player's profile (reopening the phone app, or
+changing screen on the web).
+
 ### Deleting duplicate or joke accounts
 
 Deletes accounts exactly as if each player had deleted their own: their

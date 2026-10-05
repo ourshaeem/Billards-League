@@ -62,6 +62,15 @@ from logic.account import (
     delete_account,
     remove_account,
 )
+from logic.admin import (
+    QUEUE_REMOVE_RESULT_NOT_QUEUED,
+    TABLE_REMOVE_RESULT_GAME_CALLED_OFF,
+    TABLE_REMOVE_RESULT_GAME_CHANGED,
+    TABLE_REMOVE_RESULT_NOT_AT_TABLE,
+    is_admin,
+    remove_from_queue,
+    remove_from_table,
+)
 from logic.mailer import MailFailed, MailNotConfigured, mail_configured
 from logic.password_reset import (
     CODE_LIFETIME_SECONDS,
@@ -307,11 +316,7 @@ def register_commands(app):
         with app.app_context():
             players, unknown = [], []
             for name in usernames:
-                # The exact username first: some usernames are email
-                # addresses, and someone else could have that as their email.
-                player = db.session.scalars(
-                    db.select(Player).where(Player.username == name.strip())
-                ).first() or find_player(name)
+                player = _account_named(name)
                 if player is None or player.is_deleted:
                     unknown.append(name)
                 elif player.user_id not in {p.user_id for p in players}:
@@ -346,6 +351,27 @@ def register_commands(app):
                     click.echo(f"  SKIPPED {line['username']}: in a game - report or cancel it first")
                 else:
                     click.echo(f"  SKIPPED {line['username']}: already gone")
+
+    @app.cli.command("set-admin")
+    @click.argument("username")
+    @click.option("--off", is_flag=True, help="Take the organiser's controls away instead.")
+    def set_admin_command(username, off):
+        """
+        Give USERNAME (an exact username, or an email) the organiser's
+        controls in the apps - taking any player out of a queue or off a
+        table - or, with --off, take them away. The apps show the controls
+        once they next load the profile; the server checks on every request.
+        """
+        with app.app_context():
+            player = _account_named(username)
+            if player is None or player.is_deleted:
+                raise click.ClickException(f"There's no account called {username!r}.")
+            player.is_admin = not off
+            db.session.commit()
+            click.echo(
+                f"{player.username} {'is no longer' if off else 'is now'} an admin, on "
+                f"{describe_database(app.config['SQLALCHEMY_DATABASE_URI'])}."
+            )
 
     @app.cli.command("void-game")
     @click.argument("match_id", type=int)
@@ -417,6 +443,17 @@ def error(message, status, **extra):
     return jsonify({"message": message, **extra}), status
 
 
+def _account_named(name):
+    """
+    The account a command names: the exact username first - some
+    usernames are email addresses, and someone else could have that as
+    their email - then by email. None if there's no such account.
+    """
+    return db.session.scalars(
+        db.select(Player).where(Player.username == name.strip())
+    ).first() or find_player(name)
+
+
 def _player_summary(player):
     """
     What delete-player shows, and keeps in its backup, about an account:
@@ -456,13 +493,16 @@ def _player_summary(player):
 def signed_in(user):
     """
     The sign-in answer's data, shared by /login and a password reset:
-    {access_token, user_id, username, email}.
+    {access_token, user_id, username, email, is_admin}. is_admin only
+    tells the apps to show the organiser's controls; the token carries
+    nothing of it, and every admin request checks the database again.
     """
     return {
         "access_token": create_access_token(identity=str(user["user_id"])),
         "user_id": user["user_id"],
         "username": user["username"],
         "email": user.get("email"),
+        "is_admin": bool(user.get("is_admin")),
     }
 
 
@@ -661,6 +701,33 @@ def read_player_id(source, key):
     if value < 1:
         return None, error(f"{key} must be a player's id, a whole number.", 400)
     return value, None
+
+
+def refuse_unless_admin(user_id):
+    """
+    None if the signed-in player is an admin, otherwise the 403 to send.
+    Read from the database every time: the apps hiding the buttons from
+    everyone else is only a courtesy.
+    """
+    if is_admin(user_id):
+        return None
+    return error("Only the organiser can do that.", 403)
+
+
+def read_target_player(source):
+    """
+    The player an admin request is about, from its user_id:
+    (Player, None) or (None, error_response).
+    """
+    user_id, bad = read_player_id(source, "user_id")
+    if bad:
+        return None, bad
+    if user_id is None:
+        return None, error("Say which player: user_id is missing.", 400)
+    player = db.session.get(Player, user_id)
+    if player is None or player.is_deleted:
+        return None, error("There's no such player.", 404)
+    return player, None
 
 
 def read_limit(source):
@@ -879,6 +946,85 @@ def register_routes(app):
             )
         return jsonify({"message": "You gave up the table. Thanks for playing!"})
 
+    # 3d. THE ORGANISER: TAKE A PLAYER OUT OF A QUEUE (Protected, admins)
+    # For a player who joined and walked off. Ignores the wait before
+    # leaving, which is there to stop players dodging a game.
+    @app.route("/admin/queue/remove", methods=["POST"])
+    @jwt_required()
+    def admin_remove_from_queue():
+        admin_id = int(get_jwt_identity())
+        refused = refuse_unless_admin(admin_id)
+        if refused:
+            return refused
+
+        data = json_body()
+        target, bad = read_target_player(data)
+        if bad:
+            return bad
+        table_id, _league, bad = read_table_and_league(data)
+        if bad:
+            return bad
+
+        try:
+            outcome = remove_from_queue(target.user_id, table_id, by=admin_id)
+        except Exception:
+            log.exception("admin remove_from_queue failed (player %s)", target.user_id)
+            reset_session()
+            return error("Couldn't take them out of the queue just now. Please try again.", 500)
+
+        if outcome == QUEUE_REMOVE_RESULT_NOT_QUEUED:
+            return error(f"{target.username} isn't in this queue any more.", 404)
+        return jsonify({"message": f"{target.username} is out of the queue.", "status": outcome})
+
+    # 3e. THE ORGANISER: TAKE A PLAYER OFF A TABLE (Protected, admins)
+    # For a king who left without giving the table up, or a game that
+    # will never be reported. A game in progress is called off with
+    # nothing recorded, and the other player keeps the table.
+    @app.route("/admin/table/remove", methods=["POST"])
+    @jwt_required()
+    def admin_remove_from_table():
+        admin_id = int(get_jwt_identity())
+        refused = refuse_unless_admin(admin_id)
+        if refused:
+            return refused
+
+        data = json_body()
+        target, bad = read_target_player(data)
+        if bad:
+            return bad
+        table_id, _league, bad = read_table_and_league(data)
+        if bad:
+            return bad
+        match_id, bad = read_match_id(data)
+        if bad:
+            return bad
+
+        try:
+            outcome, other_id = remove_from_table(
+                target.user_id, table_id, expected_match_id=match_id, by=admin_id
+            )
+        except Exception:
+            log.exception("admin remove_from_table failed (player %s)", target.user_id)
+            reset_session()
+            return error("Couldn't take them off the table just now. Please try again.", 500)
+
+        if outcome == TABLE_REMOVE_RESULT_NOT_AT_TABLE:
+            return error(f"{target.username} isn't at this table any more.", 404)
+        if outcome == TABLE_REMOVE_RESULT_GAME_CHANGED:
+            return error(
+                "Something changed at the table since you looked - check who's on and try again.",
+                409,
+            )
+        if outcome == TABLE_REMOVE_RESULT_GAME_CALLED_OFF:
+            other = db.session.get(Player, other_id)
+            message = (
+                f"{target.username} is off the table. Their game was called off with nothing "
+                f"recorded, and {other.display_name if other else 'the other player'} keeps the table."
+            )
+        else:
+            message = f"{target.username} is off the table. It goes to the next in the queue."
+        return jsonify({"message": message, "status": outcome})
+
     # 4. LOGIN (Token Generator)
     # "username" may also be the account's email: anything with an @ is
     # looked up as one. email in the answer is null for an account made
@@ -961,7 +1107,12 @@ def register_routes(app):
                 {
                     "message": "Password changed - you're signed in.",
                     **signed_in(
-                        {"user_id": player.user_id, "username": player.username, "email": player.email}
+                        {
+                            "user_id": player.user_id,
+                            "username": player.username,
+                            "email": player.email,
+                            "is_admin": bool(player.is_admin),
+                        }
                     ),
                 }
             )
