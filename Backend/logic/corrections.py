@@ -16,11 +16,21 @@ Run it with the CLI command in app.py:
     flask --app app void-game 33
 which shows the game and what will change, asks first, and saves the
 game and both players' numbers to a backup file.
+
+The other way round, adding games that never reached the app - played
+while the server was down - is add_past_games:
+    flask --app app add-games ping_pong --game Mel "Tom Holland" 11-1 ...
 """
 from database import retry_on_deadlock, seconds_since
 from logic.manage_queue import _lock_table
-from logic.record_match import lowered_rating, update_player_rank
-from logic.tables import league_for_table
+from logic.record_match import (
+    apply_result,
+    elo_change_for,
+    lowered_rating,
+    score_problem,
+    update_player_rank,
+)
+from logic.tables import default_table_for, league_for_table
 from models import LEAGUE_NAMES, STARTING_ELO, Match, Player, db
 
 
@@ -122,3 +132,100 @@ def void_finished_match(match_id):
         "before": before,
         "after": {"winner": _numbers(winner, league), "loser": _numbers(loser, league)},
     }
+
+
+def past_game_problem(league, winner_score, loser_score):
+    """
+    Why a game to be added can't be right, or None. The winner's score
+    comes first, and has to be the higher one - the league's own rules
+    (score_problem) do the rest.
+    """
+    if winner_score <= loser_score:
+        return (
+            f"{winner_score}-{loser_score}: give the winner's score first - "
+            "it has to be the higher one."
+        )
+    return score_problem(league, winner_score, loser_score)
+
+
+@retry_on_deadlock
+def add_past_games(league, games):
+    """
+    Record finished games that never reached the app - played while the
+    server was down, say. `games` is a list of (winner_id, loser_id,
+    winner_score, loser_score), in the order they were played. Each is
+    scored against the ratings the one before it left, by the same
+    formula and the same apply_result as a reported game, so the ladder
+    ends up exactly as if they had been reported at the time.
+
+    Unlike a reported game, nobody's place at the table changes: these
+    games are over, and whoever is at the table now stays. Their time in
+    the history is when they were added.
+
+    All or nothing, in one transaction under the league's table lock (as
+    recording a game there takes it). Raises GameProblem, saving nothing,
+    for a score that doesn't fit, a player listed against themselves, or
+    a player who doesn't exist. Returns one dict per game, in order:
+    {match_id, winner, loser, score, elo_change, loser_elo_change,
+     winner_elo, loser_elo} - the ratings being those after the game.
+    """
+    if not games:
+        raise GameProblem("No games to add.")
+    for winner_id, loser_id, winner_score, loser_score in games:
+        if winner_id == loser_id:
+            raise GameProblem("A game needs two different players.")
+        problem = past_game_problem(league, winner_score, loser_score)
+        if problem:
+            raise GameProblem(problem)
+
+    table_id = default_table_for(league)
+    if table_id is None:
+        raise GameProblem(f"The {LEAGUE_NAMES[league]} has no table to record games at.")
+
+    try:
+        _lock_table(table_id)
+        # Every player locked and read once, up front, in id order: each
+        # game then changes the same in-memory rows the next one reads.
+        players = {}
+        for user_id in sorted({p for game in games for p in game[:2]}):
+            player = db.session.get(Player, user_id, with_for_update=True, populate_existing=True)
+            if player is None or player.is_deleted:
+                raise GameProblem(f"There's no player #{user_id}.")
+            players[user_id] = player
+
+        fields = Player.LEAGUE_FIELDS[league]
+        results = []
+        for winner_id, loser_id, winner_score, loser_score in games:
+            winner, loser = players[winner_id], players[loser_id]
+            elo_change = elo_change_for(league, winner, loser, winner_score, loser_score)
+            match = Match(
+                table_id=table_id,
+                player_one_id=winner_id,
+                player_two_id=loser_id,
+                player_one_balls=winner_score,
+                player_two_balls=loser_score,
+                winner_id=winner_id,
+                loser_id=loser_id,
+                elo_change=elo_change,
+                match_status=Match.STATUS_FINISHED,
+            )
+            db.session.add(match)
+            loser_change = apply_result(match, winner, loser, elo_change, league)
+            db.session.flush()
+            results.append(
+                {
+                    "match_id": match.match_id,
+                    "winner": winner.username,
+                    "loser": loser.username,
+                    "score": [winner_score, loser_score],
+                    "elo_change": elo_change,
+                    "loser_elo_change": loser_change,
+                    "winner_elo": getattr(winner, fields["elo"]),
+                    "loser_elo": getattr(loser, fields["elo"]),
+                }
+            )
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        raise
+    return results

@@ -45,7 +45,13 @@ from logic.cancel_match import (
     keep_playing,
     request_cancel,
 )
-from logic.corrections import GameProblem, game_summary, void_finished_match
+from logic.corrections import (
+    GameProblem,
+    add_past_games,
+    game_summary,
+    past_game_problem,
+    void_finished_match,
+)
 from logic.countries import country_list
 from logic.leaderboard import top50_leaderboard
 from logic.match_history import (
@@ -436,6 +442,119 @@ def register_commands(app):
                 f"{after['loser']['username']}: {after['loser']['elo']} points, "
                 f"{after['loser']['wins']}-{after['loser']['losses']}."
             )
+
+
+    @app.cli.command("add-games")
+    @click.argument("league", type=click.Choice(LEAGUE_TYPES))
+    @click.option(
+        "--game",
+        "games",
+        nargs=3,
+        multiple=True,
+        required=True,
+        metavar="WINNER LOSER SCORE",
+        help='One game, winner first: --game Mel "Tom Holland" 11-1. '
+        "Repeat it for each game, in the order they were played.",
+    )
+    @click.option("--yes", is_flag=True, help="Don't ask for confirmation.")
+    @click.option(
+        "--backup-dir",
+        default="backups",
+        show_default=True,
+        help="Where to save the players' numbers first.",
+    )
+    def add_games_command(league, games, yes, backup_dir):
+        """
+        Record finished LEAGUE games that never reached the app - played
+        while the server was down, say. Each moves ratings exactly as if
+        it had been reported at the time, against the ratings the game
+        before it left, so give them in the order they were played.
+        Nobody's place at the table changes. Players are named by exact
+        username or email. Shows the games and asks first; if any game is
+        wrong, nothing is saved. Take one back with void-game.
+        """
+        with app.app_context():
+            parsed, problems = [], []
+            for number, (winner_name, loser_name, score) in enumerate(games, start=1):
+                winner, loser = _account_named(winner_name), _account_named(loser_name)
+                scores = _read_score(score)
+                for name, player in ((winner_name, winner), (loser_name, loser)):
+                    if player is None or player.is_deleted:
+                        problems.append(f"game {number}: there's no account called {name!r}")
+                if scores is None:
+                    problems.append(f"game {number}: {score!r} isn't a score like 11-4")
+                elif past_game_problem(league, *scores):
+                    problems.append(f"game {number}: {past_game_problem(league, *scores)}")
+                if winner is not None and winner is loser:
+                    problems.append(f"game {number}: {winner_name!r} can't play themselves")
+                parsed.append((winner, loser, scores))
+            if problems:
+                raise click.ClickException(
+                    "Nothing was added:\n  " + "\n  ".join(problems)
+                )
+
+            fields = Player.LEAGUE_FIELDS[league]
+            click.echo(
+                f"Adding {len(parsed)} {LEAGUE_NAMES[league]} game(s), in this order, on "
+                f"{describe_database(app.config['SQLALCHEMY_DATABASE_URI'])}:"
+            )
+            for number, (winner, loser, (won, lost)) in enumerate(parsed, start=1):
+                click.echo(f"  {number}. {winner.username} beat {loser.username} {won}-{lost}")
+            involved = {p.user_id: p for winner, loser, _ in parsed for p in (winner, loser)}
+            click.echo(
+                "Points now: "
+                + ", ".join(f"{p.username} {getattr(p, fields['elo']) or 0}" for p in involved.values())
+            )
+            if not yes:
+                click.confirm("Add these games?", abort=True)
+
+            os.makedirs(backup_dir, exist_ok=True)
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            backup_path = os.path.join(backup_dir, f"added-games-{stamp}.json")
+            with open(backup_path, "w") as f:
+                json.dump(
+                    {
+                        "added_at": stamp,
+                        "league_type": league,
+                        "games": [
+                            {"winner": w.username, "loser": l.username, "score": list(s)}
+                            for w, l, s in parsed
+                        ],
+                        "players_before": [
+                            {"user_id": p.user_id, "username": p.username, **p.standing(league)}
+                            for p in involved.values()
+                        ],
+                    },
+                    f,
+                    indent=2,
+                )
+            click.echo(f"Saved everyone's numbers from before to {backup_path}")
+
+            try:
+                results = add_past_games(
+                    league, [(w.user_id, l.user_id, *s) for w, l, s in parsed]
+                )
+            except GameProblem as e:
+                raise click.ClickException(f"Nothing was added: {e}")
+            for result in results:
+                won, lost = result["score"]
+                click.echo(
+                    f"  #{result['match_id']} {result['winner']} beat {result['loser']} "
+                    f"{won}-{lost}: {result['winner']} +{result['elo_change']} -> "
+                    f"{result['winner_elo']}, {result['loser']} -{result['loser_elo_change']} -> "
+                    f"{result['loser_elo']}"
+                )
+
+
+def _read_score(text):
+    """(winner's, loser's) from "11-4" (or 11:4, 11 - 4), or None."""
+    parts = text.replace("–", "-").replace(":", "-").split("-")
+    if len(parts) != 2:
+        return None
+    try:
+        return int(parts[0].strip()), int(parts[1].strip())
+    except ValueError:
+        return None
 
 
 def error(message, status, **extra):

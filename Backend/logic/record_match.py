@@ -163,6 +163,41 @@ def calculate_ping_pong_elo_change(winner, loser, winner_points, loser_points):
     return max(1, int(round(k * margin_multiplier * (1 - expected_win))))
 
 
+def elo_change_for(league, winner, loser, winner_score, loser_score):
+    """The points a game moves, by its league's formula, from the players' ratings now."""
+    if league == PING_PONG:
+        return calculate_ping_pong_elo_change(winner, loser, winner_score, loser_score)
+    return calculate_elo_change(winner, loser)
+
+
+def apply_result(match, winner, loser, elo_change, league):
+    """
+    Move the numbers a finished game moves, in its league only: the
+    winner's and loser's ratings, wins, losses and ranks, and the game's
+    loser_elo_change. Zero-sum, except at the floor: nobody's rating goes
+    below ELO_FLOOR, and a loser who reaches it loses only what they had.
+    Returns what the loser actually lost.
+
+    The one place a result changes ratings - a reported game
+    (record_match_result) and a game added afterwards by the organiser
+    (corrections.add_past_games) both come here. Doesn't commit.
+    """
+    fields = Player.LEAGUE_FIELDS[league]
+    setattr(winner, fields["wins"], (getattr(winner, fields["wins"]) or 0) + 1)
+    setattr(winner, fields["elo"], _rating(winner, league) + elo_change)
+
+    loser_before = _rating(loser, league)
+    loser_after = lowered_rating(loser_before, elo_change)
+    loser_change = loser_before - loser_after
+    match.loser_elo_change = loser_change
+    setattr(loser, fields["losses"], (getattr(loser, fields["losses"]) or 0) + 1)
+    setattr(loser, fields["elo"], loser_after)
+
+    update_player_rank(winner, league)
+    update_player_rank(loser, league)
+    return loser_change
+
+
 def lowered_rating(rating, points):
     """
     A rating after losing `points`, stopping at ELO_FLOOR. A rating already
@@ -242,10 +277,7 @@ def report_result(user_id, my_score, opp_score, expected_match_id=None, league_t
 
         winner = match.player_one if match.player_one_id == winner_id else match.player_two
         loser = match.player_one if match.player_one_id == loser_id else match.player_two
-        if league == PING_PONG:
-            elo_change = calculate_ping_pong_elo_change(winner, loser, winner_score, loser_score)
-        else:
-            elo_change = calculate_elo_change(winner, loser)
+        elo_change = elo_change_for(league, winner, loser, winner_score, loser_score)
     except Exception:
         db.session.rollback()
         raise
@@ -281,7 +313,6 @@ def record_match_result(
     take them below ELO_FLOOR, where they stop. Returns what the loser
     actually lost.
     """
-    fields = Player.LEAGUE_FIELDS[league]
     try:
         winner = db.session.get(Player, winner_id)
         loser = db.session.get(Player, loser_id)
@@ -307,21 +338,8 @@ def record_match_result(
             match.player_one_balls = winner_balls if winner_is_player_one else loser_balls
             match.player_two_balls = loser_balls if winner_is_player_one else winner_balls
 
-        # 2. Ratings and records, in this league only. Zero-sum, except at
-        #    the floor: nobody's rating goes below ELO_FLOOR, and a loser
-        #    who reaches it loses only what they had.
-        setattr(winner, fields["wins"], (getattr(winner, fields["wins"]) or 0) + 1)
-        setattr(winner, fields["elo"], _rating(winner, league) + elo_change)
-
-        loser_before = _rating(loser, league)
-        loser_after = lowered_rating(loser_before, elo_change)
-        loser_change = loser_before - loser_after
-        match.loser_elo_change = loser_change
-        setattr(loser, fields["losses"], (getattr(loser, fields["losses"]) or 0) + 1)
-        setattr(loser, fields["elo"], loser_after)
-
-        update_player_rank(winner, league)
-        update_player_rank(loser, league)
+        # 2. Ratings and records, in this league only.
+        loser_change = apply_result(match, winner, loser, elo_change, league)
 
         # 3. The winner stays on as king: Active, no challenger yet.
         db.session.add(

@@ -202,6 +202,24 @@ DATABASE_URL="<the live DATABASE_URL>" flask --app app void-game 33
 It shows the game and both players' numbers before and after, asks
 first, and saves a backup to `Backend/backups/`.
 
+### Adding games that never reached the app
+
+For games played while the server was down. Give them winner first, in
+the order they were played: each moves points exactly as if it had been
+reported then, against the ratings the game before it left. Nobody's
+place at the table changes. From `Backend/`, against the live database:
+
+```bash
+DATABASE_URL="<the live DATABASE_URL>" flask --app app add-games ping_pong \
+  --game Giant Mel 11-8 \
+  --game Mel "Tom Holland" 11-1
+```
+
+Players are named by exact username (or email). It lists the games and
+asks first; an unknown name or a score that can't happen stops it
+before anything is saved. Everyone's numbers from before go to
+`Backend/backups/`. Take a game back with `void-game`.
+
 ### The organiser's controls
 
 An admin sees a **Remove** button beside every player at the table and
