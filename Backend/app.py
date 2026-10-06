@@ -99,6 +99,7 @@ from logic.privacy import privacy_policy_html
 from logic.seasons import league_standings, reset_league_standings
 from logic.profile import EDITABLE_FIELDS, get_profile, get_public_profile, set_email, update_profile
 from logic.tables import default_table_for, list_leagues, table_snapshot
+from logic.top_players import top_players
 from models import BILLIARDS, LEAGUE_NAMES, LEAGUE_TYPES, Match, Player, db
 from logic.manage_queue import (
     CONFIRM_RESULT_ALREADY_CONFIRMED,
@@ -875,6 +876,15 @@ def register_routes(app):
         if bad:
             return bad
         return jsonify(top50_leaderboard(league or BILLIARDS))
+
+    # 1a. PLAYERS OF THE DAY, WEEK AND MONTH (Public) - who gained the
+    # most points in each, in the league's own calendar.
+    @app.route("/top-players", methods=["GET"])
+    def get_top_players():
+        league, bad = read_league(request.args)
+        if bad:
+            return bad
+        return jsonify(top_players(league or BILLIARDS))
 
     # 1b. LEAGUES (Public) - each league and the table it plays on.
     @app.route("/leagues", methods=["GET"])

@@ -25,6 +25,12 @@ import React, { useEffect, useState } from 'react';
 import { BellRing, Swords, Users, Clock, Crown, LoaderCircle } from 'lucide-react';
 
 import { leagueInfo } from '../leagues.js';
+import { Podium } from './Podium.jsx';
+
+// The states with room beside them for the players of the day, week and
+// month. Mid-game and in the minute to say you're here, the panel is
+// about one thing only.
+const PODIUM_STATES = new Set(['idle', 'queued', 'waiting_for_challenger']);
 
 /** "0:42" from a number of seconds. */
 function clockText(seconds) {
@@ -68,6 +74,7 @@ export function StatusPanel({
   league,
   tableName,
   queueLength,
+  topPlayers,
   onJoin,
   onLeave,
   onConfirm,
@@ -85,6 +92,8 @@ export function StatusPanel({
     status.league_type !== league
       ? status.league_type
       : null;
+
+  const showPodium = Boolean(topPlayers) && PODIUM_STATES.has(state);
 
   return (
     <section
@@ -107,35 +116,40 @@ export function StatusPanel({
           </button>
         </p>
       )}
-      {state === 'loading' && <LoadingState />}
-      {state === 'playing' && (
-        <PlayingState
-          key={status.match_id}
-          status={status}
-          league={status.league_type || league}
-          onRecord={onRecord}
-          onCancelGame={onCancelGame}
-          onKeepPlaying={onKeepPlaying}
-          busy={busy}
-        />
-      )}
-      {state === 'your_turn' && (
-        <YourTurnState status={status} onConfirm={onConfirm} onLeave={onLeave} busy={busy} />
-      )}
-      {state === 'waiting_for_challenger' && (
-        <HoldingTableState
-          status={status}
-          queueLength={queueLength}
-          onStepDown={onStepDown}
-          busy={busy}
-        />
-      )}
-      {state === 'queued' && (
-        <QueuedState status={status} onLeave={onLeave} busy={busy} queueLength={queueLength} />
-      )}
-      {state === 'idle' && (
-        <IdleState onJoin={onJoin} busy={busy} queueLength={queueLength} tableName={tableName} />
-      )}
+      <div className="status-layout" data-podium={showPodium ? 'true' : 'false'}>
+        <div className="status-main">
+          {state === 'loading' && <LoadingState />}
+          {state === 'playing' && (
+            <PlayingState
+              key={status.match_id}
+              status={status}
+              league={status.league_type || league}
+              onRecord={onRecord}
+              onCancelGame={onCancelGame}
+              onKeepPlaying={onKeepPlaying}
+              busy={busy}
+            />
+          )}
+          {state === 'your_turn' && (
+            <YourTurnState status={status} onConfirm={onConfirm} onLeave={onLeave} busy={busy} />
+          )}
+          {state === 'waiting_for_challenger' && (
+            <HoldingTableState
+              status={status}
+              queueLength={queueLength}
+              onStepDown={onStepDown}
+              busy={busy}
+            />
+          )}
+          {state === 'queued' && (
+            <QueuedState status={status} onLeave={onLeave} busy={busy} queueLength={queueLength} />
+          )}
+          {state === 'idle' && (
+            <IdleState onJoin={onJoin} busy={busy} queueLength={queueLength} tableName={tableName} />
+          )}
+        </div>
+        {showPodium && <Podium topPlayers={topPlayers} />}
+      </div>
     </section>
   );
 }

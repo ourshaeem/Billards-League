@@ -29,6 +29,12 @@ cryptography==50.0.1
 # container needs no image libraries of its own.
 Pillow==12.3.0
 
+# The world's timezones, for the players of the day, week and month
+# (logic/top_players.py), whose days start at midnight in the league's
+# own time. Python reads the system's copy when there is one; the slim
+# Docker image may not have it, so this makes sure.
+tzdata==2026.5
+
 # Serves the app in production (see gunicorn.conf.py). `python app.py`
 # is Flask's development server and isn't meant for the internet.
 gunicorn==26.2.0

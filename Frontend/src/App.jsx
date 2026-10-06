@@ -93,6 +93,8 @@ export default function App() {
   const [leaderboard, setLeaderboard] = useState([]);
   const [activeTable, setActiveTable] = useState(null);
   const [history, setHistory] = useState(EMPTY_HISTORY);
+  // Players of the day, week and month; null until first loaded.
+  const [topPlayers, setTopPlayers] = useState(null);
   // null until the server has answered. Starting at 'idle' flashed a Join
   // button at people who were actually mid-game or holding the table.
   const [matchStatus, setMatchStatus] = useState(null);
@@ -157,6 +159,7 @@ export default function App() {
     setLeaderboard([]);
     setActiveTable(null);
     setHistory(EMPTY_HISTORY);
+    setTopPlayers(null);
     setMatchStatus(null);
     setStatusProblem(null);
     setLoaded(NOTHING_LOADED);
@@ -423,13 +426,17 @@ export default function App() {
         }
 
         if (withHistory || tableMoved) {
-          const [allRes, mineRes] = await Promise.all([
+          // The players of the day, week and month change only when a game
+          // finishes (or a day begins), so they come with the history.
+          const [allRes, mineRes, topRes] = await Promise.all([
             api.getMatchHistory(forLeague, { limit: HISTORY_LIMIT }, signal),
             userId
               ? api.getPlayerMatches(userId, forLeague, { limit: HISTORY_LIMIT }, signal)
               : null,
+            api.getTopPlayers(forLeague, signal),
           ]);
           if (stale()) return;
+          if (topRes.ok && topRes.data) setTopPlayers(topRes.data);
           if (allRes.ok) {
             setHistory((h) => ({
               all: Array.isArray(allRes.data?.matches) ? allRes.data.matches : [],
@@ -1057,6 +1064,7 @@ export default function App() {
                 league={league}
                 tableName={tableName}
                 queueLength={queue.length}
+                topPlayers={topPlayers}
                 onJoin={handleJoin}
                 onLeave={handleLeave}
                 onConfirm={handleConfirm}

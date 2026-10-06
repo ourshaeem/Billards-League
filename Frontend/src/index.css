@@ -534,6 +534,244 @@ p {
   color: var(--panel-dim);
 }
 
+/* --- Players of the month, week and day (Podium.jsx) ---
+   Beside the status where the panel has room to spare, as a podium: the
+   month in the middle and highest. Below it on narrower screens. Only
+   the panel's own colours, so both leagues and both themes suit it. */
+
+.status-layout[data-podium='true'] {
+  display: grid;
+  gap: 28px;
+}
+
+.status-main {
+  min-width: 0;
+}
+
+.podium {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-areas: 'week month day';
+  align-items: start;
+  column-gap: 12px;
+  text-align: center;
+  padding-top: 24px;
+  border-top: 1px solid var(--panel-line);
+}
+
+@media (min-width: 900px) {
+  .status-layout[data-podium='true'] {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 32px;
+  }
+
+  .podium {
+    width: min(460px, 40vw);
+    padding-top: 0;
+    border-top: none;
+  }
+}
+
+.podium-spot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 0;
+}
+
+.podium-spot[data-period='month'] {
+  grid-area: month;
+}
+
+.podium-spot[data-period='week'] {
+  grid-area: week;
+  margin-top: 64px;
+}
+
+.podium-spot[data-period='day'] {
+  grid-area: day;
+  margin-top: 64px;
+}
+
+.podium-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-bottom: 10px;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: var(--panel-dim);
+}
+
+.podium-spot[data-period='month'] .podium-title {
+  color: var(--panel-text);
+}
+
+.podium-player {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  max-width: 100%;
+  padding: 4px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.podium-player:disabled {
+  cursor: default;
+}
+
+.podium-player:hover:not(:disabled) .podium-name-text {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.avatar[data-size='podium'] {
+  --avatar-size: 88px;
+}
+
+.avatar[data-size='podium-lg'] {
+  --avatar-size: 116px;
+}
+
+.podium .avatar {
+  box-shadow: 0 0 0 3px var(--panel-line);
+}
+
+.podium-spot[data-period='month'] .avatar {
+  box-shadow: 0 0 0 4px var(--panel-text);
+}
+
+.podium-name {
+  display: flex;
+  justify-content: center;
+  max-width: 100%;
+  font-weight: 700;
+  color: var(--panel-text);
+}
+
+.podium-spot[data-period='month'] .podium-name {
+  font-size: var(--step-1);
+}
+
+.podium-name-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.podium-flag {
+  flex: none;
+  margin-left: 5px;
+}
+
+.podium-name-empty {
+  margin-top: 10px;
+  font-weight: 600;
+  color: var(--panel-dim);
+}
+
+.podium-spot[data-period='month'] .podium-name-empty {
+  font-size: var(--step-0);
+}
+
+.podium-stat {
+  margin-top: 2px;
+  font-size: var(--step--1);
+  color: var(--panel-dim);
+}
+
+.podium-player + .podium-stat {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  column-gap: 6px;
+}
+
+.podium-points,
+.podium-record {
+  white-space: nowrap;
+}
+
+.podium-record::before {
+  content: '\00b7';
+  margin-right: 6px;
+}
+
+.podium-empty {
+  display: grid;
+  place-items: center;
+  width: 88px;
+  height: 88px;
+  border-radius: 50%;
+  border: 2px dashed var(--panel-line);
+  color: var(--panel-faint);
+}
+
+.podium-empty[data-size='lg'] {
+  width: 116px;
+  height: 116px;
+}
+
+@media (max-width: 560px) {
+  .avatar[data-size='podium'] {
+    --avatar-size: 64px;
+  }
+
+  .avatar[data-size='podium-lg'] {
+    --avatar-size: 84px;
+  }
+
+  .podium-empty {
+    width: 64px;
+    height: 64px;
+  }
+
+  .podium-empty[data-size='lg'] {
+    width: 84px;
+    height: 84px;
+  }
+
+  .podium-spot[data-period='week'],
+  .podium-spot[data-period='day'] {
+    margin-top: 44px;
+  }
+
+  .podium-title {
+    font-size: 0.62rem;
+    white-space: normal;
+  }
+
+  /* The month's ring already marks it; beside a title on two lines the
+     little trophy only looks misplaced. */
+  .podium-title svg {
+    display: none;
+  }
+
+  .podium-player + .podium-stat {
+    flex-direction: column;
+  }
+
+  .podium-record::before {
+    content: none;
+  }
+
+  .podium-name,
+  .podium-spot[data-period='month'] .podium-name {
+    font-size: var(--step--1);
+  }
+}
+
 /* --- Buttons --- */
 
 .btn {

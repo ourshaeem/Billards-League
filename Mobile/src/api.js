@@ -224,6 +224,15 @@ export const getPlayer = (userId, signal) => request(`/players/${userId}`, { sig
 export const getPlayerOpponents = (userId, league, signal) =>
   request(withQuery(`/players/${userId}/opponents`, { league_type: league }), { signal });
 
+/**
+ * The players of the day, week and month in a league - who gained the
+ * most points in each: { league_type, timezone, day, week, month }, each
+ * period { player: card, points, wins, losses } or null when nobody has
+ * won a game in it yet. (The web app's status panel shows them.)
+ */
+export const getTopPlayers = (league, signal) =>
+  request(withQuery('/top-players', { league_type: league }), { signal });
+
 /** Country codes and names for the flag picker: { countries: [{code, name}] } */
 export const getCountries = (signal) => request('/countries', { signal });
 
