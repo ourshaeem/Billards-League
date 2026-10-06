@@ -1,8 +1,13 @@
 /**
  * What's happening right now in the chosen league, and the actions that
- * change it: your status, the queue, who is at the table; joining,
- * leaving, saying "I'm here", giving up the table, reporting a result,
- * and calling a game off by agreement.
+ * change it: your status, the league's queue, who is at each of its
+ * tables; entering the league's PIN, joining, leaving, saying "I'm here",
+ * giving up the table, reporting a result, and calling a game off by
+ * agreement.
+ *
+ * readOnly says the player hasn't entered this league's PIN (or it has
+ * changed since): they can look, but not join. The latest status poll
+ * says so first, so a PIN changed by the organiser shows within seconds.
  *
  * The mobile counterpart of the polling and action handlers in
  * Frontend/src/App.jsx. It polls for the whole app, not one screen, so a
@@ -30,30 +35,31 @@ const EMPTY = {
   // rather than showing a stale state as if it were current.
   statusProblem: null,
   queue: [],
-  table: null,
-  loaded: { queue: false, table: false },
+  // Every table the league has in use, and who is at each.
+  tables: [],
+  loaded: { queue: false, tables: false },
   offline: false,
 };
 
 const LiveContext = createContext(null);
 
 export function LiveProvider({ children }) {
-  const { status, user, league } = useSession();
-  const { tableId } = useLeague();
+  const { status, user } = useSession();
+  const { leagueId, league, reload: reloadLeagues, replaceLeague, noticeReadOnly } = useLeague();
   const toast = useToast();
   const active = useAppActive();
 
   // Everything here belongs to one player in one league. When either
   // changes, the old answers are dropped at once rather than shown under
   // the new league's name until the next poll.
-  const scope = `${user?.user_id ?? ''}:${league ?? ''}:${tableId ?? ''}`;
+  const scope = `${user?.user_id ?? ''}:${leagueId ?? ''}`;
   const [live, setLive] = useState(() => ({ scope, ...EMPTY }));
   if (live.scope !== scope) {
     setLive({ scope, ...EMPTY });
   }
 
   const [busy, setBusy] = useState(false);
-  // Goes up whenever the game at the table changes - one ended, or one
+  // Goes up whenever the game at a table changes - one ended, or one
   // began - so the history and ladder screens know to fetch again.
   const [gamesVersion, setGamesVersion] = useState(0);
 
@@ -68,10 +74,10 @@ export function LiveProvider({ children }) {
   // The status before the latest one, to notice what just happened: a
   // turn arriving, a turn missed, a game called off.
   const lastStatusRef = useRef(null);
-  // The game last seen at the table, per scope.
+  // The games last seen at the tables, per scope.
   const tableMatchRef = useRef(null);
 
-  const signedInWithTable = status === 'signedIn' && Boolean(league) && Boolean(tableId);
+  const inLeague = status === 'signedIn' && leagueId !== null;
 
   /** Tell the player about a change worth knowing about, wherever they are. */
   const noticeChange = useCallback(
@@ -101,29 +107,31 @@ export function LiveProvider({ children }) {
 
   const refresh = useCallback(
     async (signal) => {
-      if (!signedInWithTable) return;
+      if (!inLeague) return;
       const forScope = scope;
       const stale = () => signal?.aborted || scopeRef.current !== forScope;
 
-      const [statusRes, queueRes, tableRes] = await Promise.all([
-        api.getMatchStatus(tableId, signal),
-        api.getQueue(tableId, signal),
-        api.getTable(tableId, signal),
+      const [statusRes, queueRes, tablesRes] = await Promise.all([
+        api.getMatchStatus(leagueId, signal),
+        api.getLeagueQueue(leagueId, signal),
+        api.getLeagueTables(leagueId, signal),
       ]);
       if (stale()) return;
 
       // Only a dropped connection counts as offline; a 4xx means the
       // server is up and talking to us, just refusing something.
-      const offline = [statusRes, queueRes, tableRes].some(
+      const offline = [statusRes, queueRes, tablesRes].some(
         (res) => !res.ok && res.kind === api.ErrorKind.NETWORK && !res.aborted,
       );
 
-      const table = tableRes.ok ? (tableRes.data?.table ?? null) : null;
+      const tables =
+        tablesRes.ok && Array.isArray(tablesRes.data?.tables) ? tablesRes.data.tables : null;
       let tableMoved = false;
-      if (table) {
+      if (tables) {
+        const games = tables.map((t) => `${t.table_id}:${t.match_id}`).join(',');
         const last = tableMatchRef.current;
-        tableMoved = last?.scope === forScope && last.matchId !== table.match_id;
-        tableMatchRef.current = { scope: forScope, matchId: table.match_id };
+        tableMoved = last?.scope === forScope && last.games !== games;
+        tableMatchRef.current = { scope: forScope, games };
       }
 
       setLive((current) => {
@@ -133,9 +141,9 @@ export function LiveProvider({ children }) {
           next.queue = Array.isArray(queueRes.data) ? queueRes.data : [];
           next.loaded = { ...next.loaded, queue: true };
         }
-        if (table) {
-          next.table = table;
-          next.loaded = { ...next.loaded, table: true };
+        if (tables) {
+          next.tables = tables;
+          next.loaded = { ...next.loaded, tables: true };
         }
         if (statusRes.ok) {
           next.matchStatus = statusRes.data || { status: 'idle' };
@@ -153,6 +161,9 @@ export function LiveProvider({ children }) {
       // Tell someone their match started, whichever screen they're on.
       if (statusRes.ok) {
         const next = statusRes.data || { status: 'idle' };
+        // A changed PIN (or one just entered on the website) shows on the
+        // league list too.
+        if (typeof next.read_only === 'boolean') noticeReadOnly(leagueId, next.read_only);
         const previous = lastStatusRef.current;
         lastStatusRef.current = next;
         noticeChange(previous, next);
@@ -163,7 +174,7 @@ export function LiveProvider({ children }) {
         if (next.status !== 'playing') announcedRef.current = null;
       }
     },
-    [signedInWithTable, scope, tableId, toast, noticeChange],
+    [inLeague, scope, leagueId, toast, noticeChange, noticeReadOnly],
   );
 
   // A new player or league starts with nothing to compare against.
@@ -171,7 +182,7 @@ export function LiveProvider({ children }) {
     lastStatusRef.current = null;
   }, [scope]);
 
-  usePolling(refresh, POLL_INTERVAL_MS, signedInWithTable && active);
+  usePolling(refresh, POLL_INTERVAL_MS, inLeague && active);
 
   // --- Actions: each tells the player what happened, then re-syncs ---
 
@@ -196,10 +207,48 @@ export function LiveProvider({ children }) {
     setLive((current) => ({ ...current, matchStatus }));
   }, []);
 
+  /** A 403 that says the league needs its PIN: show the PIN prompt. */
+  const noticeLocked = useCallback(
+    (res) => {
+      if (res.status === 403 && res.data?.read_only) {
+        setLive((current) =>
+          current.matchStatus
+            ? { ...current, matchStatus: { ...current.matchStatus, read_only: true } }
+            : current,
+        );
+        reloadLeagues();
+      }
+    },
+    [reloadLeagues],
+  );
+
+  /** Enter the league's PIN. Returns { ok, field?, message? } for the form. */
+  const unlock = useCallback(
+    async (pin) => {
+      const res = await perform(() => api.unlockLeague(leagueId, pin));
+      if (!res.ok) {
+        const field = res.data?.field;
+        if (!field) reportFailure(res);
+        return { ok: false, field, message: res.message };
+      }
+      toast.push(res.data?.message || "You're in.", 'success');
+      replaceLeague(res.data?.league);
+      setLive((current) =>
+        current.matchStatus
+          ? { ...current, matchStatus: { ...current.matchStatus, read_only: false } }
+          : current,
+      );
+      refresh();
+      return { ok: true };
+    },
+    [perform, leagueId, reportFailure, toast, replaceLeague, refresh],
+  );
+
   const join = useCallback(async () => {
-    const res = await perform(() => api.joinQueue(tableId, league));
+    const res = await perform(() => api.joinQueue(leagueId));
     if (!res.ok) {
       reportFailure(res);
+      noticeLocked(res);
       // A refusal usually means the screen was out of date (you're
       // already at the table, say) - catch up with what the server knows.
       refresh();
@@ -209,10 +258,10 @@ export function LiveProvider({ children }) {
     else if (res.data?.status === 'already_queued') toast.push("You're already in the queue.", 'info');
     else toast.push('You joined the queue.', 'success');
     refresh();
-  }, [perform, tableId, league, reportFailure, refresh, toast]);
+  }, [perform, leagueId, reportFailure, noticeLocked, refresh, toast]);
 
   const leave = useCallback(async () => {
-    const res = await perform(() => api.leaveQueue(tableId, league));
+    const res = await perform(() => api.leaveQueue(leagueId));
     if (!res.ok) {
       reportFailure(res);
       // A 403 means the wait hasn't passed; re-sync so the countdown
@@ -225,13 +274,14 @@ export function LiveProvider({ children }) {
     // Leaving on your turn isn't missing it.
     lastStatusRef.current = { status: 'idle' };
     refresh();
-  }, [perform, tableId, league, reportFailure, refresh, toast, setMatchStatus]);
+  }, [perform, leagueId, reportFailure, refresh, toast, setMatchStatus]);
 
   /** "I'm here": the ready check, when it's the player's turn. */
   const confirm = useCallback(async () => {
-    const res = await perform(() => api.confirmHere(tableId, league));
+    const res = await perform(() => api.confirmHere(leagueId));
     if (!res.ok) {
       reportFailure(res);
+      noticeLocked(res);
       // Too late, or not their turn yet: catch up with the server, and
       // don't announce the miss a second time.
       if (res.status === 409 || res.status === 404) lastStatusRef.current = null;
@@ -239,7 +289,7 @@ export function LiveProvider({ children }) {
     // On success the panel changes by itself, and "Match on" is announced
     // when the game starts - a toast here too would say it twice.
     refresh();
-  }, [perform, tableId, league, reportFailure, refresh]);
+  }, [perform, leagueId, reportFailure, noticeLocked, refresh]);
 
   /** Ask to cancel the game - or agree, when the opponent has asked. */
   const cancelGame = useCallback(
@@ -272,7 +322,7 @@ export function LiveProvider({ children }) {
   );
 
   const stepDown = useCallback(async () => {
-    const res = await perform(() => api.stepDown(tableId));
+    const res = await perform(() => api.stepDown());
     if (!res.ok) {
       reportFailure(res);
       refresh();
@@ -283,7 +333,7 @@ export function LiveProvider({ children }) {
     lastStatusRef.current = { status: 'idle' };
     setGamesVersion((v) => v + 1);
     refresh();
-  }, [perform, tableId, reportFailure, refresh, toast, setMatchStatus]);
+  }, [perform, reportFailure, refresh, toast, setMatchStatus]);
 
   // --- The organiser's controls: offered only to an admin; the server
   // refuses anyone else regardless ---
@@ -300,32 +350,31 @@ export function LiveProvider({ children }) {
     [reportFailure, toast, user, refresh],
   );
 
-  /** Take a player out of this table's queue. */
+  /** Take a player out of the league's queue. */
   const removeFromQueue = useCallback(
     async (player) => {
-      const res = await perform(() => api.adminRemoveFromQueue(player.user_id, tableId, league));
+      const res = await perform(() => api.adminRemoveFromQueue(player.user_id, leagueId));
       finishRemoval(res, player);
     },
-    [perform, tableId, league, finishRemoval],
+    [perform, leagueId, finishRemoval],
   );
 
-  /** Take a player off the table; matchId is the game the organiser saw there. */
+  /** Take a player off a table; matchId is the game the organiser saw there. */
   const removeFromTable = useCallback(
-    async (player, matchId) => {
-      const res = await perform(() =>
-        api.adminRemoveFromTable(player.user_id, tableId, league, matchId),
-      );
+    async (player, matchId, tableId) => {
+      const res = await perform(() => api.adminRemoveFromTable(player.user_id, tableId, matchId));
       finishRemoval(res, player);
     },
-    [perform, tableId, league, finishRemoval],
+    [perform, finishRemoval],
   );
 
-  /** gameLeague is the league of the game itself, from the status payload. */
+  /** gameLeagueId is the league of the game itself (the status's league_id). */
   const record = useCallback(
-    async (myScore, oppScore, matchId, gameLeague) => {
-      const res = await perform(() => api.recordMatch(myScore, oppScore, matchId, gameLeague));
+    async (myScore, oppScore, matchId, gameLeagueId) => {
+      const res = await perform(() => api.recordMatch(myScore, oppScore, matchId, gameLeagueId));
       if (!res.ok) {
         reportFailure(res);
+        noticeLocked(res);
         // 409: your opponent reported this game first. Move on to
         // whatever the server says is happening now.
         refresh();
@@ -343,7 +392,7 @@ export function LiveProvider({ children }) {
       setGamesVersion((v) => v + 1);
       refresh();
     },
-    [perform, reportFailure, refresh, toast],
+    [perform, reportFailure, noticeLocked, refresh, toast],
   );
 
   const value = useMemo(() => {
@@ -351,9 +400,11 @@ export function LiveProvider({ children }) {
     const { scope: _scope, ...state } = live;
     return {
       ...state,
+      readOnly: state.matchStatus?.read_only ?? league?.read_only ?? false,
       busy,
       gamesVersion,
       refresh,
+      unlock,
       join,
       leave,
       confirm,
@@ -366,9 +417,11 @@ export function LiveProvider({ children }) {
     };
   }, [
     live,
+    league,
     busy,
     gamesVersion,
     refresh,
+    unlock,
     join,
     leave,
     confirm,
@@ -384,9 +437,9 @@ export function LiveProvider({ children }) {
 }
 
 /**
- * { matchStatus, statusProblem, queue, table, loaded, offline, busy,
- *   gamesVersion, refresh, join, leave, confirm, stepDown, record,
- *   cancelGame, keepPlaying, removeFromQueue, removeFromTable }
+ * { matchStatus, statusProblem, queue, tables, loaded, offline, readOnly,
+ *   busy, gamesVersion, refresh, unlock, join, leave, confirm, stepDown,
+ *   record, cancelGame, keepPlaying, removeFromQueue, removeFromTable }
  */
 export function useLive() {
   return useContext(LiveContext);

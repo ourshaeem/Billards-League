@@ -22,7 +22,7 @@ from logic.achievements import (
 )
 from logic.manage_queue import attempt_matchmaking, confirm_here, join_queue, step_down
 from logic.record_match import apply_result
-from models import BILLIARDS, PING_PONG, Match, Player, PlayerAchievement, db
+from models import BILLIARDS, PING_PONG, Match, Player, PlayerAchievement, Standing, db
 
 # A plain Tuesday afternoon, so time-of-day badges stay out of the way
 # unless a test asks for them.
@@ -67,7 +67,14 @@ class AchievementTestCase(BaseTestCase):
             played_at=when,
         )
         db.session.add(match)
-        apply_result(match, db.session.get(Player, winner), db.session.get(Player, loser), change, league)
+        league_id = self.league_id(league)
+        apply_result(
+            match,
+            db.session.get(Standing, (winner, league_id)),
+            db.session.get(Standing, (loser, league_id)),
+            change,
+            league,
+        )
         db.session.commit()
         return match
 
@@ -77,7 +84,7 @@ class AchievementTestCase(BaseTestCase):
             db.session.scalars(
                 db.select(PlayerAchievement.achievement_key).where(
                     PlayerAchievement.user_id == user_id,
-                    PlayerAchievement.league_type == league,
+                    PlayerAchievement.league_id == self.league_id(league),
                 )
             )
         )
@@ -226,7 +233,9 @@ class RatingTests(AchievementTestCase):
         """Ratings now are all 0 after a reset; the game's own record still knows."""
         strong = self.add_player("strong", elo=0, ping_pong_elo=150)
         self.game(self.ann, strong, change=30)
-        db.session.execute(db.update(Player).values(ping_pong_elo=0))
+        db.session.execute(
+            db.update(Standing).where(Standing.league_id == self.ping_pong_league_id).values(elo=0)
+        )
         db.session.commit()
         self.assertIn("giant_killer", self.earned(self.ann))
 
@@ -279,8 +288,8 @@ class LadderTests(AchievementTestCase):
         earned = self.earned(self.ann)
         # alice, bob and carol from the base setup are rated 1200.
         self.assertNotIn("podium", earned)
-        db.session.execute(db.update(Player).where(Player.username.in_(["alice", "bob", "carol"])).values(ping_pong_elo=0))
-        db.session.commit()
+        for user_id in (self.alice, self.bob, self.carol):
+            self.set_rating(user_id, 0, PING_PONG)
         self.assertTrue({"podium", "number_one"} <= self.earned(self.ann))
 
 
@@ -361,13 +370,13 @@ class EventTests(AchievementTestCase):
         self.assertNotIn("abdication", self.earned(self.ann, BILLIARDS))
 
     def test_patience_after_a_long_wait(self):
-        join_queue(self.ann, PING_PONG_TABLE_ID)
-        self.backdate_queue_join(self.ann, PATIENCE_WAIT_SECONDS + 60, PING_PONG_TABLE_ID)
-        join_queue(self.ben, PING_PONG_TABLE_ID)  # just arrived
+        join_queue(self.ann, PING_PONG)
+        self.backdate_queue_join(self.ann, PATIENCE_WAIT_SECONDS + 60, PING_PONG)
+        join_queue(self.ben, PING_PONG)  # just arrived
 
-        attempt_matchmaking(PING_PONG_TABLE_ID)  # ann is asked if they're here
-        confirm_here(self.ann, PING_PONG_TABLE_ID)
-        self.assertTrue(attempt_matchmaking(PING_PONG_TABLE_ID), "the game starts")
+        attempt_matchmaking(PING_PONG)  # ann is asked if they're here
+        confirm_here(self.ann, PING_PONG)
+        self.assertTrue(attempt_matchmaking(PING_PONG), "the game starts")
         self.assertIn("patience", self.earned(self.ann))
         self.assertNotIn("patience", self.earned(self.ben))
 
@@ -443,7 +452,7 @@ class BadgeRoutes(AchievementTestCase):
         with mock.patch("logic.record_match.sync_achievements", side_effect=RuntimeError):
             res = self.report(self.ann, 11, 3)
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(db.session.get(Player, self.ann).ping_pong_wins, 1)
+        self.assertEqual(self.record(self.ann, PING_PONG), (1, 0))
 
     def test_player_badges_route(self):
         res = self.client.get(f"/players/{self.ann}/badges?league_type=ping_pong")

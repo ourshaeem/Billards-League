@@ -9,10 +9,16 @@ import { ActivityIndicator, StyleSheet, Text, View, useColorScheme } from 'react
 import { useTheme } from '../state/LeagueContext';
 import { fonts, themeFor } from '../theme';
 
-/** The current league's ball, drawn from theme tokens. */
-export function LeagueBall({ size = 18, theme: override }) {
+/**
+ * The current league's ball, drawn from theme tokens. color repaints it -
+ * the 4-ball's fill, the ping pong ball's ring - for a ball drawn on the
+ * status panel's colour rather than the page's.
+ */
+export function LeagueBall({ size = 18, theme: override, color }) {
   const current = useTheme();
   const theme = override ?? current;
+  const ring = color && theme.ballRing !== 'transparent' ? color : theme.ballRing;
+  const fill = color && theme.ballRing === 'transparent' ? color : theme.ballFill;
   return (
     <View
       accessible={false}
@@ -20,12 +26,12 @@ export function LeagueBall({ size = 18, theme: override }) {
         width: size,
         height: size,
         borderRadius: size / 2,
-        backgroundColor: theme.ballFill,
-        borderWidth: theme.ballRing === 'transparent' ? 0 : Math.max(1.5, size / 12),
-        borderColor: theme.ballRing,
+        backgroundColor: fill,
+        borderWidth: ring === 'transparent' ? 0 : Math.max(1.5, size / 12),
+        borderColor: ring,
         alignItems: 'center',
         justifyContent: 'center',
-        boxShadow: '0px 2px 6px rgba(46, 16, 101, 0.3)',
+        boxShadow: '0px 2px 6px rgba(0, 0, 0, 0.25)',
       }}
     >
       {theme.ballSpot ? (

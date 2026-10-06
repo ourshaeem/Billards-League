@@ -11,7 +11,7 @@ import unittest
 from unittest import mock
 
 from tests.conftest_base import ApiTestCase
-from models import STARTING_ELO, Match, Player, PoolTable, QueueEntry, db
+from models import BILLIARDS, Match, Player, PoolTable, QueueEntry, STARTING_ELO, db
 
 from logic.manage_queue import LEAVE_UNLOCK_SECONDS
 
@@ -115,7 +115,7 @@ class JoinQueueRoute(ApiTestCase):
         self.login_as(self.alice)
         res = self.post("/queue/join")
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(self.queued_user_ids(1), [self.alice])
+        self.assertEqual(self.queued_user_ids(BILLIARDS), [self.alice])
 
     def test_joining_matches_a_waiting_king(self):
         """The original bug, at the HTTP layer."""
@@ -384,8 +384,11 @@ class MatchStatusRoute(ApiTestCase):
                 "opponent_id",
                 "match_id",
                 "table_id",
+                "table_name",
                 "league_type",
+                "league_id",
                 "cancel_requested_by",
+                "read_only",
             },
             "both apps' status panels read exactly these keys",
         )
@@ -597,9 +600,14 @@ class AuthRoutes(ApiTestCase):
             },
         )
         dave = db.session.scalars(db.select(Player).where(Player.username == "dave")).one()
+        self.assertEqual(dave.standings, [], "no league until they enter its PIN")
 
-        self.assertEqual(dave.elo_rating, STARTING_ELO)
-        self.assertEqual(dave.rank.rank_name, "Bronze", "the tier whose min_elo is 0")
+        from logic.leagues import grant_access
+
+        grant_access(dave.user_id, BILLIARDS)
+        standing = self.standing(dave.user_id)
+        self.assertEqual(standing.elo, STARTING_ELO)
+        self.assertEqual(standing.rank.rank_name, "Bronze", "the tier whose min_elo is 0")
 
 
 class FullMatchFlow(ApiTestCase):

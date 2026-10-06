@@ -30,7 +30,6 @@ from flask import has_request_context, request
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import func
 from sqlalchemy.dialects.mysql import MEDIUMBLOB
-from sqlalchemy.orm import synonym
 
 db = SQLAlchemy()
 
@@ -58,14 +57,175 @@ STARTING_ELO = 0
 # stops at it; the winner still gains the full amount.
 ELO_FLOOR = 0
 
-# The two leagues. Each is the value of Pool_Tables.league_type and of the
-# `league_type` the API accepts. A table belongs to exactly one league, and
-# a match belongs to the league of the table it was played on - so
-# matchmaking, which only ever deals in tables, needs no league logic.
+# The two games a league can play. A league (the Leagues table: CCNY
+# Billiards, John Jay Ping Pong, ...) plays one of them, and its game
+# decides how a score is judged, how many points it moves and what its
+# badges are called. `league_type` in the API has always been one of these
+# two strings, and still is: it now means the game a league plays.
 BILLIARDS = "billiards"
 PING_PONG = "ping_pong"
-LEAGUE_TYPES = (BILLIARDS, PING_PONG)
+GAMES = (BILLIARDS, PING_PONG)
+LEAGUE_TYPES = GAMES
+GAME_NAMES = {BILLIARDS: "Billiards", PING_PONG: "Ping Pong"}
+# What the two leagues were called before there were schools. Apps from
+# then still send "billiards" / "ping_pong", which mean CCNY's leagues
+# (League.legacy_key).
 LEAGUE_NAMES = {BILLIARDS: "Billiards League", PING_PONG: "Ping Pong League"}
+
+
+class League(db.Model):
+    """
+    One league: a school's billiards or ping pong, with its own tables,
+    queue, ladder and badges, its colours, and the 4-digit PIN that lets a
+    player in. See logic/leagues.py.
+    """
+
+    __tablename__ = "Leagues"
+
+    league_id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    # Stable, readable name for scripts and links ("john-jay-ping-pong").
+    slug = db.Column(db.String(40), nullable=False, unique=True)
+    name = db.Column(db.String(80), nullable=False)
+    school = db.Column(db.String(80), nullable=False)
+    game = db.Column(db.String(20), nullable=False)
+    # "#rrggbb". The apps build each league's whole colour scheme from
+    # these two (and keep its text readable whatever they are).
+    primary_color = db.Column(db.String(7), nullable=False)
+    secondary_color = db.Column(db.String(7), nullable=False)
+    # bcrypt of the 4-digit PIN, never the PIN itself. NULL until the
+    # organiser sets one: until then only they can play here.
+    pin_hash = db.Column(db.String(100), nullable=True)
+    # "billiards" / "ping_pong" for CCNY's two leagues - the ones that
+    # existed before there were schools, which is what those words mean
+    # to an app from then. NULL for every other league.
+    legacy_key = db.Column(db.String(20), nullable=True, unique=True)
+    sort_order = db.Column(db.Integer, nullable=False, default=0, server_default="0")
+
+    @classmethod
+    def of(cls, ref):
+        """
+        The league a reference means: a League, a league_id, a slug, or
+        "billiards" / "ping_pong" (CCNY's, as apps from before schools
+        mean them). None if nothing matches.
+        """
+        if ref is None or isinstance(ref, cls):
+            return ref
+        if isinstance(ref, int) and not isinstance(ref, bool):
+            return db.session.get(cls, ref)
+        if isinstance(ref, str):
+            key = ref.strip().lower()
+            if key.isdigit():
+                return db.session.get(cls, int(key))
+            return db.session.scalars(
+                db.select(cls).where(db.or_(cls.legacy_key == key, cls.slug == key))
+            ).first()
+        return None
+
+    @property
+    def has_pin(self):
+        return self.pin_hash is not None
+
+    def to_dict(self):
+        """What the apps need to list a league and dress it in its colours."""
+        return {
+            "league_id": self.league_id,
+            "slug": self.slug,
+            "name": self.name,
+            "school": self.school,
+            "game": self.game,
+            "league_type": self.game,
+            "primary_color": self.primary_color,
+            "secondary_color": self.secondary_color,
+            "has_pin": self.has_pin,
+            # "billiards" / "ping_pong" for CCNY's two: what an app that
+            # saved one of those words as its league can find it by.
+            "legacy_key": self.legacy_key,
+        }
+
+    def __repr__(self):
+        return f"<League {self.league_id} {self.slug}>"
+
+
+class Standing(db.Model):
+    """
+    One player's numbers in one league: rating, record, rank, and the
+    badge they show there. Each league has its own ladder, so a player in
+    two leagues has two of these. A player gets one when they first get
+    into a league (or first play there), starting where every new player
+    starts.
+
+    Before there were schools these lived in columns on Players
+    (elo_rating, ping_pong_elo, ...). Those columns are still in the
+    database, untouched since the numbers moved here; nothing reads them.
+    """
+
+    __tablename__ = "Standings"
+
+    user_id = db.Column(db.Integer, db.ForeignKey("Players.user_id"), primary_key=True)
+    league_id = db.Column(db.Integer, db.ForeignKey("Leagues.league_id"), primary_key=True)
+    elo = db.Column(db.Integer, nullable=False, default=STARTING_ELO, server_default=str(STARTING_ELO))
+    wins = db.Column(db.Integer, nullable=False, default=0, server_default="0")
+    losses = db.Column(db.Integer, nullable=False, default=0, server_default="0")
+    rank_id = db.Column(db.Integer, db.ForeignKey("Ranks.rank_id"), nullable=True)
+    # The badge this league's ladder shows by the player's name, by
+    # achievement key (logic/achievements.py). NULL: their best, chosen
+    # automatically.
+    featured_badge = db.Column(db.String(40), nullable=True)
+
+    player = db.relationship("Player", back_populates="standings")
+    rank = db.relationship("Rank", lazy="joined")
+
+    __table_args__ = (db.Index("idx_standings_league_elo", "league_id", "elo"),)
+
+    @property
+    def games(self):
+        return (self.wins or 0) + (self.losses or 0)
+
+    def numbers(self):
+        """{elo, rank_name, wins, losses} - the shape every client reads."""
+        return {
+            "elo": STARTING_ELO if self.elo is None else self.elo,
+            "rank_name": self.rank.rank_name if self.rank else "Unranked",
+            "wins": self.wins or 0,
+            "losses": self.losses or 0,
+        }
+
+    def __repr__(self):
+        return f"<Standing user={self.user_id} league={self.league_id} {self.elo}>"
+
+
+# A player with no Standing in a league yet: where everyone starts.
+NO_STANDING = {"elo": STARTING_ELO, "rank_name": "Unranked", "wins": 0, "losses": 0}
+
+
+class LeagueAccess(db.Model):
+    """
+    A player who has entered a league's PIN (or was let in some other
+    way), so never has to again - until the organiser changes the PIN,
+    which deletes every row for that league. See logic/leagues.py.
+    """
+
+    __tablename__ = "League_Access"
+
+    user_id = db.Column(db.Integer, db.ForeignKey("Players.user_id"), primary_key=True)
+    league_id = db.Column(db.Integer, db.ForeignKey("Leagues.league_id"), primary_key=True)
+    granted_at = db.Column(db.DateTime, nullable=False, server_default=func.current_timestamp())
+
+
+class PinAttempt(db.Model):
+    """
+    Wrong PINs a player has tried for one league lately. A 4-digit PIN has
+    only 10,000 possibilities, so without a limit anyone could try them
+    all; see logic/leagues.py for how many, and how long the wait is.
+    """
+
+    __tablename__ = "Pin_Attempts"
+
+    user_id = db.Column(db.Integer, db.ForeignKey("Players.user_id"), primary_key=True)
+    league_id = db.Column(db.Integer, db.ForeignKey("Leagues.league_id"), primary_key=True)
+    failures = db.Column(db.Integer, nullable=False, default=0, server_default="0")
+    # The database's clock, as for every time-based rule here.
+    first_failed_at = db.Column(db.DateTime, nullable=False, server_default=func.current_timestamp())
 
 
 class Player(db.Model):
@@ -89,38 +249,9 @@ class Player(db.Model):
     # as either str or bytes.
     password_hash = db.Column(db.String(255), nullable=False)
 
-    # --- Billiards standing ---
-    # These columns predate the ping pong league, so their names don't say
-    # "billiards". billiards_elo / billiards_rank_id are the same columns
-    # under the league's name - aliases, not copies. A second pair of
-    # columns holding the same rating would be two homes for one fact,
-    # which is how this project's worst bugs started.
-    elo_rating = db.Column(
-        db.Integer, nullable=False, default=STARTING_ELO, server_default=str(STARTING_ELO)
-    )
-    total_wins = db.Column(db.Integer, nullable=False, default=0, server_default="0")
-    total_losses = db.Column(db.Integer, nullable=False, default=0, server_default="0")
-
-    rank_id = db.Column(db.Integer, db.ForeignKey("Ranks.rank_id"), nullable=True)
-    rank = db.relationship(
-        "Rank", back_populates="players", foreign_keys=[rank_id], lazy="joined"
-    )
-
-    billiards_elo = synonym("elo_rating")
-    billiards_rank_id = synonym("rank_id")
-
-    # --- Ping pong standing ---
-    ping_pong_elo = db.Column(
-        db.Integer, nullable=False, default=STARTING_ELO, server_default=str(STARTING_ELO)
-    )
-    ping_pong_wins = db.Column(db.Integer, nullable=False, default=0, server_default="0")
-    ping_pong_losses = db.Column(db.Integer, nullable=False, default=0, server_default="0")
-    ping_pong_rank_id = db.Column(db.Integer, db.ForeignKey("Ranks.rank_id"), nullable=True)
-    # Loaded on first use rather than joined. Matchmaking reads players
-    # under SELECT ... FOR UPDATE, and every joined table there is another
-    # set of locked rows. There are only a handful of Ranks, so after the
-    # first lookup these come from the session without a query.
-    ping_pong_rank = db.relationship("Rank", foreign_keys=[ping_pong_rank_id])
+    # Each league's rating, record, rank and chosen badge (Standing).
+    # Loaded together for every player read, in one query for all of them.
+    standings = db.relationship("Standing", back_populates="player", lazy="selectin")
 
     # --- Profile ---
     # ISO 3166-1 alpha-2 code ("US"), not the emoji itself: a code can be
@@ -147,16 +278,6 @@ class Player(db.Model):
     # admin request - never from the client or the login token.
     is_admin = db.Column(db.Boolean, nullable=False, default=False, server_default="0")
 
-    # The badge each league's ladder shows next to this player, by
-    # achievement key (see logic/achievements.py). NULL means "my best one,
-    # picked automatically".
-    billiards_featured_badge = db.Column(db.String(40), nullable=True)
-    ping_pong_featured_badge = db.Column(db.String(40), nullable=True)
-    FEATURED_BADGE_FIELDS = {
-        BILLIARDS: "billiards_featured_badge",
-        PING_PONG: "ping_pong_featured_badge",
-    }
-
     __table_args__ = (db.Index("uq_players_email", "email", unique=True),)
 
     @property
@@ -173,35 +294,17 @@ class Player(db.Model):
         """The player's picture as a link a client can load, or None."""
         return public_url(self.profile_picture)
 
-    # Where each league keeps its numbers, so code that works for either
-    # league reads one table instead of branching everywhere.
-    LEAGUE_FIELDS = {
-        BILLIARDS: {
-            "elo": "elo_rating",
-            "rank_id": "rank_id",
-            "rank": "rank",
-            "wins": "total_wins",
-            "losses": "total_losses",
-        },
-        PING_PONG: {
-            "elo": "ping_pong_elo",
-            "rank_id": "ping_pong_rank_id",
-            "rank": "ping_pong_rank",
-            "wins": "ping_pong_wins",
-            "losses": "ping_pong_losses",
-        },
-    }
+    def standing_in(self, league):
+        """This player's Standing in a league (any League.of reference), or None."""
+        league = League.of(league)
+        if league is None:
+            return None
+        return next((st for st in self.standings if st.league_id == league.league_id), None)
 
     def standing(self, league=BILLIARDS):
-        """This player's numbers in one league."""
-        fields = self.LEAGUE_FIELDS[league]
-        rank = getattr(self, fields["rank"])
-        return {
-            "elo": getattr(self, fields["elo"]),
-            "rank_name": rank.rank_name if rank else "Unranked",
-            "wins": getattr(self, fields["wins"]) or 0,
-            "losses": getattr(self, fields["losses"]) or 0,
-        }
+        """This player's numbers in one league - a new player's if they have none there."""
+        st = self.standing_in(league)
+        return st.numbers() if st is not None else dict(NO_STANDING)
 
     def to_leaderboard_dict(self, league=BILLIARDS):
         """
@@ -228,27 +331,53 @@ class Player(db.Model):
         """
         A player as other people see them: enough to draw their avatar and
         flag, plus the rank and rating the hover card shows for `league`.
+        league_type is the league's game; league_id says which league.
         """
+        league = League.of(league)
         return {
             "user_id": self.user_id,
             "username": self.display_name,
             "country_flag": self.country_flag,
             "profile_picture": self.picture_url,
-            "league_type": league,
+            "league_type": league.game if league else BILLIARDS,
+            "league_id": league.league_id if league else None,
             **self.standing(league),
         }
 
     def to_public_profile_dict(self):
         """
-        A player's profile as anyone may see it: both leagues' standings,
-        but not their real name - that stays between them and the league.
+        A player's profile as anyone may see it: their standing in every
+        league they're in, but not their real name - that stays between them
+        and the league.
+
+        `leagues` is keyed "billiards" / "ping_pong" and holds CCNY's two,
+        as apps from before schools read it. `standings` is every league
+        the player has numbers in.
         """
+        leagues = {
+            league.league_id: league
+            for league in db.session.scalars(db.select(League).order_by(League.sort_order))
+        }
+        legacy = {league.legacy_key: league for league in leagues.values() if league.legacy_key}
+        mine = sorted(
+            (st for st in self.standings if st.league_id in leagues),
+            key=lambda st: leagues[st.league_id].sort_order,
+        )
         return {
             "user_id": self.user_id,
             "username": self.display_name,
             "country_flag": self.country_flag,
             "profile_picture": self.picture_url,
-            "leagues": {league: self.standing(league) for league in LEAGUE_TYPES},
+            "leagues": {game: self.standing(legacy.get(game)) for game in GAMES},
+            "standings": [
+                {
+                    "league_id": st.league_id,
+                    "name": leagues[st.league_id].name,
+                    "league_type": leagues[st.league_id].game,
+                    **st.numbers(),
+                }
+                for st in mine
+            ],
         }
 
     @property
@@ -275,7 +404,7 @@ class Player(db.Model):
         }
 
     def __repr__(self):
-        return f"<Player {self.username} ({self.elo_rating})>"
+        return f"<Player {self.user_id} {self.username}>"
 
 
 class Rank(db.Model):
@@ -286,8 +415,6 @@ class Rank(db.Model):
     rank_id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     rank_name = db.Column(db.String(50), nullable=False)
     min_elo = db.Column(db.Integer, nullable=False)
-
-    players = db.relationship("Player", back_populates="rank", foreign_keys="Player.rank_id")
 
     @classmethod
     def for_elo(cls, elo):
@@ -325,11 +452,12 @@ class PoolTable(db.Model):
 
     table_id = db.Column(db.Integer, primary_key=True, autoincrement=True)
 
-    # Indexed in the database, which implies a Leagues table. No
-    # ForeignKey is declared because there's no Leagues model here, and
-    # pointing an FK at a missing model breaks SQLAlchemy at startup.
-    # Mapping it as a plain column keeps the data readable and writable.
-    league_id = db.Column(db.Integer, nullable=True)
+    # The league that plays here. NULL only on a database from before
+    # schools, until ensure_schema() fills it in.
+    league_id = db.Column(db.Integer, db.ForeignKey("Leagues.league_id"), nullable=True)
+    # False once the organiser removes the table. The row stays - its games
+    # are history - but nobody is sent to play on it.
+    is_active = db.Column(db.Boolean, nullable=False, default=True, server_default="1")
 
     table_name = db.Column(db.String(50), nullable=False)
     current_king_id = db.Column(db.Integer, db.ForeignKey("Players.user_id"), nullable=True)
@@ -341,15 +469,15 @@ class PoolTable(db.Model):
     current_streak = db.Column(db.Integer, nullable=True, default=0, server_default="0")
     table_record_streak = db.Column(db.Integer, nullable=True, default=0, server_default="0")
 
-    # Which league plays here: BILLIARDS or PING_PONG. Deliberately not the
-    # league_id above - that points at the Leagues table, which holds
-    # groups of players rather than sports. Every table that existed before
-    # ping pong is a pool table, which is what the default says.
+    # The game played here - always its league's game. From before there
+    # were schools, when the game was the league; kept in step so a table
+    # still reads sensibly on its own. Nothing decides anything from it.
     league_type = db.Column(
         db.String(20), nullable=False, default=BILLIARDS, server_default=BILLIARDS
     )
 
     current_king = db.relationship("Player", foreign_keys=[current_king_id], lazy="joined")
+    league = db.relationship("League")
 
     def to_dict(self):
         return {
@@ -367,7 +495,10 @@ class PoolTable(db.Model):
 
 class QueueEntry(db.Model):
     """
-    One player waiting for one table. Maps to the existing `Queue` table.
+    One player waiting in one league's line. Maps to the existing `Queue`
+    table. The line is the league's, not a table's: when a player's turn
+    comes, matchmaking calls them to whichever table needs them, and
+    table_id says which.
 
     Named QueueEntry rather than Queue because `Queue` collides with
     Python's stdlib queue.Queue. `__tablename__` still points at the real
@@ -378,7 +509,10 @@ class QueueEntry(db.Model):
 
     queue_id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     user_id = db.Column(db.Integer, db.ForeignKey("Players.user_id"), nullable=False)
-    table_id = db.Column(db.Integer, nullable=False, default=1, server_default="1")
+    league_id = db.Column(db.Integer, db.ForeignKey("Leagues.league_id"), nullable=True)
+    # The table this player has been called to; NULL while they're only
+    # waiting. (NULL is allowed in the database from ensure_schema on.)
+    table_id = db.Column(db.Integer, nullable=True)
     queue_position = db.Column(db.Integer, nullable=False)
 
     # Powers the leave-queue timer. server_default matters: inserts don't
@@ -401,8 +535,8 @@ class QueueEntry(db.Model):
     # add any that are missing to an existing database. The unique one is
     # what stops a double-tapped Join from queueing someone twice.
     __table_args__ = (
-        db.Index("uq_queue_user_table", "user_id", "table_id", unique=True),
-        db.Index("idx_queue_table", "table_id", "queue_position"),
+        db.Index("uq_queue_user_league", "user_id", "league_id", unique=True),
+        db.Index("idx_queue_league", "league_id", "queue_position"),
     )
 
     @property
@@ -415,12 +549,13 @@ class QueueEntry(db.Model):
         """Their turn has come and they've said they're here."""
         return self.called_at is not None and self.confirmed_at is not None
 
-    def to_dict(self, place=None):
+    def to_dict(self, place=None, table_names=None):
         """
-        One line of /queue/<table_id>. `place` is the player's actual place
+        One line of a league's queue. `place` is the player's actual place
         in line; queue_position on its own is only a sort key and drifts
         upwards over an evening. called / confirmed let everyone watching
-        see whose turn it is and whether they've said they're here.
+        see whose turn it is and whether they've said they're here, and
+        table_id / table_name which table they're called to.
         """
         return {
             "queue_position": place if place is not None else self.queue_position,
@@ -428,10 +563,15 @@ class QueueEntry(db.Model):
             "username": self.player.username,
             "called": self.is_called,
             "confirmed": self.is_confirmed,
+            "table_id": self.table_id if self.is_called else None,
+            "table_name": (table_names or {}).get(self.table_id) if self.is_called else None,
         }
 
     def __repr__(self):
-        return f"<QueueEntry user={self.user_id} table={self.table_id} pos={self.queue_position}>"
+        return (
+            f"<QueueEntry user={self.user_id} league={self.league_id} "
+            f"table={self.table_id} pos={self.queue_position}>"
+        )
 
 
 class Match(db.Model):
@@ -562,11 +702,12 @@ class Match(db.Model):
         return self.player_two_id if winner_id == self.player_one_id else self.player_one_id
 
     # --- Serialization: the exact /match/status payloads ---
-    # league_type is the league of this match's table. The frontend sends it
-    # back when reporting the score, so a ping pong game is never scored
-    # with billiards rules because the screen happened to be on billiards.
+    # `league` is the League of this match's table. league_type (its game)
+    # and league_id go to the apps, which send them back when reporting the
+    # score, so a game is never scored by the rules of whatever league the
+    # screen happened to show.
 
-    def to_playing_dict(self, user_id, league=BILLIARDS):
+    def to_playing_dict(self, user_id, league=None, table_name=None):
         """
         The 'playing' response. cancel_requested_by says who, if anyone,
         has asked to call the game off: "you", "opponent" or None.
@@ -582,17 +723,21 @@ class Match(db.Model):
             "opponent_id": self.opponent_of(user_id),
             "match_id": self.match_id,
             "table_id": self.table_id,
-            "league_type": league,
+            "table_name": table_name,
+            "league_type": league.game if league else BILLIARDS,
+            "league_id": league.league_id if league else None,
             "cancel_requested_by": cancel_requested_by,
         }
 
-    def to_waiting_dict(self, league=BILLIARDS):
+    def to_waiting_dict(self, league=None, table_name=None):
         """The 'waiting_for_challenger' response."""
         return {
             "status": "waiting_for_challenger",
             "match_id": self.match_id,
             "table_id": self.table_id,
-            "league_type": league,
+            "table_name": table_name,
+            "league_type": league.game if league else BILLIARDS,
+            "league_id": league.league_id if league else None,
         }
 
     @property
@@ -609,10 +754,12 @@ class Match(db.Model):
         MySQL's clock and read against Python's is off by the difference
         in their timezones. viewer_id adds "result" from that player's side.
         """
+        league = League.of(league)
         entry = {
             "match_id": self.match_id,
             "table_id": self.table_id,
-            "league_type": league,
+            "league_type": league.game if league else BILLIARDS,
+            "league_id": league.league_id if league else None,
             "winner": self.winner.to_card(league) if self.winner else None,
             "loser": self.loser.to_card(league) if self.loser else None,
             # None for games recorded before scores were stored.
@@ -645,6 +792,10 @@ class PlayerAchievement(db.Model):
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     user_id = db.Column(db.Integer, db.ForeignKey("Players.user_id"), nullable=False)
+    # The league it was earned in. NULL only on a database from before
+    # schools, until ensure_schema() fills it in.
+    league_id = db.Column(db.Integer, db.ForeignKey("Leagues.league_id"), nullable=True)
+    # The league's game - what names the badge (a Bagel in ping pong).
     league_type = db.Column(db.String(20), nullable=False)
     achievement_key = db.Column(db.String(40), nullable=False)
     # When it was earned: when the game that earned it finished, or when
@@ -659,11 +810,11 @@ class PlayerAchievement(db.Model):
     __table_args__ = (
         # Each achievement is earned once per league, however many results
         # are recorded at the same instant.
-        db.Index("uq_achievement", "user_id", "league_type", "achievement_key", unique=True),
+        db.Index("uq_achievement_league", "user_id", "league_id", "achievement_key", unique=True),
     )
 
     def __repr__(self):
-        return f"<PlayerAchievement user={self.user_id} {self.league_type}:{self.achievement_key}>"
+        return f"<PlayerAchievement user={self.user_id} league={self.league_id}:{self.achievement_key}>"
 
 
 class PlayerPicture(db.Model):

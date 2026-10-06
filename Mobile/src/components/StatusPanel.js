@@ -12,16 +12,21 @@
  *   playing                - a game is on, report the score (or agree
  *                            with the opponent to call it off)
  *
- * `league` is the league on screen. A game or a held table is reported
- * with its own league_type, which can be the other league; the scorecard
- * always follows the game's league, never the screen's.
+ * `league` is the league on screen (from GET /leagues/directory). A game
+ * or a held table is reported with its own league_id, which can be
+ * another league; the scorecard always follows the game's league (its
+ * game's rules), never the screen's.
+ *
+ * readOnly: the player hasn't entered this league's PIN. Instead of Join
+ * the panel asks for it; anything they're already in (a game from before
+ * the PIN changed, say) still shows, with the prompt above it.
  */
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 
-import { leagueInfo } from '../leagues';
+import { gameInfo } from '../leagues';
 import { useTheme } from '../state/LeagueContext';
 import { fonts, radius, type } from '../theme';
 import { Button, Field, FieldError } from './ui';
@@ -65,7 +70,9 @@ export function StatusPanel({
   status,
   problem,
   league,
-  tableName,
+  leagues,
+  readOnly,
+  onUnlock,
   queueLength,
   onJoin,
   onLeave,
@@ -78,13 +85,18 @@ export function StatusPanel({
   busy,
 }) {
   const theme = useTheme();
-  const state = status ? status.status || 'idle' : 'loading';
-  const elsewhere =
-    (state === 'playing' || state === 'waiting_for_challenger') &&
-    status.league_type &&
-    status.league_type !== league
-      ? status.league_type
-      : null;
+  // Before the league list arrives there's nothing to say yet.
+  const state = status && league ? status.status || 'idle' : 'loading';
+  // The league of the game or held table, which can be another one.
+  const gameLeague =
+    (state === 'playing' || state === 'waiting_for_challenger') && status.league_id
+      ? (leagues?.find((l) => l.league_id === status.league_id) ?? league)
+      : league;
+  const elsewhere = gameLeague && gameLeague.league_id !== league?.league_id ? gameLeague : null;
+  // Without the PIN, idle becomes "enter the PIN"; anything else keeps its
+  // own panel, with the prompt above it.
+  const locked = readOnly && state !== 'loading';
+  const askOnly = locked && state === 'idle';
 
   return (
     // No accessibilityState busy here, though the panel is briefly
@@ -102,8 +114,7 @@ export function StatusPanel({
         },
       ]}
     >
-      {/* Along the top edge: a faint highlight on the purple billiards
-          panel, a purple band on the white ping pong one. */}
+      {/* Along the top edge: a band in the league's second colour. */}
       <View style={[styles.edge, { height: theme.panelEdgeSize, backgroundColor: theme.panelEdge }]} />
 
       {problem ? (
@@ -111,10 +122,10 @@ export function StatusPanel({
       ) : null}
       {elsewhere ? (
         <Note>
-          This is your game in the {leagueInfo(elsewhere).name}.{' '}
+          This is your game in {elsewhere.name}.{' '}
           <Text
             accessibilityRole="link"
-            onPress={() => onSwitchLeague(elsewhere)}
+            onPress={() => onSwitchLeague(elsewhere.league_id)}
             style={[styles.inlineLink, { color: theme.panelText }]}
           >
             Switch to that league
@@ -122,12 +133,24 @@ export function StatusPanel({
         </Note>
       ) : null}
 
+      {locked && !askOnly ? (
+        <PinPrompt
+          league={league}
+          onUnlock={onUnlock}
+          busy={busy}
+          compact
+          // In this league already (a game, a place in line): the PIN must
+          // have changed since. A game elsewhere: they just haven't entered
+          // this league's yet.
+          changed={!elsewhere}
+        />
+      ) : null}
       {state === 'loading' && <LoadingState />}
       {state === 'playing' && (
         <PlayingState
           key={status.match_id}
           status={status}
-          league={status.league_type || league}
+          league={gameLeague}
           onRecord={onRecord}
           onCancelGame={onCancelGame}
           onKeepPlaying={onKeepPlaying}
@@ -148,8 +171,108 @@ export function StatusPanel({
       {state === 'queued' && (
         <QueuedState status={status} onLeave={onLeave} busy={busy} queueLength={queueLength} />
       )}
-      {state === 'idle' && (
-        <IdleState onJoin={onJoin} busy={busy} queueLength={queueLength} tableName={tableName} />
+      {askOnly ? <PinPrompt league={league} onUnlock={onUnlock} busy={busy} /> : null}
+      {state === 'idle' && !askOnly && (
+        <IdleState onJoin={onJoin} busy={busy} queueLength={queueLength} league={league} />
+      )}
+    </View>
+  );
+}
+
+/**
+ * "Enter the PIN to play": the league is open to look at, but playing
+ * here needs its 4-digit PIN - once; it's remembered. compact is the
+ * smaller version shown above a game or a place in line; changed says the
+ * PIN changed since the player got there (rather than that they're
+ * looking at this league while their game is in another).
+ */
+function PinPrompt({ league, onUnlock, busy, compact = false, changed = false }) {
+  const theme = useTheme();
+  const [pin, setPin] = useState('');
+  const [error, setError] = useState(null);
+
+  const submit = async () => {
+    if (!/^\d{4}$/.test(pin)) {
+      setError('The PIN is 4 digits.');
+      return;
+    }
+    setError(null);
+    const result = await onUnlock(pin);
+    if (!result.ok) {
+      if (result.field === 'pin') setError(result.message);
+      setPin('');
+    }
+  };
+
+  const title = !league.has_pin
+    ? compact
+      ? `No playing at ${league.name} yet`
+      : 'Enter the 4-digit PIN to play'
+    : compact && changed
+      ? `${league.name}'s PIN has changed`
+      : compact
+        ? `To play at ${league.name}, enter its PIN`
+        : 'Enter the 4-digit PIN to play';
+
+  return (
+    <View style={compact ? [styles.pinCompact, { backgroundColor: theme.panelFill, borderColor: theme.panelLine }] : null}>
+      {compact ? (
+        <View style={styles.pinCompactHead}>
+          <Feather name="lock" size={16} color={theme.panelIcon} />
+          <Text style={[styles.pinCompactTitle, { color: theme.panelText }]}>{title}</Text>
+        </View>
+      ) : (
+        <Headline icon="lock" iconSet="feather">
+          {title}
+        </Headline>
+      )}
+      {!league.has_pin ? (
+        <Sub style={compact ? styles.pinCompactSub : null}>
+          {league.name} doesn't have a PIN yet. Ask the organiser - until they set one, you can look
+          around but not play.
+        </Sub>
+      ) : (
+        <>
+          <Sub style={compact ? styles.pinCompactSub : null}>
+            {compact && changed
+              ? 'Enter the new one to keep playing here - you only need to once.'
+              : compact
+                ? 'You only need to once.'
+                : `Look around all you like. To join the line at ${league.name}, enter its PIN - you only need to once. Ask the organiser if you don't have it.`}
+          </Sub>
+          <View style={styles.pinRow}>
+            <Field
+              onPanel
+              // The heading names the league; a longer label wraps and
+              // pushes the field out of line with its button.
+              label="4-digit PIN"
+              accessibilityLabel={`${league.name}'s 4-digit PIN`}
+              value={pin}
+              onChangeText={(text) => {
+                setPin(text.replace(/[^0-9]/g, '').slice(0, 4));
+                setError(null);
+              }}
+              onSubmitEditing={submit}
+              keyboardType="number-pad"
+              inputMode="numeric"
+              secureTextEntry
+              autoComplete="off"
+              textContentType="oneTimeCode"
+              maxLength={4}
+              placeholder="••••"
+              error={error}
+              style={styles.pinField}
+              inputStyle={styles.pinInput}
+            />
+            <Button
+              variant="panelPrimary"
+              title={busy ? 'Checking...' : 'Unlock'}
+              onPress={submit}
+              disabled={busy || pin.length !== 4}
+              style={styles.pinButton}
+            />
+          </View>
+        </>
       )}
     </View>
   );
@@ -175,6 +298,17 @@ function Headline({ icon, iconSet = 'community', children }) {
 function Sub({ children, style }) {
   const theme = useTheme();
   return <Text style={[styles.sub, { color: theme.panelDim }, style]}>{children}</Text>;
+}
+
+/** Which of the league's tables a game or a turn is at. */
+function Where({ children }) {
+  const theme = useTheme();
+  return (
+    <View style={styles.where}>
+      <Feather name="map-pin" size={15} color={theme.panelIcon} />
+      <Text style={[styles.whereText, { color: theme.panelText }]}>{children}</Text>
+    </View>
+  );
 }
 
 function Meta({ icon, children }) {
@@ -217,10 +351,11 @@ function LoadingState() {
   );
 }
 
-function IdleState({ onJoin, busy, queueLength, tableName }) {
+function IdleState({ onJoin, busy, queueLength, league }) {
+  const tables = league.tables || [];
   return (
     <>
-      <Headline>{tableName || 'The table'} is open to you</Headline>
+      <Headline>{tables.length === 1 ? tables[0].table_name : league.name} is open to you</Headline>
       <Sub>
         {queueLength === 0
           ? 'Nobody is waiting. Join and you play as soon as someone else does.'
@@ -302,7 +437,7 @@ function HoldingTableState({ status, queueLength, onStepDown, busy }) {
 
   return (
     <>
-      <Headline icon="crown-outline">You hold the table</Headline>
+      <Headline icon="crown-outline">You hold {status.table_name || 'the table'}</Headline>
       <Sub>{sub}</Sub>
       <View style={styles.actions}>
         <Meta icon="users">{`${queueLength} waiting to challenge you`}</Meta>
@@ -323,7 +458,7 @@ function PlayingState({ status, league, onRecord, onCancelGame, onKeepPlaying, b
   const theme = useTheme();
   const [scores, setScores] = useState({ mine: '', theirs: '' });
   const [error, setError] = useState(null);
-  const info = leagueInfo(league);
+  const info = gameInfo(league.game);
   const unit = info.scoreUnit;
 
   // A new match gets a clean scorecard because the parent gives this
@@ -355,7 +490,7 @@ function PlayingState({ status, league, onRecord, onCancelGame, onKeepPlaying, b
 
     // The match id says which game this score is for; the league lets the
     // server refuse a score sent under the wrong league's rules.
-    onRecord(mine, theirs, status.match_id, league);
+    onRecord(mine, theirs, status.match_id, status.league_id ?? league.league_id);
   };
 
   const onlyDigits = (value) => value.replace(/[^0-9]/g, '');
@@ -364,6 +499,7 @@ function PlayingState({ status, league, onRecord, onCancelGame, onKeepPlaying, b
   return (
     <>
       <Headline icon="sword-cross">You're playing {status.opponent}</Headline>
+      {status.table_name ? <Where>At {status.table_name}</Where> : null}
 
       {cancelAsked === 'opponent' ? (
         <Notice>
@@ -406,7 +542,7 @@ function PlayingState({ status, league, onRecord, onCancelGame, onKeepPlaying, b
         </Notice>
       ) : null}
       <Sub>
-        {info.name}, table {status.table_id}. When the game is done,{' '}
+        {league.name}. When the game is done,{' '}
         {unit === 'points'
           ? 'put the points each of you scored below'
           : 'put the balls each of you sank below'}{' '}
@@ -522,6 +658,7 @@ function YourTurnState({ status, onConfirm, onLeave, busy }) {
     return (
       <>
         <Headline>You're in - get ready</Headline>
+        {status.table_name ? <Where>At {status.table_name}</Where> : null}
         <Sub>
           {opponent ? `Waiting for ${opponent} to say they're here` : 'Waiting for your opponent'}
           {theirs !== null ? ` - they have ${clockText(theirs)} left.` : '.'} The game starts the
@@ -536,6 +673,7 @@ function YourTurnState({ status, onConfirm, onLeave, busy }) {
   return (
     <>
       <Headline icon="bell-ring-outline">It's your turn</Headline>
+      {status.table_name ? <Where>At {status.table_name}</Where> : null}
       <Sub>
         {opponent ? `You're up against ${opponent}. Tap "I'm here" to play.` : 'Tap "I\'m here" to play.'}{' '}
         If you don't in time, you're taken out of the queue and the next player is asked.
@@ -641,4 +779,14 @@ const styles = StyleSheet.create({
   meterTrack: { flex: 1, height: 10, borderRadius: radius.pill, overflow: 'hidden' },
   meterFill: { height: '100%', borderRadius: radius.pill },
   meterClock: { fontFamily: fonts.bold, fontSize: 24, fontVariant: ['tabular-nums'], minWidth: 56 },
+  where: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: -2, marginBottom: 10 },
+  whereText: { fontFamily: fonts.semibold, fontSize: type.body },
+  pinCompact: { borderWidth: 1, borderRadius: radius.sm, padding: 12, marginBottom: 18 },
+  pinCompactHead: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
+  pinCompactTitle: { fontFamily: fonts.semibold, fontSize: type.body, flexShrink: 1 },
+  pinCompactSub: { fontSize: type.small, lineHeight: 19, marginBottom: 10 },
+  pinRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  pinField: { flex: 1, marginBottom: 0 },
+  pinInput: { fontSize: 22, letterSpacing: 8, textAlign: 'center', fontVariant: ['tabular-nums'] },
+  pinButton: { marginTop: 25 },
 });

@@ -1,7 +1,8 @@
 /**
- * Another player's profile: who they are, where they stand in both
- * leagues, their games - against everyone, against one opponent, and
- * against you. Port of Frontend/src/components/PlayerProfile.jsx.
+ * Another player's profile: who they are, where they stand in each league
+ * they're in, their games there - against everyone, against one opponent,
+ * and against you. Port of Frontend/src/components/PlayerProfile.jsx.
+ * Tapping one of their leagues shows their games in it.
  *
  * Opened by tapping a player anywhere (useOpenPlayer in Player.js), on
  * top of the tabs; the back button returns to where they were. Their real
@@ -13,9 +14,8 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import * as api from '../api';
 import { GameRow } from '../components/GameRow';
 import { Avatar } from '../components/Player';
-import { Button, Card, Screen, Segmented, Txt } from '../components/ui';
+import { Button, Card, Screen, Txt } from '../components/ui';
 import { flagEmoji } from '../flags';
-import { LEAGUE_ORDER, LEAGUES } from '../leagues';
 import { useLeague } from '../state/LeagueContext';
 import { useSession } from '../state/SessionContext';
 import { pointsText } from '../format';
@@ -23,13 +23,12 @@ import { fonts, radius, type } from '../theme';
 
 const GAMES_LIMIT = 30;
 const HEAD_TO_HEAD_LIMIT = 10;
-const LEAGUE_OPTIONS = LEAGUE_ORDER.map((key) => ({ value: key, label: LEAGUES[key].name }));
 
 export function PlayerScreen({ route, navigation }) {
   const { userId } = route.params;
-  const { league: screenLeague } = useLeague();
+  const { league: screenLeague, leagues } = useLeague();
   const { user } = useSession();
-  const [league, setLeague] = useState(screenLeague || LEAGUE_ORDER[0]);
+  const [leagueId, setLeagueId] = useState(screenLeague?.league_id ?? null);
   const [player, setPlayer] = useState(null);
   const [problem, setProblem] = useState(null);
   const currentUserId = user?.user_id ?? null;
@@ -61,6 +60,13 @@ export function PlayerScreen({ route, navigation }) {
 
   const flag = flagEmoji(player.country_flag);
   const isYou = player.user_id === currentUserId;
+  // The leagues to show: every one they have numbers in, and the one on
+  // screen even if they've never played there.
+  const standings = player.standings || [];
+  const choices = (leagues || []).filter(
+    (l) => standings.some((st) => st.league_id === l.league_id) || l.league_id === screenLeague?.league_id,
+  );
+  const league = choices.find((l) => l.league_id === leagueId) ?? choices[0] ?? screenLeague;
 
   return (
     <Screen>
@@ -79,49 +85,65 @@ export function PlayerScreen({ route, navigation }) {
             ) : null}
           </View>
         </View>
-        <Standings leagues={player.leagues} highlight={league} />
-      </Card>
-
-      <View style={styles.switch}>
-        <Segmented
-          options={LEAGUE_OPTIONS}
-          value={league}
-          onChange={setLeague}
-          accessibilityLabel="Which league's games to show"
+        <Standings
+          choices={choices}
+          standings={standings}
+          selected={league?.league_id}
+          onSelect={setLeagueId}
         />
-      </View>
+      </Card>
 
       {/* Keyed so a change of league starts each part over, rather than
           showing one league's numbers under the other's name. */}
-      <PlayerGames
-        key={`${userId}-${league}`}
-        player={player}
-        league={league}
-        currentUserId={currentUserId}
-      />
+      {league ? (
+        <PlayerGames
+          key={`${userId}-${league.league_id}`}
+          player={player}
+          league={league}
+          currentUserId={currentUserId}
+        />
+      ) : null}
     </Screen>
   );
 }
 
-function Standings({ leagues, highlight }) {
+/**
+ * Their standing in each league to show, one row each. With more than one,
+ * a row is also how to pick the league whose games show below.
+ */
+function Standings({ choices, standings, selected, onSelect }) {
   const { theme } = useLeague();
+  const many = choices.length > 1;
+  if (!choices.length) {
+    return (
+      <Txt muted style={styles.empty}>
+        Not on any ladder yet.
+      </Txt>
+    );
+  }
   return (
     <View>
-      {LEAGUE_ORDER.map((key, index) => {
-        const standing = leagues?.[key];
+      {choices.map((league, index) => {
+        const standing = standings.find((st) => st.league_id === league.league_id);
+        const isSelected = league.league_id === selected;
         return (
-          <View
-            key={key}
-            accessible
-            accessibilityLabel={`${LEAGUES[key].name}: ${standing?.rank_name ?? 'Unranked'}, ${pointsText(standing?.elo)}, ${standing?.wins ?? 0} won, ${standing?.losses ?? 0} lost`}
-            style={[
+          <Pressable
+            key={league.league_id}
+            onPress={() => onSelect(league.league_id)}
+            disabled={!many}
+            accessibilityRole={many ? 'button' : undefined}
+            accessibilityState={many ? { selected: isSelected } : undefined}
+            accessibilityHint={many ? 'Shows their games in this league' : undefined}
+            accessibilityLabel={`${league.name}: ${standing?.rank_name ?? 'Unranked'}, ${pointsText(standing?.elo)}, ${standing?.wins ?? 0} won, ${standing?.losses ?? 0} lost`}
+            style={({ pressed }) => [
               styles.standingRow,
-              index < LEAGUE_ORDER.length - 1 && { borderBottomWidth: 1, borderBottomColor: theme.lineSoft },
-              key === highlight && { backgroundColor: theme.accentWash },
+              index < choices.length - 1 && { borderBottomWidth: 1, borderBottomColor: theme.lineSoft },
+              (isSelected || pressed) && many && { backgroundColor: theme.accentWash },
+              isSelected && many && { borderLeftWidth: 3, borderLeftColor: theme.accent },
             ]}
           >
             <View style={styles.standingName}>
-              <Txt weight="semibold">{LEAGUES[key].name}</Txt>
+              <Txt weight="semibold">{league.name}</Txt>
               <Txt variant="small" muted>
                 {standing?.rank_name ?? 'Unranked'}
               </Txt>
@@ -135,9 +157,14 @@ function Standings({ leagues, highlight }) {
               </Text>
               –{standing?.losses ?? 0}
             </Text>
-          </View>
+          </Pressable>
         );
       })}
+      {many ? (
+        <Txt variant="small" muted style={styles.standingHint}>
+          Tap a league to see their games there.
+        </Txt>
+      ) : null}
     </View>
   );
 }
@@ -150,6 +177,7 @@ function Standings({ leagues, highlight }) {
 function PlayerGames({ player, league, currentUserId }) {
   const { theme } = useLeague();
   const userId = player.user_id;
+  const leagueId = league.league_id;
   const isYou = userId === currentUserId;
   const [opponents, setOpponents] = useState(null);
   const [vsYou, setVsYou] = useState(null);
@@ -160,11 +188,11 @@ function PlayerGames({ player, league, currentUserId }) {
     const controller = new AbortController();
     const { signal } = controller;
     Promise.all([
-      api.getPlayerOpponents(userId, league, signal),
+      api.getPlayerOpponents(userId, leagueId, signal),
       !isYou && currentUserId
         ? api.getPlayerMatches(
             userId,
-            league,
+            leagueId,
             { limit: HEAD_TO_HEAD_LIMIT, opponentId: currentUserId },
             signal,
           )
@@ -179,7 +207,7 @@ function PlayerGames({ player, league, currentUserId }) {
       if (vsYouRes?.ok) setVsYou(vsYouRes.data?.matches ?? []);
     });
     return () => controller.abort();
-  }, [userId, league, isYou, currentUserId]);
+  }, [userId, leagueId, isYou, currentUserId]);
 
   if (problem) {
     return (
@@ -190,7 +218,7 @@ function PlayerGames({ player, league, currentUserId }) {
   }
 
   const yourRecord = opponents?.find((o) => o.opponent?.user_id === currentUserId);
-  const leagueName = LEAGUES[league].name;
+  const leagueName = league.name;
 
   return (
     <>
@@ -202,7 +230,7 @@ function PlayerGames({ player, league, currentUserId }) {
             </Txt>
           ) : !yourRecord ? (
             <Txt muted style={styles.empty}>
-              You haven't played {player.username} in the {leagueName} yet.
+              You haven't played {player.username} in {leagueName} yet.
             </Txt>
           ) : (
             <>
@@ -227,7 +255,7 @@ function PlayerGames({ player, league, currentUserId }) {
                 <GameRow
                   key={match.match_id}
                   match={match}
-                  league={league}
+                  league={leagueId}
                   currentUserId={currentUserId}
                   subject={player.username}
                   last={index === vsYou.length - 1}
@@ -254,7 +282,7 @@ function PlayerGames({ player, league, currentUserId }) {
         ) : null}
         {opponents?.length === 0 ? (
           <Txt muted style={styles.empty}>
-            No games in the {leagueName} yet.
+            No games in {leagueName} yet.
           </Txt>
         ) : null}
         {opponents?.map(({ opponent, wins, losses }, index) => {
@@ -326,6 +354,7 @@ function Games({ player, league, currentUserId, against, onShowAll }) {
   const [games, setGames] = useState(null);
   const [problem, setProblem] = useState(null);
   const userId = player.user_id;
+  const leagueId = league.league_id;
   const againstId = against?.user_id ?? null;
   const subject = userId === currentUserId ? null : player.username;
 
@@ -334,7 +363,7 @@ function Games({ player, league, currentUserId, against, onShowAll }) {
     api
       .getPlayerMatches(
         userId,
-        league,
+        leagueId,
         { limit: GAMES_LIMIT, opponentId: againstId ?? undefined },
         controller.signal,
       )
@@ -344,7 +373,7 @@ function Games({ player, league, currentUserId, against, onShowAll }) {
         else setProblem(res.message);
       });
     return () => controller.abort();
-  }, [userId, league, againstId]);
+  }, [userId, leagueId, againstId]);
 
   const opponentName = againstId === currentUserId ? 'you' : against?.username;
 
@@ -375,7 +404,7 @@ function Games({ player, league, currentUserId, against, onShowAll }) {
         <GameRow
           key={match.match_id}
           match={match}
-          league={league}
+          league={leagueId}
           currentUserId={currentUserId}
           subject={subject}
           last={index === games.length - 1}
@@ -388,7 +417,7 @@ function Games({ player, league, currentUserId, against, onShowAll }) {
 const styles = StyleSheet.create({
   head: { flexDirection: 'row', alignItems: 'center', gap: 16, marginBottom: 14 },
   headText: { flex: 1, gap: 2 },
-  switch: { marginBottom: 16 },
+  standingHint: { marginTop: 8 },
   empty: { paddingVertical: 12 },
   standingRow: {
     flexDirection: 'row',

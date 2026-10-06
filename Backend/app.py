@@ -20,6 +20,7 @@ from flask_jwt_extended import (
     create_access_token,
     get_jwt_identity,
     jwt_required,
+    verify_jwt_in_request,
 )
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
@@ -83,6 +84,24 @@ from logic.admin import (
     remove_from_queue,
     remove_from_table,
 )
+from logic.leagues import (
+    REMOVE_TABLE_RESULT_BUSY,
+    REMOVE_TABLE_RESULT_NOT_FOUND,
+    UNLOCK_RESULT_ALREADY,
+    UNLOCK_RESULT_BAD_FORMAT,
+    UNLOCK_RESULT_NO_PIN,
+    UNLOCK_RESULT_TOO_MANY,
+    UNLOCK_RESULT_UNLOCKED,
+    LeagueProblem,
+    add_table,
+    has_access,
+    league_directory,
+    league_summary,
+    remove_table,
+    rename_table,
+    set_league_pin,
+    unlock_league,
+)
 from logic.mailer import MailFailed, MailNotConfigured, mail_configured
 from logic.password_reset import (
     CODE_LIFETIME_SECONDS,
@@ -98,9 +117,15 @@ from logic.pictures import MAX_UPLOAD_BYTES, picture_path, save_uploaded_picture
 from logic.privacy import privacy_policy_html
 from logic.seasons import league_standings, reset_league_standings
 from logic.profile import EDITABLE_FIELDS, get_profile, get_public_profile, set_email, update_profile
-from logic.tables import default_table_for, list_leagues, table_snapshot
+from logic.tables import (
+    default_table_for,
+    league_for_table,
+    league_tables,
+    list_leagues,
+    table_snapshot,
+)
 from logic.top_players import top_players
-from models import BILLIARDS, LEAGUE_NAMES, LEAGUE_TYPES, Match, Player, db
+from models import BILLIARDS, GAMES, League, Match, Player, PoolTable, db
 from logic.manage_queue import (
     CONFIRM_RESULT_ALREADY_CONFIRMED,
     CONFIRM_RESULT_CONFIRMED,
@@ -125,6 +150,7 @@ from logic.record_match import (
     lowered_rating,
     REPORT_RESULT_ALREADY_REPORTED,
     REPORT_RESULT_INVALID_SCORE,
+    REPORT_RESULT_NO_ACCESS,
     REPORT_RESULT_NO_OPPONENT,
     REPORT_RESULT_RECORDED,
     REPORT_RESULT_WRONG_LEAGUE,
@@ -142,6 +168,9 @@ DEV_JWT_SECRET = "super-secret-pool-key-change-in-production"
 # HS256 wants a key at least as long as its 256-bit output.
 MIN_JWT_SECRET_LENGTH = 32
 UNKNOWN_LEAGUE = "league_type must be 'billiards' or 'ping_pong'."
+NO_SUCH_LEAGUE = "There's no such league."
+# What a player who hasn't entered a league's PIN hears on trying to play.
+NEEDS_PIN = "Enter this league's 4-digit PIN to play here."
 ACCOUNT_GONE = "We couldn't find your account. Please sign in again."
 
 
@@ -244,7 +273,7 @@ def register_commands(app):
             raise click.ClickException(str(e))
 
     @app.cli.command("reset-league")
-    @click.argument("league", type=click.Choice(LEAGUE_TYPES))
+    @click.argument("league")
     @click.option("--yes", is_flag=True, help="Don't ask for confirmation.")
     @click.option(
         "--backup-dir",
@@ -254,16 +283,18 @@ def register_commands(app):
     )
     def reset_league_command(league, yes, backup_dir):
         """
-        Start LEAGUE over: everyone's rating to 0, record to 0-0, rank to
-        the starting rank. Finished games stay in the history; the other
-        league is untouched. Everyone's old numbers are saved to a JSON
-        file in --backup-dir first, so the reset can be undone.
+        Start LEAGUE (a slug like ccny-ping-pong; "billiards" or
+        "ping_pong" mean CCNY's) over: everyone's rating to 0, record to
+        0-0, rank to the starting rank. Finished games stay in the history;
+        every other league is untouched. Everyone's old numbers are saved to
+        a JSON file in --backup-dir first, so the reset can be undone.
         """
         with app.app_context():
+            league = _league_named(league)
             before = league_standings(league)
             played = sum(1 for p in before if p["wins"] or p["losses"] or p["elo"])
             click.echo(
-                f"{LEAGUE_NAMES[league]}: {len(before)} players, {played} with results, "
+                f"{league.name}: {len(before)} players, {played} with results, "
                 f"on {describe_database(app.config['SQLALCHEMY_DATABASE_URI'])}."
             )
             if not yes:
@@ -271,13 +302,13 @@ def register_commands(app):
 
             os.makedirs(backup_dir, exist_ok=True)
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            backup_path = os.path.join(backup_dir, f"{league}-standings-{stamp}.json")
+            backup_path = os.path.join(backup_dir, f"{league.slug}-standings-{stamp}.json")
             with open(backup_path, "w") as f:
-                json.dump({"league": league, "saved_at": stamp, "players": before}, f, indent=2)
+                json.dump({"league": league.slug, "saved_at": stamp, "players": before}, f, indent=2)
             click.echo(f"Saved everyone's numbers to {backup_path}")
 
             count = reset_league_standings(league)
-            click.echo(f"Reset {count} players in the {LEAGUE_NAMES[league]}.")
+            click.echo(f"Reset {count} players in {league.name}.")
 
     @app.cli.command("set-password")
     @click.argument("username")
@@ -452,7 +483,7 @@ def register_commands(app):
 
 
     @app.cli.command("add-games")
-    @click.argument("league", type=click.Choice(LEAGUE_TYPES))
+    @click.argument("league")
     @click.option(
         "--game",
         "games",
@@ -472,7 +503,8 @@ def register_commands(app):
     )
     def add_games_command(league, games, yes, backup_dir):
         """
-        Record finished LEAGUE games that never reached the app - played
+        Record finished LEAGUE games (a slug like ccny-ping-pong; "billiards"
+        or "ping_pong" mean CCNY's) that never reached the app - played
         while the server was down, say. Each moves ratings exactly as if
         it had been reported at the time, against the ratings the game
         before it left, so give them in the order they were played.
@@ -481,6 +513,7 @@ def register_commands(app):
         wrong, nothing is saved. Take one back with void-game.
         """
         with app.app_context():
+            league = _league_named(league)
             parsed, problems = [], []
             for number, (winner_name, loser_name, score) in enumerate(games, start=1):
                 winner, loser = _account_named(winner_name), _account_named(loser_name)
@@ -500,9 +533,8 @@ def register_commands(app):
                     "Nothing was added:\n  " + "\n  ".join(problems)
                 )
 
-            fields = Player.LEAGUE_FIELDS[league]
             click.echo(
-                f"Adding {len(parsed)} {LEAGUE_NAMES[league]} game(s), in this order, on "
+                f"Adding {len(parsed)} {league.name} game(s), in this order, on "
                 f"{describe_database(app.config['SQLALCHEMY_DATABASE_URI'])}:"
             )
             for number, (winner, loser, (won, lost)) in enumerate(parsed, start=1):
@@ -510,7 +542,7 @@ def register_commands(app):
             involved = {p.user_id: p for winner, loser, _ in parsed for p in (winner, loser)}
             click.echo(
                 "Points now: "
-                + ", ".join(f"{p.username} {getattr(p, fields['elo']) or 0}" for p in involved.values())
+                + ", ".join(f"{p.username} {p.standing(league)['elo']}" for p in involved.values())
             )
             if not yes:
                 click.confirm("Add these games?", abort=True)
@@ -522,7 +554,7 @@ def register_commands(app):
                 json.dump(
                     {
                         "added_at": stamp,
-                        "league_type": league,
+                        "league": league.slug,
                         "games": [
                             {"winner": w.username, "loser": l.username, "score": list(s)}
                             for w, l, s in parsed
@@ -569,6 +601,15 @@ def error(message, status, **extra):
     return jsonify({"message": message, **extra}), status
 
 
+def _league_named(ref):
+    """The league a command names, or a ClickException listing them all."""
+    league = League.of(ref)
+    if league is None:
+        slugs = ", ".join(db.session.scalars(db.select(League.slug).order_by(League.sort_order)))
+        raise click.ClickException(f"There's no league {ref!r}. The leagues: {slugs}.")
+    return league
+
+
 def _account_named(name):
     """
     The account a command names: the exact username first - some
@@ -610,7 +651,11 @@ def _player_summary(player):
         "user_id": player.user_id,
         "username": player.username,
         "country_flag": player.country_flag,
-        "leagues": {league: player.standing(league) for league in LEAGUE_TYPES},
+        "leagues": {
+            league.slug: player.standing(league)
+            for league in db.session.scalars(db.select(League).order_by(League.sort_order))
+            if player.standing_in(league) is not None
+        },
         "games": games,
         "note": "; ".join(notes),
     }
@@ -743,41 +788,60 @@ def read_table_id(source):
 
 def read_league(source):
     """
-    league_type from a request body or query string: (league, None) or
-    (None, error_response). (None, None) means the request didn't say.
+    The league a request is about: (League, None), (None, None) when it
+    doesn't say, or (None, error_response).
+
+    league_id names any league. league_type - "billiards" or "ping_pong",
+    from apps before there were schools - means CCNY's league of that game;
+    sent alongside league_id, it has to be that league's game.
     """
+    league = None
+    raw_id = source.get("league_id")
+    if raw_id is not None and raw_id != "":
+        try:
+            league_id = read_whole_number(raw_id)
+        except ValueError:
+            return None, error("league_id must be a whole number.", 400)
+        league = db.session.get(League, league_id)
+        if league is None:
+            return None, error(NO_SUCH_LEAGUE, 404)
+
     raw = source.get("league_type")
     if raw is None or (isinstance(raw, str) and not raw.strip()):
-        return None, None
-    if isinstance(raw, str) and raw.strip().lower() in LEAGUE_TYPES:
-        return raw.strip().lower(), None
-    return None, error(UNKNOWN_LEAGUE, 400)
+        return league, None
+    if not (isinstance(raw, str) and raw.strip().lower() in GAMES):
+        return None, error(UNKNOWN_LEAGUE, 400)
+    game = raw.strip().lower()
+    if league is not None:
+        if league.game != game:
+            return None, error(f"{league.name} isn't a {game.replace('_', ' ')} league.", 400)
+        return league, None
+    league = League.of(game)
+    if league is None:
+        return None, error(NO_SUCH_LEAGUE, 404)
+    return league, None
 
 
 def read_table_and_league(source, must_exist=False):
     """
-    Which table a request is about, and that table's league:
+    Which league a request is about, and the table it names (if any):
     (table_id, league, None) or (None, None, error_response).
 
-      - table_id given: that table. If league_type is given as well it
-        has to be the table's league, so a ping pong request can't act on
-        the pool table.
-      - only league_type: that league's table.
-      - neither: table 1, as before there were two leagues.
+      - table_id given: that table, and its league. A league named as well
+        (league_id or league_type) has to be the table's, so a ping pong
+        request can't act on a pool table.
+      - only a league: that league, and its first table in use (None if it
+        has none).
+      - neither: table 1 and its league, as before there were leagues.
 
-    must_exist refuses a table with no Pool_Tables row. Queue and Matches
-    both have foreign keys to Pool_Tables, so joining an unknown table
-    would otherwise fail deep inside the INSERT.
+    must_exist refuses a table with no Pool_Tables row.
     """
     league, bad = read_league(source)
     if bad:
         return None, None, bad
 
     if source.get("table_id") is None and league is not None:
-        table_id = default_table_for(league)
-        if table_id is None:
-            return None, None, error(f"The {LEAGUE_NAMES[league]} doesn't have a table yet.", 404)
-        return table_id, league, None
+        return default_table_for(league), league, None
 
     table_id, bad = read_table_id(source)
     if bad:
@@ -787,15 +851,21 @@ def read_table_and_league(source, must_exist=False):
     if table is None and must_exist:
         return None, None, error("That table doesn't exist.", 404)
 
-    table_league = table.league_type if table is not None else BILLIARDS
-    if league is not None and league != table_league:
+    table_league = league_for_table(table_id)
+    if league is not None and table_league is not None and league.league_id != table_league.league_id:
         table_name = table.table_name if table is not None else f"Table {table_id}"
-        return None, None, error(
-            f"{table_name} is in the {LEAGUE_NAMES[table_league]}, "
-            f"not the {LEAGUE_NAMES[league]}.",
-            400,
-        )
+        return None, None, error(f"{table_name} is in {table_league.name}, not {league.name}.", 400)
     return table_id, table_league, None
+
+
+def signed_in_user():
+    """The signed-in player's user_id, or None - for routes anyone may call."""
+    try:
+        verify_jwt_in_request(optional=True)
+        identity = get_jwt_identity()
+    except Exception:
+        return None
+    return int(identity) if identity is not None else None
 
 
 def read_match_id(source):
@@ -869,13 +939,13 @@ def read_limit(source):
 
 
 def register_routes(app):
-    # 1. LEADERBOARD (Public)
+    # 1. LEADERBOARD (Public) - a league's ladder.
     @app.route("/leaderboard", methods=["GET"])
     def get_leaderboard():
         league, bad = read_league(request.args)
         if bad:
             return bad
-        return jsonify(top50_leaderboard(league or BILLIARDS))
+        return jsonify(top50_leaderboard(league or League.of(BILLIARDS)))
 
     # 1a. PLAYERS OF THE DAY, WEEK AND MONTH (Public) - who gained the
     # most points in each, in the league's own calendar.
@@ -884,17 +954,106 @@ def register_routes(app):
         league, bad = read_league(request.args)
         if bad:
             return bad
-        return jsonify(top_players(league or BILLIARDS))
+        return jsonify(top_players(league or League.of(BILLIARDS)))
 
-    # 1b. LEAGUES (Public) - each league and the table it plays on.
+    # 1b. CCNY'S TWO LEAGUES AND THEIR FIRST TABLES (Public) - for apps
+    # from before there were schools.
     @app.route("/leagues", methods=["GET"])
     def get_leagues():
         return jsonify({"leagues": list_leagues()})
 
-    # 2. QUEUE (Public)
+    # 1c. EVERY LEAGUE (Public; says which ones the signed-in player can
+    # play in) - each with its colours, its tables and read_only.
+    @app.route("/leagues/directory", methods=["GET"])
+    def get_league_directory():
+        return jsonify({"leagues": league_directory(signed_in_user())})
+
+    # 1d. ONE LEAGUE (Public, like 1c)
+    @app.route("/leagues/<int:league_id>", methods=["GET"])
+    def get_league(league_id):
+        league = db.session.get(League, league_id)
+        if league is None:
+            return error(NO_SUCH_LEAGUE, 404)
+        return jsonify({"league": league_summary(league, signed_in_user())})
+
+    # 1e. EVERY TABLE IN A LEAGUE, AND WHO IS AT EACH (Public)
+    @app.route("/leagues/<int:league_id>/tables", methods=["GET"])
+    def get_league_tables(league_id):
+        league = db.session.get(League, league_id)
+        if league is None:
+            return error(NO_SUCH_LEAGUE, 404)
+        return jsonify({"league_id": league_id, "tables": league_tables(league)})
+
+    # 1f. A LEAGUE'S QUEUE (Public) - one line for all its tables.
+    @app.route("/leagues/<int:league_id>/queue", methods=["GET"])
+    def get_league_queue(league_id):
+        league = db.session.get(League, league_id)
+        if league is None:
+            return error(NO_SUCH_LEAGUE, 404)
+        return jsonify(view_queue(league))
+
+    # 1g. ENTER A LEAGUE'S PIN (Protected) - once, and it's remembered.
+    @app.route("/league/unlock", methods=["POST"])
+    @jwt_required()
+    def unlock():
+        user_id = int(get_jwt_identity())
+        data = json_body()
+        league, bad = read_league(data)
+        if bad:
+            return bad
+        if league is None:
+            return error("Say which league: league_id is missing.", 400)
+
+        try:
+            outcome, detail = unlock_league(user_id, league, data.get("pin"))
+        except Exception:
+            log.exception("unlock failed (user %s, league %s)", user_id, league.league_id)
+            reset_session()
+            return error("Couldn't check the PIN just now. Please try again.", 500)
+
+        if outcome == UNLOCK_RESULT_BAD_FORMAT:
+            return error("Enter the league's 4-digit PIN.", 400, field="pin")
+        if outcome == UNLOCK_RESULT_NO_PIN:
+            return error(
+                f"{league.name} doesn't have a PIN yet - ask the organiser to set one.", 409
+            )
+        if outcome == UNLOCK_RESULT_TOO_MANY:
+            minutes = max(1, -(-detail["retry_in"] // 60))
+            return error(
+                f"Too many wrong PINs. Try again in {minutes} minute{'s' if minutes != 1 else ''}.",
+                429,
+                field="pin",
+                retry_in=detail["retry_in"],
+            )
+        if outcome not in (UNLOCK_RESULT_UNLOCKED, UNLOCK_RESULT_ALREADY):
+            left = detail["tries_left"]
+            # 403, never 401: to the apps a 401 means "your session ended".
+            return error(
+                "That PIN isn't right."
+                + (f" {left} {'try' if left == 1 else 'tries'} left." if left else ""),
+                403,
+                field="pin",
+                tries_left=left,
+            )
+        return jsonify(
+            {
+                "message": (
+                    f"You're in - welcome to {league.name}!"
+                    if outcome == UNLOCK_RESULT_UNLOCKED
+                    else f"You're already in {league.name}."
+                ),
+                "status": outcome,
+                "league": league_summary(league, user_id),
+            }
+        )
+
+    # 2. A QUEUE, BY ONE OF ITS LEAGUE'S TABLES (Public) - for apps from
+    # before leagues had a line of their own.
     @app.route("/queue/<int:table_id>", methods=["GET"])
     def get_queue(table_id):
-        return jsonify(view_queue(table_id))
+        if get_pool_table(table_id) is None:
+            return jsonify([])
+        return jsonify(view_queue(league_for_table(table_id)))
 
     # 2b. WHO IS AT A TABLE (Public)
     @app.route("/table/<int:table_id>", methods=["GET"])
@@ -904,22 +1063,27 @@ def register_routes(app):
             return error("That table doesn't exist.", 404)
         return jsonify({"table": snapshot})
 
-    # 3. JOIN QUEUE (Protected)
+    # 3. JOIN A LEAGUE'S QUEUE (Protected, and the league's PIN)
     @app.route("/queue/join", methods=["POST"])
     @jwt_required()
     def join_table_queue():
         user_id = int(get_jwt_identity())
 
-        # league_type picks the league's table; table_id picks a table
-        # directly. Both, and they have to agree.
-        table_id, _league, bad = read_table_and_league(json_body(), must_exist=True)
+        # league_id picks the league; a table_id picks its league (apps
+        # from before send that, with league_type). Any of them together
+        # have to agree.
+        _table_id, league, bad = read_table_and_league(json_body(), must_exist=True)
         if bad:
             return bad
+        if not has_access(user_id, league):
+            return error(NEEDS_PIN, 403, read_only=True, league_id=league.league_id)
+        if default_table_for(league) is None:
+            return error(f"{league.name} doesn't have a table yet.", 404)
 
         try:
-            result = join_queue(user_id, table_id)
+            result = join_queue(user_id, league)
         except Exception:
-            log.exception("join_queue failed (user %s, table %s)", user_id, table_id)
+            log.exception("join_queue failed (user %s, league %s)", user_id, league.league_id)
             return error("Couldn't add you to the queue just now. Please try again.", 500)
 
         if result == JOIN_RESULT_ALREADY_PLAYING:
@@ -932,8 +1096,8 @@ def register_routes(app):
             # come the Join button. Too late, and they join again at the
             # back of the line - which is what they asked for.
             try:
-                if confirm_here(user_id, table_id) == CONFIRM_RESULT_TOO_LATE:
-                    result = join_queue(user_id, table_id)
+                if confirm_here(user_id, league) == CONFIRM_RESULT_TOO_LATE:
+                    result = join_queue(user_id, league)
             except Exception:
                 log.exception("confirming on a repeat join failed (user %s)", user_id)
 
@@ -942,11 +1106,11 @@ def register_routes(app):
         # self-healing: anyone stuck behind a king from before the fix
         # gets matched simply by tapping Join again.
         try:
-            match_started = attempt_matchmaking(table_id)
+            match_started = attempt_matchmaking(league)
         except Exception:
             # The join itself worked. Matchmaking runs again on the next
             # status poll, so this heals itself; say so rather than alarm.
-            log.exception("matchmaking after join failed (table %s)", table_id)
+            log.exception("matchmaking after join failed (league %s)", league.league_id)
             match_started = False
 
         if match_started:
@@ -960,7 +1124,7 @@ def register_routes(app):
             {"message": message, "status": result, "match_started": match_started}
         )
 
-    # 3a. "I'M HERE" - THE READY CHECK (Protected)
+    # 3a. "I'M HERE" - THE READY CHECK (Protected, and the league's PIN)
     # When a player's turn comes they have READY_CHECK_SECONDS to say
     # they're here, or they're taken out of the queue.
     @app.route("/queue/confirm", methods=["POST"])
@@ -968,14 +1132,16 @@ def register_routes(app):
     def confirm_in_queue():
         user_id = int(get_jwt_identity())
 
-        table_id, _league, bad = read_table_and_league(json_body())
+        _table_id, league, bad = read_table_and_league(json_body())
         if bad:
             return bad
+        if not has_access(user_id, league):
+            return error(NEEDS_PIN, 403, read_only=True, league_id=league.league_id)
 
         try:
-            outcome = confirm_here(user_id, table_id)
+            outcome = confirm_here(user_id, league)
         except Exception:
-            log.exception("confirm_here failed (user %s, table %s)", user_id, table_id)
+            log.exception("confirm_here failed (user %s, league %s)", user_id, league.league_id)
             reset_session()
             return error("Couldn't confirm just now. Please try again.", 500)
 
@@ -985,9 +1151,9 @@ def register_routes(app):
             # The minute was up, so they've been taken out of the queue;
             # the next in line is up instead.
             try:
-                attempt_matchmaking(table_id)
+                attempt_matchmaking(league)
             except Exception:
-                log.exception("matchmaking after a late confirm failed (table %s)", table_id)
+                log.exception("matchmaking after a late confirm failed (league %s)", league.league_id)
             return error(
                 f"Sorry - that was more than {READY_CHECK_SECONDS} seconds, so you were taken "
                 "out of the queue. Join again to get back in line.",
@@ -1001,10 +1167,10 @@ def register_routes(app):
             )
 
         try:
-            match_started = attempt_matchmaking(table_id)
+            match_started = attempt_matchmaking(league)
         except Exception:
             # Confirmed all the same; the next status poll starts the game.
-            log.exception("matchmaking after a confirm failed (table %s)", table_id)
+            log.exception("matchmaking after a confirm failed (league %s)", league.league_id)
             match_started = False
 
         return jsonify(
@@ -1019,17 +1185,17 @@ def register_routes(app):
             }
         )
 
-    # 3b. LEAVE QUEUE (Protected)
+    # 3b. LEAVE A LEAGUE'S QUEUE (Protected - but never needs the PIN)
     @app.route("/queue/leave", methods=["POST"])
     @jwt_required()
     def leave_table_queue():
         user_id = int(get_jwt_identity())
 
-        table_id, _league, bad = read_table_and_league(json_body())
+        _table_id, league, bad = read_table_and_league(json_body())
         if bad:
             return bad
 
-        status = get_queue_status(user_id, table_id)
+        status = get_queue_status(user_id, league)
         if status is None:
             return error("You're not currently in the queue.", 404)
 
@@ -1044,9 +1210,9 @@ def register_routes(app):
             )
 
         try:
-            removed = leave_queue(user_id, table_id)
+            removed = leave_queue(user_id, league)
         except Exception:
-            log.exception("leave_queue failed (user %s, table %s)", user_id, table_id)
+            log.exception("leave_queue failed (user %s, league %s)", user_id, league.league_id)
             return error("Couldn't take you out of the queue just now. Please try again.", 500)
 
         if removed:
@@ -1054,9 +1220,9 @@ def register_routes(app):
             # at the next status poll.
             if status["called"]:
                 try:
-                    attempt_matchmaking(table_id)
+                    attempt_matchmaking(league)
                 except Exception:
-                    log.exception("matchmaking after leaving failed (table %s)", table_id)
+                    log.exception("matchmaking after leaving failed (league %s)", league.league_id)
             return jsonify({"message": "You left the queue."})
         # Matchmaking got there first.
         return error("You're not in the queue any more - you may have just been matched.", 404)
@@ -1096,12 +1262,12 @@ def register_routes(app):
         target, bad = read_target_player(data)
         if bad:
             return bad
-        table_id, _league, bad = read_table_and_league(data)
+        _table_id, league, bad = read_table_and_league(data)
         if bad:
             return bad
 
         try:
-            outcome = remove_from_queue(target.user_id, table_id, by=admin_id)
+            outcome = remove_from_queue(target.user_id, league, by=admin_id)
         except Exception:
             log.exception("admin remove_from_queue failed (player %s)", target.user_id)
             reset_session()
@@ -1159,6 +1325,97 @@ def register_routes(app):
         else:
             message = f"{target.username} is off the table. It goes to the next in the queue."
         return jsonify({"message": message, "status": outcome})
+
+    # 3f. THE ORGANISER: A LEAGUE'S PIN (Protected, admins)
+    # Everyone who entered the old PIN has to enter the new one.
+    @app.route("/admin/leagues/<int:league_id>/pin", methods=["POST"])
+    @jwt_required()
+    def admin_set_league_pin(league_id):
+        refused = refuse_unless_admin(int(get_jwt_identity()))
+        if refused:
+            return refused
+        league = db.session.get(League, league_id)
+        if league is None:
+            return error(NO_SUCH_LEAGUE, 404)
+        try:
+            revoked = set_league_pin(league, json_body().get("pin"))
+        except LeagueProblem as e:
+            return error(str(e), 400, field="pin")
+        return jsonify(
+            {
+                "message": (
+                    f"{league.name}'s PIN is changed."
+                    + (
+                        f" {revoked} player{'s' if revoked != 1 else ''} will need to enter the new one."
+                        if revoked
+                        else ""
+                    )
+                ),
+                "revoked": revoked,
+                "league": league_summary(league, int(get_jwt_identity())),
+            }
+        )
+
+    # 3g. THE ORGANISER: ADD A TABLE TO A LEAGUE (Protected, admins)
+    @app.route("/admin/leagues/<int:league_id>/tables", methods=["POST"])
+    @jwt_required()
+    def admin_add_table(league_id):
+        refused = refuse_unless_admin(int(get_jwt_identity()))
+        if refused:
+            return refused
+        league = db.session.get(League, league_id)
+        if league is None:
+            return error(NO_SUCH_LEAGUE, 404)
+        try:
+            table = add_table(league, json_body().get("name"))
+        except LeagueProblem as e:
+            return error(str(e), 400, field="name")
+        return (
+            jsonify(
+                {
+                    "message": f"{table.table_name} is added to {league.name}.",
+                    "table": table_snapshot(table.table_id),
+                }
+            ),
+            201,
+        )
+
+    # 3h. THE ORGANISER: RENAME OR REMOVE A TABLE (Protected, admins)
+    @app.route("/admin/tables/<int:table_id>", methods=["PATCH", "DELETE"])
+    @jwt_required()
+    def admin_change_table(table_id):
+        refused = refuse_unless_admin(int(get_jwt_identity()))
+        if refused:
+            return refused
+
+        if request.method == "PATCH":
+            try:
+                table = rename_table(table_id, json_body().get("name"))
+            except LeagueProblem as e:
+                return error(str(e), 400, field="name")
+            if table is None:
+                return error("That table doesn't exist.", 404)
+            return jsonify(
+                {"message": f"Renamed to {table.table_name}.", "table": table_snapshot(table_id)}
+            )
+
+        name = getattr(get_pool_table(table_id), "table_name", "That table")
+        try:
+            outcome, active = remove_table(table_id)
+        except Exception:
+            log.exception("remove_table failed (table %s)", table_id)
+            reset_session()
+            return error("Couldn't remove the table just now. Please try again.", 500)
+        if outcome == REMOVE_TABLE_RESULT_NOT_FOUND:
+            return error("That table doesn't exist.", 404)
+        if outcome == REMOVE_TABLE_RESULT_BUSY:
+            who = " and ".join(p.display_name for p in (active.player_one, active.player_two) if p)
+            return error(
+                f"{who} {'are' if active.player_two else 'is'} at {name} - take them off "
+                "(or let them finish) first.",
+                409,
+            )
+        return jsonify({"message": f"{name} is removed. Its games stay in the history."})
 
     # 4. LOGIN (Token Generator)
     # "username" may also be the account's email: anything with an @ is
@@ -1264,12 +1521,16 @@ def register_routes(app):
     @jwt_required()
     def get_match_status():
         user_id = int(get_jwt_identity())
-        table_id, _league, bad = read_table_and_league(request.args)
+        _table_id, league, bad = read_table_and_league(request.args)
         if bad:
             return bad
 
         try:
-            return jsonify(get_player_status(user_id, table_id))
+            # read_only: whether this player still needs the league's PIN to
+            # play here - polled, so a changed PIN shows at once.
+            return jsonify(
+                {**get_player_status(user_id, league), "read_only": not has_access(user_id, league)}
+            )
         except Exception:
             log.exception("status check failed (user %s)", user_id)
             reset_session()
@@ -1285,11 +1546,21 @@ def register_routes(app):
 
         data = json_body()
 
-        # The league the player thinks this game is in. Optional; the
+        # The league the player thinks this game is in: league_id, or
+        # league_type (its game) from apps before schools. Optional; the
         # game's real league is what decides the rules either way.
-        league_type, bad = read_league(data)
-        if bad:
-            return bad
+        league_type = data.get("league_type")
+        if league_type is not None and not (
+            isinstance(league_type, str) and league_type.strip().lower() in GAMES
+        ):
+            return error(UNKNOWN_LEAGUE, 400)
+        league_type = league_type.strip().lower() if league_type else None
+        league_id = None
+        if data.get("league_id") is not None:
+            try:
+                league_id = read_whole_number(data.get("league_id"))
+            except ValueError:
+                return error("league_id must be a whole number.", 400)
 
         # Scores can legitimately arrive as strings from a form, or null.
         # Coerce once here so the comparisons later can't raise a
@@ -1310,7 +1581,7 @@ def register_routes(app):
 
         try:
             outcome, details = report_result(
-                user_id, my_score, opp_score, expected_match_id, league_type
+                user_id, my_score, opp_score, expected_match_id, league_type, league_id
             )
         except Exception:
             log.exception("recording a match failed (user %s)", user_id)
@@ -1322,11 +1593,18 @@ def register_routes(app):
         if outcome == REPORT_RESULT_INVALID_SCORE:
             return error(details["problem"], 400)
         if outcome == REPORT_RESULT_WRONG_LEAGUE:
-            actual = details["league_type"]
             return error(
-                f"That game is in the {LEAGUE_NAMES[actual]}, so it wasn't recorded here.",
+                f"That game is in {details['league_name']}, so it wasn't recorded here.",
                 409,
-                league_type=actual,
+                league_type=details["league_type"],
+                league_id=details["league_id"],
+            )
+        if outcome == REPORT_RESULT_NO_ACCESS:
+            return error(
+                f"{details['league_name']}'s PIN has changed - enter the new one, then report the score.",
+                403,
+                read_only=True,
+                league_id=details["league_id"],
             )
         if outcome == REPORT_RESULT_ALREADY_REPORTED:
             return error("That game has already been reported, so this score wasn't saved.", 409)
@@ -1411,9 +1689,13 @@ def register_routes(app):
         if bad:
             return bad
 
-        league = league or BILLIARDS
+        league = league or League.of(BILLIARDS)
         return jsonify(
-            {"league_type": league, "matches": league_history(league, table_id, limit)}
+            {
+                "league_type": league.game,
+                "league_id": league.league_id,
+                "matches": league_history(league, table_id, limit),
+            }
         )
 
     # 6c. ONE PLAYER'S MATCH HISTORY (Public)
@@ -1433,10 +1715,11 @@ def register_routes(app):
         if db.session.get(Player, user_id) is None:
             return error("That player doesn't exist.", 404)
 
-        league = league or BILLIARDS
+        league = league or League.of(BILLIARDS)
         body = {
             "user_id": user_id,
-            "league_type": league,
+            "league_type": league.game,
+            "league_id": league.league_id,
             "matches": player_history(user_id, league, limit, opponent_id),
         }
         if opponent_id is not None:
@@ -1460,7 +1743,7 @@ def register_routes(app):
         league, bad = read_league(request.args)
         if bad:
             return bad
-        badges = player_badges(user_id, league or BILLIARDS)
+        badges = player_badges(user_id, league or League.of(BILLIARDS))
         if badges is None:
             if db.session.get(Player, user_id) is not None:
                 return error("This player has deleted their account.", 404)
@@ -1468,7 +1751,7 @@ def register_routes(app):
         return jsonify(badges)
 
     # 6c2c. CHOOSE THE BADGE A LEAGUE SHOWS BY YOUR NAME (Protected)
-    # {"league_type": ..., "key": "<badge>" or null for automatic}
+    # {"league_id": ... (or "league_type"), "key": "<badge>" or null for automatic}
     @app.route("/me/featured-badge", methods=["POST"])
     @jwt_required()
     def choose_featured_badge():
@@ -1481,7 +1764,7 @@ def register_routes(app):
         if key is not None and not isinstance(key, str):
             return error("key must be a badge, or null to pick automatically.", 400)
 
-        problem = set_featured_badge(user_id, league or BILLIARDS, key)
+        problem = set_featured_badge(user_id, league or League.of(BILLIARDS), key)
         if problem:
             return error(problem, 400)
         return jsonify({"message": "Badge updated.", "featured": key})
@@ -1509,11 +1792,12 @@ def register_routes(app):
         if db.session.get(Player, user_id) is None:
             return error("That player doesn't exist.", 404)
 
-        league = league or BILLIARDS
+        league = league or League.of(BILLIARDS)
         return jsonify(
             {
                 "user_id": user_id,
-                "league_type": league,
+                "league_type": league.game,
+                "league_id": league.league_id,
                 "opponents": player_opponents(user_id, league),
             }
         )
@@ -1703,7 +1987,7 @@ def register_routes(app):
             if bad:
                 return bad
 
-            if attempt_matchmaking(table_id):
+            if attempt_matchmaking(league_for_table(table_id)):
                 return jsonify({"message": "Match created.", "match_started": True})
             return error(
                 "Nothing to match - need someone waiting in the queue.", 400, match_started=False

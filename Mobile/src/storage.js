@@ -51,7 +51,11 @@ async function write(key, value) {
   }
 }
 
-/** The saved session - { token, user: {user_id, username}, league } - or null. */
+/**
+ * The saved session - { token, user: {user_id, username}, league } - or
+ * null. league is the saved string: a league_id, or "billiards" /
+ * "ping_pong" from the app before there were schools.
+ */
 export async function loadSession() {
   const [token, userJson, league] = await Promise.all([
     read(KEYS.token),

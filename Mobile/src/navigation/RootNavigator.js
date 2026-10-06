@@ -11,6 +11,7 @@
  *   Signed in, league    Main                    (tabs: Play, Games, Ladder, Profile)
  *                        Player                  (a player's profile, over the tabs)
  *                        SwitchLeague            (a modal over the tabs)
+ *                        LeagueSettings          (the organiser's: PIN and tables)
  *
  * Because the signed-out screens only exist while signed out, signing
  * out (or a session expiring) can't leave a screen behind that the back
@@ -34,6 +35,7 @@ import { LoginScreen } from '../screens/LoginScreen';
 import { PlayerScreen } from '../screens/PlayerScreen';
 import { RegisterScreen } from '../screens/RegisterScreen';
 import { LeagueSelectScreen } from '../screens/LeagueSelectScreen';
+import { LeagueSettingsScreen } from '../screens/LeagueSettingsScreen';
 import { useLeague } from '../state/LeagueContext';
 import { useSession } from '../state/SessionContext';
 import { fonts } from '../theme';
@@ -44,8 +46,10 @@ const Stack = createNativeStackNavigator();
 const APP_NAME = 'Billiards & Ping Pong';
 
 export function AppNavigation() {
-  const { status, league, needsEmail } = useSession();
-  const { theme, info } = useLeague();
+  const { status, leagueId, needsEmail } = useSession();
+  const { theme, league } = useLeague();
+  // Chosen, though the league list may still be on its way.
+  const inLeague = leagueId !== null;
   const navigationRef = useNavigationContainerRef();
   // The screen showing, for the turn banner, which isn't inside any one.
   const [routeName, setRouteName] = useState(null);
@@ -76,7 +80,7 @@ export function AppNavigation() {
       onReady={noteRoute}
       onStateChange={noteRoute}
       // The browser tab's title, in the web preview.
-      documentTitle={{ formatter: () => (league ? info.name : APP_NAME) }}
+      documentTitle={{ formatter: () => (league ? league.name : APP_NAME) }}
     >
       <StatusBar style={theme.statusBar} />
       <Stack.Navigator
@@ -95,7 +99,7 @@ export function AppNavigation() {
           </>
         ) : needsEmail ? (
           <Stack.Screen name="AddEmail" component={AddEmailScreen} />
-        ) : !league ? (
+        ) : !inLeague ? (
           <Stack.Screen name="ChooseLeague" component={LeagueSelectScreen} />
         ) : (
           <>
@@ -116,10 +120,21 @@ export function AppNavigation() {
               component={LeagueSelectScreen}
               options={{ presentation: 'modal', headerShown: true, title: 'Switch league' }}
             />
+            <Stack.Screen
+              name="LeagueSettings"
+              component={LeagueSettingsScreen}
+              options={{
+                headerShown: true,
+                title: league ? `Manage ${league.name}` : 'Manage the league',
+                headerBackTitle: 'Back',
+                headerStyle: { backgroundColor: theme.page },
+                headerShadowVisible: false,
+              }}
+            />
           </>
         )}
       </Stack.Navigator>
-      {status === 'signedIn' && league && !needsEmail ? (
+      {status === 'signedIn' && inLeague && !needsEmail ? (
         <TurnBanner
           routeName={routeName}
           overTabs={TAB_ROUTES.includes(routeName)}

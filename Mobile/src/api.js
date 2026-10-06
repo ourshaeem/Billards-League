@@ -88,7 +88,11 @@ async function request(
   const headers = { Accept: 'application/json' };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
 
-  if (auth) {
+  if (auth === 'optional') {
+    // Signed in or not: the answer says more for someone signed in (which
+    // leagues they can play in), and a stale login is no reason to fail.
+    if (authToken) headers.Authorization = `Bearer ${authToken}`;
+  } else if (auth) {
     if (!authToken) {
       onAuthFailure();
       return {
@@ -152,7 +156,7 @@ async function request(
 
   // Only a signed-in call can have an expired session. A 401 from /login
   // just means the password was wrong, and must not read as "session ended".
-  if (auth && (response.status === 401 || response.status === 422)) {
+  if (auth === true && (response.status === 401 || response.status === 422)) {
     // 422 is what flask-jwt-extended returns for a malformed token.
     onAuthFailure();
     return {
@@ -180,30 +184,59 @@ async function request(
 
 // --- Public data ---
 
-/** Each league and the table it plays on: { leagues: [{league_type, name, table_id, table_name}] } */
-export const getLeagues = (signal) => request('/leagues', { signal });
+/**
+ * Every league - CCNY Billiards, John Jay Ping Pong and the rest - with its
+ * colours, its tables and read_only (true unless the signed-in player can
+ * play there): { leagues: [{league_id, name, school, game, primary_color,
+ * secondary_color, has_pin, legacy_key, tables: [{table_id, table_name}],
+ * read_only}] }.
+ */
+export const getLeagueDirectory = (signal) =>
+  request('/leagues/directory', { auth: 'optional', signal });
 
-export const getLeaderboard = (league, signal) =>
-  request(withQuery('/leaderboard', { league_type: league }), { signal });
+/** One league, as in the directory: { league: {...} }. */
+export const getLeague = (leagueId, signal) =>
+  request(`/leagues/${leagueId}`, { auth: 'optional', signal });
 
-export const getQueue = (tableId, signal) => request(`/queue/${tableId}`, { signal });
+/** Every table a league has in use, and who is at each: { tables: [table, ...] } */
+export const getLeagueTables = (leagueId, signal) =>
+  request(`/leagues/${leagueId}/tables`, { signal });
+
+/**
+ * A league's one queue, for all its tables: [{queue_position, user_id,
+ * username, called, confirmed, table_id, table_name}] - table_* say which
+ * table a player whose turn has come is called to.
+ */
+export const getLeagueQueue = (leagueId, signal) => request(`/leagues/${leagueId}/queue`, { signal });
+
+/**
+ * Enter a league's 4-digit PIN - once; it's remembered. { message, league }
+ * on success. A refusal names data.field "pin": 403 wrong (data.tries_left),
+ * 429 too many tries (data.retry_in seconds), 400 not 4 digits; 409 the
+ * league has no PIN yet.
+ */
+export const unlockLeague = (leagueId, pin) =>
+  request('/league/unlock', { method: 'POST', auth: true, body: { league_id: leagueId, pin } });
+
+export const getLeaderboard = (leagueId, signal) =>
+  request(withQuery('/leaderboard', { league_id: leagueId }), { signal });
 
 /** Who is at a table right now, as player cards: { table: {state, king, challenger, ...} } */
 export const getTable = (tableId, signal) => request(`/table/${tableId}`, { signal });
 
-/** The latest finished games in a league: { league_type, matches: [...] } */
-export const getMatchHistory = (league, { limit } = {}, signal) =>
-  request(withQuery('/matches/history', { league_type: league, limit }), { signal });
+/** The latest finished games in a league: { league_id, matches: [...] } */
+export const getMatchHistory = (leagueId, { limit } = {}, signal) =>
+  request(withQuery('/matches/history', { league_id: leagueId, limit }), { signal });
 
 /**
  * One player's finished games in a league, each with result "won" or
  * "lost" from their side. opponentId narrows it to the games between the
  * two of them - head to head.
  */
-export const getPlayerMatches = (userId, league, { limit, opponentId } = {}, signal) =>
+export const getPlayerMatches = (userId, leagueId, { limit, opponentId } = {}, signal) =>
   request(
     withQuery(`/players/${userId}/matches`, {
-      league_type: league,
+      league_id: leagueId,
       limit,
       opponent_id: opponentId,
     }),
@@ -211,9 +244,9 @@ export const getPlayerMatches = (userId, league, { limit, opponentId } = {}, sig
   );
 
 /**
- * Another player's profile as anyone may see it - picture, flag and both
- * leagues' standings, never their name: { player: {...} }. 404 for an
- * unknown or deleted account.
+ * Another player's profile as anyone may see it - picture, flag and their
+ * standing in every league they're in, never their name: { player: {...} }.
+ * 404 for an unknown or deleted account.
  */
 export const getPlayer = (userId, signal) => request(`/players/${userId}`, { signal });
 
@@ -221,17 +254,17 @@ export const getPlayer = (userId, signal) => request(`/players/${userId}`, { sig
  * A player's record against everyone they've played in a league, most
  * games first: { opponents: [{ opponent: card, wins, losses }] }.
  */
-export const getPlayerOpponents = (userId, league, signal) =>
-  request(withQuery(`/players/${userId}/opponents`, { league_type: league }), { signal });
+export const getPlayerOpponents = (userId, leagueId, signal) =>
+  request(withQuery(`/players/${userId}/opponents`, { league_id: leagueId }), { signal });
 
 /**
  * The players of the day, week and month in a league - who gained the
- * most points in each: { league_type, timezone, day, week, month }, each
+ * most points in each: { league_id, timezone, day, week, month }, each
  * period { player: card, points, wins, losses } or null when nobody has
  * won a game in it yet. (The web app's status panel shows them.)
  */
-export const getTopPlayers = (league, signal) =>
-  request(withQuery('/top-players', { league_type: league }), { signal });
+export const getTopPlayers = (leagueId, signal) =>
+  request(withQuery('/top-players', { league_id: leagueId }), { signal });
 
 /** Country codes and names for the flag picker: { countries: [{code, name}] } */
 export const getCountries = (signal) => request('/countries', { signal });
@@ -266,7 +299,7 @@ export const resetPassword = (email, code, password) =>
 
 // --- Profile ---
 
-/** The signed-in player's profile, with their standing in both leagues. */
+/** The signed-in player's profile, with their standing in every league they're in. */
 export const getProfile = (signal) => request('/profile', { auth: true, signal });
 
 /**
@@ -299,25 +332,19 @@ export const uploadProfilePicture = (image) =>
   });
 
 // --- Match / queue actions ---
-// tableId says which table; league is sent alongside so the server can
-// refuse a request whose table and league disagree.
+// A league's queue is one line for all its tables: these take the league.
+// Without the league's PIN, joining and saying "I'm here" are refused with
+// 403 and data.read_only.
 
-export const getMatchStatus = (tableId, signal) =>
-  request(withQuery('/match/status', { table_id: tableId }), { auth: true, signal });
+/** Your status in a league (or your game wherever it is), plus read_only. */
+export const getMatchStatus = (leagueId, signal) =>
+  request(withQuery('/match/status', { league_id: leagueId }), { auth: true, signal });
 
-export const joinQueue = (tableId, league) =>
-  request('/queue/join', {
-    method: 'POST',
-    auth: true,
-    body: { table_id: tableId, league_type: league },
-  });
+export const joinQueue = (leagueId) =>
+  request('/queue/join', { method: 'POST', auth: true, body: { league_id: leagueId } });
 
-export const leaveQueue = (tableId, league) =>
-  request('/queue/leave', {
-    method: 'POST',
-    auth: true,
-    body: { table_id: tableId, league_type: league },
-  });
+export const leaveQueue = (leagueId) =>
+  request('/queue/leave', { method: 'POST', auth: true, body: { league_id: leagueId } });
 
 /**
  * "I'm here" - the ready check. When the status is "your_turn", the player
@@ -325,12 +352,8 @@ export const leaveQueue = (tableId, league) =>
  * { message, status: "confirmed" | "already_confirmed", match_started }.
  * 409 before their turn or once the minute is up; 404 not in the queue.
  */
-export const confirmHere = (tableId, league) =>
-  request('/queue/confirm', {
-    method: 'POST',
-    auth: true,
-    body: { table_id: tableId, league_type: league },
-  });
+export const confirmHere = (leagueId) =>
+  request('/queue/confirm', { method: 'POST', auth: true, body: { league_id: leagueId } });
 
 /**
  * Ask to call off the game in progress - or, when the opponent has asked
@@ -347,11 +370,12 @@ export const keepPlaying = (matchId) =>
 
 /**
  * matchId is the game the player saw when they filled in the score; the
- * server refuses (409) a report for a game already recorded. league is
- * that game's league (the status payload's league_type). Scores are in
- * the game's own units: balls sunk, or points in ping pong.
+ * server refuses (409) a report for a game already recorded. leagueId is
+ * that game's league (the status payload's league_id). Scores are in the
+ * game's own units: balls sunk, or points in ping pong. 403 with
+ * data.read_only when the league's PIN has changed since.
  */
-export const recordMatch = (myScore, oppScore, matchId, league) =>
+export const recordMatch = (myScore, oppScore, matchId, leagueId) =>
   request('/match/record', {
     method: 'POST',
     auth: true,
@@ -359,7 +383,7 @@ export const recordMatch = (myScore, oppScore, matchId, league) =>
       my_balls: Number(myScore),
       opp_balls: Number(oppScore),
       match_id: matchId,
-      league_type: league,
+      league_id: leagueId,
     },
   });
 
@@ -375,8 +399,7 @@ export const deleteAccount = (password) =>
 export const PRIVACY_POLICY_URL = `${API_BASE}/privacy`;
 
 /** A king with no challenger gives up the table. */
-export const stepDown = (tableId) =>
-  request('/table/step-down', { method: 'POST', auth: true, body: { table_id: tableId } });
+export const stepDown = () => request('/table/step-down', { method: 'POST', auth: true, body: {} });
 
 // --- The organiser's controls ---
 // Only for an account whose profile (or sign-in) says is_admin; the
@@ -386,11 +409,11 @@ export const stepDown = (tableId) =>
  * Take a player out of a table's queue: { message, status: "removed" }.
  * 404 when they aren't in it any more.
  */
-export const adminRemoveFromQueue = (userId, tableId, league) =>
+export const adminRemoveFromQueue = (userId, leagueId) =>
   request('/admin/queue/remove', {
     method: 'POST',
     auth: true,
-    body: { user_id: userId, table_id: tableId, league_type: league },
+    body: { user_id: userId, league_id: leagueId },
   });
 
 /**
@@ -400,11 +423,31 @@ export const adminRemoveFromQueue = (userId, tableId, league) =>
  * organiser saw there: 409 if it has changed since, 404 if the player
  * isn't at the table any more.
  */
-export const adminRemoveFromTable = (userId, tableId, league, matchId) =>
+export const adminRemoveFromTable = (userId, tableId, matchId) =>
   request('/admin/table/remove', {
     method: 'POST',
     auth: true,
-    body: { user_id: userId, table_id: tableId, league_type: league, match_id: matchId },
+    body: { user_id: userId, table_id: tableId, match_id: matchId },
   });
+
+/**
+ * Give a league a new 4-digit PIN: { message, revoked, league }. Everyone
+ * who entered the old one has to enter the new one. 400 (field "pin") for
+ * anything but 4 digits.
+ */
+export const adminSetLeaguePin = (leagueId, pin) =>
+  request(`/admin/leagues/${leagueId}/pin`, { method: 'POST', auth: true, body: { pin } });
+
+/** Add a table to a league: 201 { message, table }. 400 (field "name") for a bad or taken name. */
+export const adminAddTable = (leagueId, name) =>
+  request(`/admin/leagues/${leagueId}/tables`, { method: 'POST', auth: true, body: { name } });
+
+/** Rename a table: { message, table }. 400 (field "name") for a bad or taken name. */
+export const adminRenameTable = (tableId, name) =>
+  request(`/admin/tables/${tableId}`, { method: 'PATCH', auth: true, body: { name } });
+
+/** Stop using a table; its games stay in the history. 409 while anyone is at it. */
+export const adminRemoveTable = (tableId) =>
+  request(`/admin/tables/${tableId}`, { method: 'DELETE', auth: true });
 
 export { API_BASE };

@@ -6,6 +6,10 @@
  * has been read, status is "restoring" and the app shows nothing rather
  * than flashing the sign-in screen at someone who is signed in.
  *
+ * The league is a league_id (from GET /leagues/directory). One saved by
+ * the app before there were schools is "billiards" or "ping_pong" - CCNY's
+ * league of that game - until LeagueContext looks it up and saves the id.
+ *
  * The navigator follows status and league (navigation/RootNavigator.js):
  *   signedOut            -> sign in / register / reset a password
  *   signedIn, needsEmail -> add an email (accounts from before sign-up
@@ -19,11 +23,18 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 
 import * as api from '../api';
-import { isLeague } from '../leagues';
+import { isGame } from '../leagues';
 import { clearSession, loadSession, saveLeague, saveSession } from '../storage';
 import { useToast } from './ToastContext';
 
-const SIGNED_OUT = { status: 'signedOut', user: null, league: null, needsEmail: false, isAdmin: false };
+const SIGNED_OUT = { status: 'signedOut', user: null, leagueId: null, needsEmail: false, isAdmin: false };
+
+/** A saved league: its id, a legacy "billiards" / "ping_pong", or null. */
+function savedLeague(stored) {
+  if (typeof stored !== 'string') return null;
+  if (/^\d+$/.test(stored)) return Number(stored);
+  return isGame(stored) ? stored : null;
+}
 
 const SessionContext = createContext(null);
 
@@ -32,7 +43,7 @@ export function SessionProvider({ children }) {
   const [session, setSession] = useState({
     status: 'restoring',
     user: null,
-    league: null,
+    leagueId: null,
     needsEmail: false,
     isAdmin: false,
   });
@@ -53,7 +64,7 @@ export function SessionProvider({ children }) {
         setSession({
           status: 'signedIn',
           user: saved.user,
-          league: isLeague(saved.league) ? saved.league : null,
+          leagueId: savedLeague(saved.league),
           needsEmail: false,
           isAdmin: false,
         });
@@ -114,7 +125,7 @@ export function SessionProvider({ children }) {
       setSession({
         status: 'signedIn',
         user,
-        league: null,
+        leagueId: null,
         needsEmail: !data.email,
         isAdmin: Boolean(data.is_admin),
       });
@@ -147,10 +158,11 @@ export function SessionProvider({ children }) {
     setSession((current) => ({ ...current, needsEmail: false }));
   }, []);
 
-  const chooseLeague = useCallback((league) => {
-    if (!isLeague(league)) return;
-    setSession((current) => ({ ...current, league }));
-    saveLeague(league);
+  /** A league_id; null to choose again. */
+  const chooseLeague = useCallback((leagueId) => {
+    const next = Number.isInteger(leagueId) ? leagueId : null;
+    setSession((current) => ({ ...current, leagueId: next }));
+    saveLeague(next === null ? null : String(next));
   }, []);
 
   const value = useMemo(
@@ -161,7 +173,7 @@ export function SessionProvider({ children }) {
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }
 
-/** { status, user, league, needsEmail, isAdmin, signIn, resetPassword, signOut, chooseLeague, emailSaved } */
+/** { status, user, leagueId, needsEmail, isAdmin, signIn, resetPassword, signOut, chooseLeague, emailSaved } */
 export function useSession() {
   return useContext(SessionContext);
 }

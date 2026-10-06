@@ -9,11 +9,11 @@ error shown straight to the player.
 """
 import unittest
 
-from tests.conftest_base import BaseTestCase
+from tests.conftest_base import PING_PONG_TABLE_ID, BaseTestCase
 from sqlalchemy.exc import DBAPIError, InternalError
 
 from database import MYSQL_DEADLOCK, check_schema, ensure_schema, retry_on_deadlock
-from models import PING_PONG, Match, Player, PoolTable, QueueEntry, db
+from models import BILLIARDS, PING_PONG, League, LeagueAccess, Match, Player, PlayerAchievement, PoolTable, QueueEntry, Standing, db
 
 
 class EnsureSchemaTests(BaseTestCase):
@@ -114,8 +114,8 @@ class EnsureSchemaTests(BaseTestCase):
         for table, column in (
             ("Players", "profile_picture"),
             ("Players", "country_flag"),
-            ("Players", "ping_pong_wins"),
             ("Players", "deleted_at"),
+            ("Pool_Tables", "is_active"),
             ("Pool_Tables", "league_type"),
             ("Queue", "called_at"),
             ("Queue", "confirmed_at"),
@@ -134,7 +134,7 @@ class EnsureSchemaTests(BaseTestCase):
         db.session.expire_all()
         self.assertEqual(db.session.get(PoolTable, 1).league_type, "billiards",
                          "an existing table is a pool table")
-        self.assertEqual(db.session.get(Player, self.alice).ping_pong_wins, 0)
+        self.assertTrue(db.session.get(PoolTable, 1).is_active, "an existing table is in use")
         self.assertFalse(db.session.get(Player, self.alice).is_admin, "nobody is an admin by default")
 
     def test_the_uploaded_pictures_table_is_created_on_an_older_database(self):
@@ -167,32 +167,113 @@ class EnsureSchemaTests(BaseTestCase):
         tables = list(db.session.scalars(db.select(PoolTable).where(PoolTable.league_type == PING_PONG)))
         self.assertEqual(len(tables), 1, "added once, however many times it runs")
 
-    def test_players_new_to_ping_pong_get_the_starting_rank(self):
-        newcomer = self.add_player("dave", ping_pong_elo=0)
-        veteran = self.add_player("erin", ping_pong_elo=0)
-        db.session.get(Player, veteran).ping_pong_losses = 3
-        db.session.commit()
-
-        ensure_schema()
-
-        db.session.expire_all()
-        self.assertEqual(db.session.get(Player, newcomer).ping_pong_rank.rank_name, "Bronze")
-        self.assertIsNone(
-            db.session.get(Player, veteran).ping_pong_rank_id,
-            "a rank that play produced is left alone",
-        )
-
     def test_duplicate_queue_entries_are_removed_and_the_unique_index_restored(self):
-        db.session.execute(db.text("DROP INDEX uq_queue_user_table"))
+        db.session.execute(db.text("DROP INDEX uq_queue_user_league"))
         for position in (1, 2):
-            db.session.add(QueueEntry(user_id=self.alice, table_id=1, queue_position=position))
+            db.session.add(
+                QueueEntry(user_id=self.alice, league_id=self.billiards_league_id, queue_position=position)
+            )
         db.session.commit()
 
         ensure_schema()
 
         self.assertEqual(self.queued_user_ids(), [self.alice])
         indexes = {i["name"] for i in db.inspect(db.engine).get_indexes("Queue")}
-        self.assertIn("uq_queue_user_table", indexes)
+        self.assertIn("uq_queue_user_league", indexes)
+
+
+class MovingToLeagues(BaseTestCase):
+    """
+    A database from before schools: ratings in columns on Players, two
+    tables, no Leagues. ensure_schema() moves it across once.
+    """
+
+    def make_it_old(self):
+        for column in (
+            "elo_rating INTEGER NOT NULL DEFAULT 0",
+            "total_wins INTEGER NOT NULL DEFAULT 0",
+            "total_losses INTEGER NOT NULL DEFAULT 0",
+            "rank_id INTEGER NULL",
+            "ping_pong_elo INTEGER NOT NULL DEFAULT 0",
+            "ping_pong_wins INTEGER NOT NULL DEFAULT 0",
+            "ping_pong_losses INTEGER NOT NULL DEFAULT 0",
+            "ping_pong_rank_id INTEGER NULL",
+            "ping_pong_featured_badge VARCHAR(40) NULL",
+        ):
+            db.session.execute(db.text(f"ALTER TABLE Players ADD COLUMN {column}"))
+        db.session.execute(
+            db.text(
+                "UPDATE Players SET elo_rating = 140, total_wins = 3, total_losses = 1, "
+                "ping_pong_elo = 75, ping_pong_wins = 2, ping_pong_featured_badge = 'shutout' "
+                "WHERE user_id = :alice"
+            ),
+            {"alice": self.alice},
+        )
+        for table in ("Standings", "League_Access", "Pin_Attempts"):
+            db.session.execute(db.text(f"DELETE FROM {table}"))
+        db.session.execute(db.text("UPDATE Pool_Tables SET league_id = NULL"))
+        db.session.execute(db.text("DELETE FROM Leagues"))
+        db.session.add(QueueEntry(user_id=self.bob, table_id=PING_PONG_TABLE_ID, queue_position=1))
+        db.session.add(
+            PlayerAchievement(user_id=self.carol, league_type=PING_PONG, achievement_key="first_blood")
+        )
+        db.session.commit()
+
+    def test_the_leagues_tables_ratings_and_access_move_across(self):
+        self.make_it_old()
+
+        ensure_schema()
+        db.session.expire_all()
+
+        leagues = {league.slug: league for league in db.session.scalars(db.select(League))}
+        self.assertEqual(len(leagues), 6)
+        ccny_billiards, ccny_ping_pong = leagues["ccny-billiards"], leagues["ccny-ping-pong"]
+        self.assertEqual(ccny_billiards.legacy_key, BILLIARDS)
+        self.assertEqual(leagues["john-jay-ping-pong"].primary_color.upper(), "#232C64")
+        self.assertIsNone(leagues["brooklyn-billiards"].pin_hash, "no PIN until the organiser sets one")
+
+        self.assertEqual(db.session.get(PoolTable, 1).league_id, ccny_billiards.league_id)
+        self.assertEqual(db.session.get(PoolTable, PING_PONG_TABLE_ID).league_id, ccny_ping_pong.league_id)
+        for slug in ("john-jay-billiards", "brooklyn-ping-pong"):
+            tables = db.session.scalars(
+                db.select(PoolTable).where(PoolTable.league_id == leagues[slug].league_id)
+            ).all()
+            self.assertEqual([t.table_name for t in tables], ["Table 1"], slug)
+
+        alice_billiards = db.session.get(Standing, (self.alice, ccny_billiards.league_id))
+        alice_ping_pong = db.session.get(Standing, (self.alice, ccny_ping_pong.league_id))
+        self.assertEqual((alice_billiards.elo, alice_billiards.wins, alice_billiards.losses), (140, 3, 1))
+        self.assertEqual((alice_ping_pong.elo, alice_ping_pong.wins), (75, 2))
+        self.assertEqual(alice_ping_pong.featured_badge, "shutout")
+
+        access = set(db.session.execute(db.select(LeagueAccess.user_id, LeagueAccess.league_id)).all())
+        for user_id in (self.alice, self.bob, self.carol):
+            self.assertIn((user_id, ccny_billiards.league_id), access)
+            self.assertIn((user_id, ccny_ping_pong.league_id), access)
+        self.assertEqual(len(access), 6, "into CCNY's two, and nowhere else")
+
+        entry = db.session.scalars(db.select(QueueEntry)).one()
+        self.assertEqual((entry.league_id, entry.table_id), (ccny_ping_pong.league_id, None))
+        badge = db.session.scalars(db.select(PlayerAchievement)).one()
+        self.assertEqual(badge.league_id, ccny_ping_pong.league_id)
+
+    def test_only_once_so_a_changed_pin_stays_changed(self):
+        self.make_it_old()
+        ensure_schema()
+
+        from logic.leagues import set_league_pin
+
+        set_league_pin("ping_pong", "4321")
+        ensure_schema()
+
+        db.session.expire_all()
+        ping_pong = League.of(PING_PONG)
+        self.assertEqual(
+            db.session.scalars(db.select(LeagueAccess).where(LeagueAccess.league_id == ping_pong.league_id)).all(),
+            [],
+            "nobody let back in without the new PIN",
+        )
+        self.assertEqual(db.session.scalar(db.select(db.func.count()).select_from(League)), 6)
 
 
 class CheckSchemaTests(BaseTestCase):

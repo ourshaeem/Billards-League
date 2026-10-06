@@ -1,7 +1,7 @@
 /**
- * Another player's profile: who they are, where they stand in both
- * leagues, their games - against everyone, against one opponent, and
- * against you.
+ * Another player's profile: who they are, where they stand in each
+ * league they're in, their games there - against everyone, against one
+ * opponent, and against you.
  *
  * Opened by clicking a player anywhere (see OpenPlayerContext). Their
  * real name is never here: the server doesn't send it to anyone else.
@@ -11,7 +11,6 @@ import { ArrowLeft, History, Swords, Users } from 'lucide-react';
 
 import * as api from '../api.js';
 import { flagEmoji } from '../flags.js';
-import { LEAGUE_ORDER, LEAGUES } from '../leagues.js';
 import { BadgesCard } from './Badges.jsx';
 import { HistoryRow } from './MatchHistory.jsx';
 import { Avatar } from './Player.jsx';
@@ -19,8 +18,12 @@ import { Avatar } from './Player.jsx';
 const GAMES_LIMIT = 30;
 const HEAD_TO_HEAD_LIMIT = 10;
 
-export function PlayerProfile({ userId, league: startLeague, currentUserId, onBack }) {
-  const [league, setLeague] = useState(startLeague || LEAGUE_ORDER[0]);
+/**
+ * league is the league on screen, and the one shown first; leagues is the
+ * directory, for the names of the others the player is in.
+ */
+export function PlayerProfile({ userId, league: startLeague, leagues, currentUserId, onBack }) {
+  const [leagueId, setLeagueId] = useState(startLeague?.league_id ?? null);
   const [player, setPlayer] = useState(null);
   const [problem, setProblem] = useState(null);
   const isYou = userId === currentUserId;
@@ -58,6 +61,13 @@ export function PlayerProfile({ userId, league: startLeague, currentUserId, onBa
   }
 
   const flag = flagEmoji(player.country_flag);
+  // The leagues to show: every one they have numbers in, and the one on
+  // screen even if they've never played there.
+  const theirs = (player.standings || []).map((s) => s.league_id);
+  const choices = (leagues || []).filter(
+    (l) => theirs.includes(l.league_id) || l.league_id === startLeague?.league_id,
+  );
+  const league = choices.find((l) => l.league_id === leagueId) ?? choices[0] ?? startLeague;
 
   return (
     <main className="profile-shell profile-shell-wide" aria-labelledby="player-title">
@@ -74,42 +84,48 @@ export function PlayerProfile({ userId, league: startLeague, currentUserId, onBa
             {isYou && <p className="muted small">This is how other players see you.</p>}
           </div>
         </div>
-        <StandingsTable leagues={player.leagues} highlight={league} />
+        <StandingsTable standings={player.standings} highlight={league?.league_id} />
       </section>
 
-      <div
-        className="segmented profile-league-switch"
-        role="group"
-        aria-label="Which league's games to show"
-      >
-        {LEAGUE_ORDER.map((key) => (
-          <button
-            key={key}
-            type="button"
-            className="segmented-option"
-            aria-pressed={league === key}
-            onClick={() => setLeague(key)}
-          >
-            {LEAGUES[key].name}
-          </button>
-        ))}
-      </div>
+      {choices.length > 1 && (
+        <div
+          className="segmented profile-league-switch"
+          role="group"
+          aria-label="Which league's games to show"
+        >
+          {choices.map((l) => (
+            <button
+              key={l.league_id}
+              type="button"
+              className="segmented-option"
+              aria-pressed={league?.league_id === l.league_id}
+              onClick={() => setLeagueId(l.league_id)}
+            >
+              {l.name}
+            </button>
+          ))}
+        </div>
+      )}
 
-      <BadgesCard
-        key={`badges-${userId}-${league}`}
-        userId={userId}
-        league={league}
-        title={isYou ? 'Your badges' : `${player.username}'s badges`}
-      />
+      {league && (
+        <BadgesCard
+          key={`badges-${userId}-${league.league_id}`}
+          userId={userId}
+          league={league}
+          title={isYou ? `Your ${league.name} badges` : `${player.username}'s ${league.name} badges`}
+        />
+      )}
 
       {/* Keyed so a change of league starts each part over, rather than
           showing one league's numbers under the other's name. */}
-      <PlayerGames
-        key={`${userId}-${league}`}
-        player={player}
-        league={league}
-        currentUserId={currentUserId}
-      />
+      {league && (
+        <PlayerGames
+          key={`${userId}-${league.league_id}`}
+          player={player}
+          league={league}
+          currentUserId={currentUserId}
+        />
+      )}
     </main>
   );
 }
@@ -123,7 +139,10 @@ function BackButton({ onBack }) {
   );
 }
 
-function StandingsTable({ leagues, highlight }) {
+function StandingsTable({ standings, highlight }) {
+  if (!standings?.length) {
+    return <p className="empty">Not on any ladder yet.</p>;
+  }
   return (
     <div className="table-wrap">
       <table>
@@ -136,12 +155,12 @@ function StandingsTable({ leagues, highlight }) {
           </tr>
         </thead>
         <tbody>
-          {LEAGUE_ORDER.map((key) => {
-            const standing = leagues?.[key];
+          {standings.map((standing) => {
+            const key = standing.league_id;
             return (
               <tr key={key} data-self={key === highlight ? 'true' : 'false'}>
                 <th scope="row" className="standing-league">
-                  {LEAGUES[key].name}
+                  {standing.name}
                 </th>
                 <td>{standing?.rank_name ?? 'Unranked'}</td>
                 <td className="elo">{standing?.elo ?? 0}</td>
@@ -166,6 +185,7 @@ function StandingsTable({ leagues, highlight }) {
  */
 function PlayerGames({ player, league, currentUserId }) {
   const userId = player.user_id;
+  const leagueId = league.league_id;
   const isYou = userId === currentUserId;
   const [opponents, setOpponents] = useState(null);
   const [vsYou, setVsYou] = useState(null);
@@ -176,11 +196,11 @@ function PlayerGames({ player, league, currentUserId }) {
     const controller = new AbortController();
     const { signal } = controller;
     Promise.all([
-      api.getPlayerOpponents(userId, league, signal),
+      api.getPlayerOpponents(userId, leagueId, signal),
       !isYou && currentUserId
         ? api.getPlayerMatches(
             userId,
-            league,
+            leagueId,
             { limit: HEAD_TO_HEAD_LIMIT, opponentId: currentUserId },
             signal,
           )
@@ -195,7 +215,7 @@ function PlayerGames({ player, league, currentUserId }) {
       if (vsYouRes?.ok) setVsYou(vsYouRes.data?.matches ?? []);
     });
     return () => controller.abort();
-  }, [userId, league, isYou, currentUserId]);
+  }, [userId, leagueId, isYou, currentUserId]);
 
   if (problem) {
     return (
@@ -221,7 +241,7 @@ function PlayerGames({ player, league, currentUserId }) {
             <p className="empty">Loading your games against each other...</p>
           ) : !yourRecord ? (
             <p className="empty">
-              You haven&rsquo;t played {player.username} in the {LEAGUES[league].name} yet.
+              You haven&rsquo;t played {player.username} in {league.name} yet.
             </p>
           ) : (
             <>
@@ -272,7 +292,7 @@ function PlayerGames({ player, league, currentUserId }) {
         </div>
         {opponents === null && <p className="empty">Loading their record...</p>}
         {opponents?.length === 0 && (
-          <p className="empty">No games in the {LEAGUES[league].name} yet.</p>
+          <p className="empty">No games in {league.name} yet.</p>
         )}
         {opponents?.length > 0 && (
           <>
@@ -334,6 +354,7 @@ function GamesCard({ player, league, currentUserId, against, onShowAll }) {
   const [games, setGames] = useState(null);
   const [problem, setProblem] = useState(null);
   const userId = player.user_id;
+  const leagueId = league.league_id;
   const againstId = against?.user_id ?? null;
   const subject = userId === currentUserId ? null : player.username;
 
@@ -342,7 +363,7 @@ function GamesCard({ player, league, currentUserId, against, onShowAll }) {
     api
       .getPlayerMatches(
         userId,
-        league,
+        leagueId,
         { limit: GAMES_LIMIT, opponentId: againstId ?? undefined },
         controller.signal,
       )
@@ -352,7 +373,7 @@ function GamesCard({ player, league, currentUserId, against, onShowAll }) {
         else setProblem(res.message);
       });
     return () => controller.abort();
-  }, [userId, league, againstId]);
+  }, [userId, leagueId, againstId]);
 
   const opponentName = againstId === currentUserId ? 'you' : against?.username;
 

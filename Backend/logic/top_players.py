@@ -26,7 +26,8 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from database import seconds_since
-from models import BILLIARDS, Match, Player, PoolTable, db
+from logic.tables import in_league
+from models import League, Match, Player, PoolTable, db
 
 log = logging.getLogger(__name__)
 
@@ -72,11 +73,11 @@ def top_players(league, now=None):
         {player: card, points, wins, losses}
     with points the net rating points they gained in it.
     """
+    league = League.of(league)
     tz = league_timezone()
     lengths = period_lengths(now or datetime.now(tz))
 
     seconds_ago = seconds_since(Match.played_at)
-    table_league = db.func.coalesce(PoolTable.league_type, BILLIARDS)
     rows = db.session.execute(
         db.select(
             Match.winner_id, Match.loser_id, Match.elo_change, Match.loser_elo_change, seconds_ago
@@ -86,7 +87,7 @@ def top_players(league, now=None):
             Match.match_status == Match.STATUS_FINISHED,
             Match.winner_id.isnot(None),
             Match.loser_id.isnot(None),
-            table_league == league,
+            in_league(league),
             seconds_ago <= max(lengths.values()),
         )
     ).all()
@@ -113,7 +114,7 @@ def top_players(league, now=None):
         if not player.is_deleted
     } if ids else {}
 
-    result = {"league_type": league, "timezone": tz.key}
+    result = {"league_type": league.game, "league_id": league.league_id, "timezone": tz.key}
     for period in PERIODS:
         contenders = [
             (user_id, numbers)

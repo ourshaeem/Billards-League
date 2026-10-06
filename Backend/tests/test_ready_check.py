@@ -9,7 +9,7 @@ someone who wasn't coming - with no way to move the line on.
 import unittest
 
 from tests.conftest_base import ApiTestCase, BaseTestCase
-from models import Match, QueueEntry, db
+from models import BILLIARDS, Match, QueueEntry, db
 
 from logic.manage_queue import (
     CONFIRM_RESULT_ALREADY_CONFIRMED,
@@ -53,10 +53,10 @@ class YourTurn(ReadyCheckTestCase):
         self.make_king(self.alice)
         self.queue_a_while_ago(self.bob)
 
-        self.assertFalse(attempt_matchmaking(1), "no game until bob says they're here")
+        self.assertFalse(attempt_matchmaking(BILLIARDS), "no game until bob says they're here")
 
         self.assertIsNone(self.active_match().player_two_id)
-        status = get_player_status(self.bob, 1)
+        status = get_player_status(self.bob, BILLIARDS)
         self.assertEqual(status["status"], "your_turn")
         self.assertFalse(status["confirmed"])
         self.assertTrue(READY_CHECK_SECONDS - 5 <= status["seconds_left"] <= READY_CHECK_SECONDS)
@@ -68,27 +68,27 @@ class YourTurn(ReadyCheckTestCase):
     def test_saying_youre_here_starts_the_game(self):
         self.make_king(self.alice)
         self.queue_a_while_ago(self.bob)
-        attempt_matchmaking(1)
+        attempt_matchmaking(BILLIARDS)
 
-        self.assertEqual(confirm_here(self.bob, 1), CONFIRM_RESULT_CONFIRMED)
-        self.assertTrue(attempt_matchmaking(1))
+        self.assertEqual(confirm_here(self.bob, BILLIARDS), CONFIRM_RESULT_CONFIRMED)
+        self.assertTrue(attempt_matchmaking(BILLIARDS))
 
         match = self.active_match()
         self.assertEqual((match.player_one_id, match.player_two_id), (self.alice, self.bob))
         self.assertEqual(self.queued_user_ids(), [])
-        self.assertEqual(get_player_status(self.bob, 1)["status"], "playing")
+        self.assertEqual(get_player_status(self.bob, BILLIARDS)["status"], "playing")
 
     def test_missing_the_minute_takes_you_out_and_the_next_player_is_up(self):
         self.make_king(self.alice)
         self.queue_a_while_ago(self.bob, self.carol)
-        attempt_matchmaking(1)
+        attempt_matchmaking(BILLIARDS)
         self.backdate_turn(self.bob, TOO_LONG)
 
-        self.assertFalse(attempt_matchmaking(1))
+        self.assertFalse(attempt_matchmaking(BILLIARDS))
 
         self.assertEqual(self.queued_user_ids(), [self.carol], "bob is out of the queue")
-        self.assertEqual(get_player_status(self.bob, 1), {"status": "idle"})
-        carol = get_player_status(self.carol, 1)
+        self.assertEqual(get_player_status(self.bob, BILLIARDS), {"status": "idle"})
+        carol = get_player_status(self.carol, BILLIARDS)
         self.assertEqual(carol["status"], "your_turn", "carol is up instead")
         self.assertEqual(carol["seconds_left"], READY_CHECK_SECONDS, "with a whole minute of their own")
 
@@ -96,26 +96,26 @@ class YourTurn(ReadyCheckTestCase):
         """The next player's own status poll is enough to move bob aside."""
         self.make_king(self.alice)
         self.queue_a_while_ago(self.bob, self.carol)
-        get_player_status(self.alice, 1)
+        get_player_status(self.alice, BILLIARDS)
         self.backdate_turn(self.bob, TOO_LONG)
 
-        self.assertEqual(get_player_status(self.carol, 1)["status"], "your_turn")
+        self.assertEqual(get_player_status(self.carol, BILLIARDS)["status"], "your_turn")
         self.assertEqual(self.queued_user_ids(), [self.carol])
 
     def test_only_the_front_of_the_line_is_up(self):
         self.make_king(self.alice)
         self.queue_a_while_ago(self.bob, self.carol)
-        attempt_matchmaking(1)
+        attempt_matchmaking(BILLIARDS)
 
-        self.assertEqual(get_player_status(self.carol, 1)["status"], "queued")
-        self.assertEqual(get_player_status(self.carol, 1)["queue_position"], 2)
+        self.assertEqual(get_player_status(self.carol, BILLIARDS)["status"], "queued")
+        self.assertEqual(get_player_status(self.carol, BILLIARDS)["queue_position"], 2)
 
     def test_the_king_sees_who_is_up_and_how_long_they_have(self):
         self.make_king(self.alice)
         self.queue_a_while_ago(self.bob)
-        attempt_matchmaking(1)
+        attempt_matchmaking(BILLIARDS)
 
-        status = get_player_status(self.alice, 1)
+        status = get_player_status(self.alice, BILLIARDS)
 
         self.assertEqual(status["status"], "waiting_for_challenger")
         self.assertEqual(status["up_next"], "bob")
@@ -123,16 +123,16 @@ class YourTurn(ReadyCheckTestCase):
 
     def test_a_king_with_nobody_queued_has_nobody_up_next(self):
         self.make_king(self.alice)
-        status = get_player_status(self.alice, 1)
+        status = get_player_status(self.alice, BILLIARDS)
         self.assertIsNone(status["up_next"])
         self.assertIsNone(status["up_next_seconds_left"])
 
     def test_the_queue_shows_whose_turn_it_is(self):
         self.make_king(self.alice)
         self.queue_a_while_ago(self.bob, self.carol)
-        attempt_matchmaking(1)
+        attempt_matchmaking(BILLIARDS)
 
-        queue = view_queue(1)
+        queue = view_queue(BILLIARDS)
 
         self.assertEqual([(q["username"], q["called"], q["confirmed"]) for q in queue],
                          [("bob", True, False), ("carol", False, False)])
@@ -142,12 +142,12 @@ class YourTurn(ReadyCheckTestCase):
 class FreeTable(ReadyCheckTestCase):
     def test_both_players_must_say_theyre_here(self):
         self.queue_a_while_ago(self.alice, self.bob)
-        self.assertFalse(attempt_matchmaking(1))
+        self.assertFalse(attempt_matchmaking(BILLIARDS))
 
-        self.assertEqual(confirm_here(self.alice, 1), CONFIRM_RESULT_CONFIRMED)
-        self.assertFalse(attempt_matchmaking(1), "bob hasn't said yet")
+        self.assertEqual(confirm_here(self.alice, BILLIARDS), CONFIRM_RESULT_CONFIRMED)
+        self.assertFalse(attempt_matchmaking(BILLIARDS), "bob hasn't said yet")
 
-        alice = get_player_status(self.alice, 1)
+        alice = get_player_status(self.alice, BILLIARDS)
         self.assertEqual(alice["status"], "your_turn")
         self.assertTrue(alice["confirmed"])
         self.assertIsNone(alice["seconds_left"])
@@ -155,132 +155,132 @@ class FreeTable(ReadyCheckTestCase):
         self.assertFalse(alice["opponent_confirmed"])
         self.assertTrue(0 < alice["opponent_seconds_left"] <= READY_CHECK_SECONDS)
 
-        confirm_here(self.bob, 1)
-        self.assertTrue(attempt_matchmaking(1))
+        confirm_here(self.bob, BILLIARDS)
+        self.assertTrue(attempt_matchmaking(BILLIARDS))
         match = self.active_match()
         self.assertEqual({match.player_one_id, match.player_two_id}, {self.alice, self.bob})
 
     def test_if_the_other_player_misses_their_turn_the_next_one_is_asked(self):
         self.queue_a_while_ago(self.alice, self.bob, self.carol)
-        attempt_matchmaking(1)
-        confirm_here(self.alice, 1)
+        attempt_matchmaking(BILLIARDS)
+        confirm_here(self.alice, BILLIARDS)
         self.backdate_turn(self.bob, TOO_LONG)
 
-        attempt_matchmaking(1)
+        attempt_matchmaking(BILLIARDS)
 
         self.assertEqual(self.queued_user_ids(), [self.alice, self.carol])
-        alice = get_player_status(self.alice, 1)
+        alice = get_player_status(self.alice, BILLIARDS)
         self.assertTrue(alice["confirmed"], "alice doesn't have to say so again")
         self.assertEqual(alice["opponent"], "carol")
 
     def test_with_nobody_left_to_play_you_wait_at_the_front_again(self):
         self.queue_a_while_ago(self.alice, self.bob)
-        attempt_matchmaking(1)
-        confirm_here(self.alice, 1)
+        attempt_matchmaking(BILLIARDS)
+        confirm_here(self.alice, BILLIARDS)
         self.backdate_turn(self.bob, TOO_LONG)
 
-        attempt_matchmaking(1)
+        attempt_matchmaking(BILLIARDS)
 
-        alice = get_player_status(self.alice, 1)
+        alice = get_player_status(self.alice, BILLIARDS)
         self.assertEqual(alice["status"], "queued")
         self.assertEqual(alice["queue_position"], 1)
 
     def test_after_a_long_wait_at_the_front_you_are_asked_again(self):
         """Saying you were here an hour ago doesn't mean you still are."""
         self.queue_a_while_ago(self.alice, self.bob)
-        attempt_matchmaking(1)
-        confirm_here(self.alice, 1)
+        attempt_matchmaking(BILLIARDS)
+        confirm_here(self.alice, BILLIARDS)
         self.backdate_turn(self.bob, TOO_LONG)
-        attempt_matchmaking(1)
+        attempt_matchmaking(BILLIARDS)
         self.backdate_confirmation(self.alice, 3600)
 
-        join_queue(self.carol, 1)
-        self.assertFalse(attempt_matchmaking(1))
+        join_queue(self.carol, BILLIARDS)
+        self.assertFalse(attempt_matchmaking(BILLIARDS))
 
-        alice = get_player_status(self.alice, 1)
+        alice = get_player_status(self.alice, BILLIARDS)
         self.assertEqual(alice["status"], "your_turn")
         self.assertFalse(alice["confirmed"])
-        self.assertTrue(get_player_status(self.carol, 1)["confirmed"], "carol only just joined")
+        self.assertTrue(get_player_status(self.carol, BILLIARDS)["confirmed"], "carol only just joined")
 
     def test_saying_you_were_here_moments_ago_still_counts(self):
         self.queue_a_while_ago(self.alice, self.bob)
-        attempt_matchmaking(1)
-        confirm_here(self.alice, 1)
+        attempt_matchmaking(BILLIARDS)
+        confirm_here(self.alice, BILLIARDS)
         self.backdate_turn(self.bob, TOO_LONG)
-        attempt_matchmaking(1)
+        attempt_matchmaking(BILLIARDS)
 
-        join_queue(self.carol, 1)
+        join_queue(self.carol, BILLIARDS)
 
-        self.assertTrue(attempt_matchmaking(1), "alice confirmed seconds ago and carol just joined")
+        self.assertTrue(attempt_matchmaking(BILLIARDS), "alice confirmed seconds ago and carol just joined")
 
 
 class JustJoined(ReadyCheckTestCase):
     def test_joining_a_table_with_room_starts_at_once(self):
         """Having just tapped Join, nobody is asked to tap again."""
         self.make_king(self.alice)
-        join_queue(self.bob, 1)
+        join_queue(self.bob, BILLIARDS)
 
-        self.assertTrue(attempt_matchmaking(1))
+        self.assertTrue(attempt_matchmaking(BILLIARDS))
         self.assertEqual(self.active_match().player_two_id, self.bob)
 
     def test_two_people_joining_together_start_at_once(self):
-        join_queue(self.alice, 1)
-        join_queue(self.bob, 1)
-        self.assertTrue(attempt_matchmaking(1))
+        join_queue(self.alice, BILLIARDS)
+        join_queue(self.bob, BILLIARDS)
+        self.assertTrue(attempt_matchmaking(BILLIARDS))
 
     def test_only_the_player_who_just_joined_counts_as_here(self):
         self.queue_a_while_ago(self.alice)
-        join_queue(self.bob, 1)
+        join_queue(self.bob, BILLIARDS)
 
-        self.assertFalse(attempt_matchmaking(1))
+        self.assertFalse(attempt_matchmaking(BILLIARDS))
 
-        self.assertTrue(get_player_status(self.bob, 1)["confirmed"])
-        self.assertFalse(get_player_status(self.alice, 1)["confirmed"])
+        self.assertTrue(get_player_status(self.bob, BILLIARDS)["confirmed"])
+        self.assertFalse(get_player_status(self.alice, BILLIARDS)["confirmed"])
 
 
 class Confirming(ReadyCheckTestCase):
     def test_not_in_the_queue(self):
-        self.assertEqual(confirm_here(self.alice, 1), CONFIRM_RESULT_NOT_QUEUED)
+        self.assertEqual(confirm_here(self.alice, BILLIARDS), CONFIRM_RESULT_NOT_QUEUED)
 
     def test_before_your_turn(self):
         self.queue_a_while_ago(self.alice)
-        attempt_matchmaking(1)
-        self.assertEqual(confirm_here(self.alice, 1), CONFIRM_RESULT_NOT_YOUR_TURN)
+        attempt_matchmaking(BILLIARDS)
+        self.assertEqual(confirm_here(self.alice, BILLIARDS), CONFIRM_RESULT_NOT_YOUR_TURN)
 
     def test_twice(self):
         self.queue_a_while_ago(self.alice, self.bob)
-        attempt_matchmaking(1)
-        confirm_here(self.alice, 1)
-        self.assertEqual(confirm_here(self.alice, 1), CONFIRM_RESULT_ALREADY_CONFIRMED)
+        attempt_matchmaking(BILLIARDS)
+        confirm_here(self.alice, BILLIARDS)
+        self.assertEqual(confirm_here(self.alice, BILLIARDS), CONFIRM_RESULT_ALREADY_CONFIRMED)
 
     def test_too_late_counts_for_nothing_even_before_anyone_noticed(self):
         self.make_king(self.alice)
         self.queue_a_while_ago(self.bob)
-        attempt_matchmaking(1)
+        attempt_matchmaking(BILLIARDS)
         self.backdate_turn(self.bob, TOO_LONG)
 
-        self.assertEqual(confirm_here(self.bob, 1), CONFIRM_RESULT_TOO_LATE)
+        self.assertEqual(confirm_here(self.bob, BILLIARDS), CONFIRM_RESULT_TOO_LATE)
 
         self.assertEqual(self.queued_user_ids(), [])
-        self.assertFalse(attempt_matchmaking(1))
+        self.assertFalse(attempt_matchmaking(BILLIARDS))
         self.assertIsNone(self.active_match().player_two_id)
 
     def test_with_seconds_to_spare(self):
         self.make_king(self.alice)
         self.queue_a_while_ago(self.bob)
-        attempt_matchmaking(1)
+        attempt_matchmaking(BILLIARDS)
         self.backdate_turn(self.bob, READY_CHECK_SECONDS - 5)
 
-        self.assertEqual(confirm_here(self.bob, 1), CONFIRM_RESULT_CONFIRMED)
-        self.assertTrue(attempt_matchmaking(1))
+        self.assertEqual(confirm_here(self.bob, BILLIARDS), CONFIRM_RESULT_CONFIRMED)
+        self.assertTrue(attempt_matchmaking(BILLIARDS))
 
     def test_your_turn_lets_you_leave_at_once(self):
         """Not wanting to play is allowed; it's quicker than running the clock out."""
         self.queue_a_while_ago(self.alice)
-        join_queue(self.bob, 1)
-        attempt_matchmaking(1)
+        join_queue(self.bob, BILLIARDS)
+        attempt_matchmaking(BILLIARDS)
 
-        status = get_queue_status(self.bob, 1)
+        status = get_queue_status(self.bob, BILLIARDS)
 
         self.assertLess(status["seconds_waiting"], LEAVE_UNLOCK_SECONDS)
         self.assertTrue(status["can_leave"])
@@ -288,14 +288,14 @@ class Confirming(ReadyCheckTestCase):
 
 class ReadyCheckRoutes(ApiTestCase):
     def queue_a_while_ago(self, user_id):
-        join_queue(user_id, 1)
+        join_queue(user_id, BILLIARDS)
         self.backdate_queue_join(user_id, A_WHILE)
 
     def setUp(self):
         super().setUp()
         self.make_king(self.alice)
         self.queue_a_while_ago(self.bob)
-        attempt_matchmaking(1)
+        attempt_matchmaking(BILLIARDS)
         self.login_as(self.bob)
 
     def test_status_says_its_your_turn(self):
@@ -306,7 +306,10 @@ class ReadyCheckRoutes(ApiTestCase):
             {
                 "status",
                 "table_id",
+                "table_name",
                 "league_type",
+                "league_id",
+                "read_only",
                 "confirmed",
                 "seconds_left",
                 "opponent",
@@ -387,7 +390,7 @@ class ReadyCheckRoutes(ApiTestCase):
         queue = self.client.get("/queue/1").get_json()
         self.assertEqual(queue, [
             {"queue_position": 1, "user_id": self.bob, "username": "bob",
-             "called": True, "confirmed": False},
+             "called": True, "confirmed": False, "table_id": 1, "table_name": "Table 1"},
         ])
 
     def entry_for(self, user_id):
@@ -401,7 +404,7 @@ class StatusFallsBackSafely(ApiTestCase):
         from logic.record_match import record_match_result
 
         match = self.start_match(self.alice, self.bob)
-        join_queue(self.carol, 1)
+        join_queue(self.carol, BILLIARDS)
         self.backdate_queue_join(self.carol, A_WHILE)
 
         record_match_result(match, self.alice, self.bob, 16)

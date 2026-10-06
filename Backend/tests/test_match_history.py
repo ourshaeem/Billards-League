@@ -12,12 +12,12 @@ from models import BILLIARDS, PING_PONG, Match, Player, db
 from logic.record_match import record_match_result
 
 ENTRY_KEYS = {
-    "match_id", "table_id", "league_type", "winner", "loser",
+    "match_id", "table_id", "league_type", "league_id", "winner", "loser",
     "winner_score", "loser_score", "elo_change", "loser_elo_change", "seconds_ago",
 }
 CARD_KEYS = {
     "user_id", "username", "country_flag", "profile_picture",
-    "league_type", "elo", "rank_name", "wins", "losses",
+    "league_type", "league_id", "elo", "rank_name", "wins", "losses",
 }
 
 
@@ -79,8 +79,7 @@ class LeagueHistory(HistoryTestCase):
 
         winner = self.history("?league_type=ping_pong")[0]["winner"]
 
-        bob = db.session.get(Player, self.bob)
-        self.assertEqual(winner["elo"], bob.ping_pong_elo)
+        self.assertEqual(winner["elo"], self.rating(self.bob, PING_PONG))
         self.assertEqual(winner["league_type"], PING_PONG)
         self.assertEqual((winner["wins"], winner["losses"]), (1, 0))
 

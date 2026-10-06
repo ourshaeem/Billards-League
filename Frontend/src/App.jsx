@@ -6,20 +6,22 @@
  * into an API call. Anything visual lives in ./components, and anything
  * HTTP lives in ./api.js.
  *
- * Screens: login / register -> league (pick billiards or ping pong) ->
- * dashboard, with profile reachable from the masthead. The league choice
- * sets the theme, the table everything is polled for, and whose ratings
- * the ladder and hover cards show. Clicking any player opens their
- * profile over whichever screen is showing; the browser's Back button
- * closes it again.
+ * Screens: login / register -> league (any school's billiards or ping
+ * pong) -> dashboard, with profile reachable from the masthead, and - for
+ * the organiser - the league's settings. The league choice sets the
+ * colours (from the league's own two), the queue and tables everything is
+ * polled for, and whose ratings the ladder and hover cards show. Anyone
+ * can look at any league; playing there takes its PIN, entered once.
+ * Clicking any player opens their profile over whichever screen is
+ * showing; the browser's Back button closes it again.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowLeftRight, BellRing, LogOut, Moon, Sun } from 'lucide-react';
+import { ArrowLeftRight, BellRing, LogOut, Moon, Settings, Sun } from 'lucide-react';
 
 import * as api from './api.js';
 import { flagEmoji } from './flags.js';
-import { isLeague, leagueInfo } from './leagues.js';
 import {
+  applyLeagueColors,
   applyTheme,
   getThemeChoice,
   resolveTheme,
@@ -35,10 +37,11 @@ import {
 } from './components/AuthScreens.jsx';
 import { StatusPanel } from './components/StatusPanel.jsx';
 import { QueueCard, LeaderboardCard } from './components/Panels.jsx';
-import { ActiveTableCard } from './components/ActiveTable.jsx';
+import { TablesCard } from './components/ActiveTable.jsx';
 import { BadgesCard } from './components/Badges.jsx';
 import { MatchHistoryCard } from './components/MatchHistory.jsx';
 import { LeagueSelect } from './components/LeagueSelect.jsx';
+import { LeagueSettings } from './components/LeagueSettings.jsx';
 import { ProfileSettings } from './components/ProfileSettings.jsx';
 import { PlayerProfile } from './components/PlayerProfile.jsx';
 import { Avatar } from './components/Player.jsx';
@@ -56,9 +59,14 @@ const APP_NAME = 'Billiards & Ping Pong';
 const EMPTY_HISTORY = { all: [], mine: [] };
 const NOTHING_LOADED = { queue: false, leaderboard: false, table: false, history: false };
 
-function storedLeague() {
-  const league = api.getStoredLeague();
-  return isLeague(league) ? league : null;
+/**
+ * The league this device last played in, as stored: a league_id, or the
+ * "billiards" / "ping_pong" an app from before schools saved - resolved
+ * against the directory once it arrives (league.legacy_key).
+ */
+function storedLeagueId() {
+  const stored = api.getStoredLeague();
+  return stored && /^\d+$/.test(stored) ? Number(stored) : null;
 }
 
 /** The signed-in player's profile, or null if it couldn't be loaded. */
@@ -70,7 +78,7 @@ async function fetchProfile(signal) {
 
 function firstView() {
   if (!api.getStoredUser()) return 'login';
-  return storedLeague() ? 'dashboard' : 'league';
+  return api.getStoredLeague() ? 'dashboard' : 'league';
 }
 
 export default function App() {
@@ -78,10 +86,23 @@ export default function App() {
   // the login screen even though the token was still perfectly valid.
   const [user, setUser] = useState(() => api.getStoredUser());
   const [view, setView] = useState(firstView);
-  const [league, setLeague] = useState(() => (api.getStoredUser() ? storedLeague() : null));
+  const [leagueId, setLeagueId] = useState(() => (api.getStoredUser() ? storedLeagueId() : null));
 
-  // From GET /leagues: { billiards: {table_id, table_name, ...}, ping_pong: {...} }
-  const [leagueTables, setLeagueTables] = useState(null);
+  // Every league, from GET /leagues/directory: names, colours, tables and
+  // read_only - which belongs to whoever was signed in when it loaded, so
+  // it's kept with them, and a list from before a sign-in is never shown
+  // after it. null until it arrives.
+  const [directory, setDirectory] = useState({ forUser: undefined, leagues: null });
+  const leagues = directory.forUser === (user?.user_id ?? null) ? directory.leagues : null;
+  const setLeagues = useCallback(
+    (update) =>
+      setDirectory((d) => ({
+        ...d,
+        leagues: typeof update === 'function' ? update(d.leagues) : update,
+      })),
+    [],
+  );
+  const league = leagues?.find((l) => l.league_id === leagueId) ?? null;
   const [profile, setProfile] = useState(null);
   // Whether the signed-in account still needs an email (made before
   // sign-up asked for one): null until known. True shows the add-email
@@ -91,7 +112,8 @@ export default function App() {
 
   const [queue, setQueue] = useState([]);
   const [leaderboard, setLeaderboard] = useState([]);
-  const [activeTable, setActiveTable] = useState(null);
+  // Every table the league has in use, and who is at each.
+  const [tables, setTables] = useState([]);
   const [history, setHistory] = useState(EMPTY_HISTORY);
   // Players of the day, week and month; null until first loaded.
   const [topPlayers, setTopPlayers] = useState(null);
@@ -125,16 +147,17 @@ export default function App() {
   // The status before the latest one, to notice what just happened: a
   // turn arriving, a turn missed, a game called off.
   const lastStatusRef = useRef(null);
-  // The game last seen at the table. When it changes, a game has ended
+  // The games last seen at the tables. When they change, a game has ended
   // (or begun), so the history is due a refresh.
   const tableMatchRef = useRef(undefined);
   // The league on screen, read by requests as they return: an answer for
   // the league the player just switched away from must not land.
-  const leagueRef = useRef(league);
+  const leagueRef = useRef(leagueId);
 
   const userId = user?.user_id ?? null;
-  const tableId = league ? (leagueTables?.[league]?.table_id ?? null) : null;
-  const tableName = league ? leagueTables?.[league]?.table_name : null;
+  // What the panel offers: read_only from the latest status poll (which
+  // notices a changed PIN at once), else the directory's.
+  const readOnly = matchStatus?.read_only ?? league?.read_only ?? false;
 
   const pushToast = useCallback((message, tone = 'info') => {
     if (!message) return;
@@ -157,7 +180,7 @@ export default function App() {
   const clearLeagueData = useCallback(() => {
     setQueue([]);
     setLeaderboard([]);
-    setActiveTable(null);
+    setTables([]);
     setHistory(EMPTY_HISTORY);
     setTopPlayers(null);
     setMatchStatus(null);
@@ -169,7 +192,7 @@ export default function App() {
   const switchLeague = useCallback(
     (next) => {
       leagueRef.current = next;
-      setLeague(next);
+      setLeagueId(next);
       clearLeagueData();
     },
     [clearLeagueData],
@@ -204,21 +227,24 @@ export default function App() {
     return () => api.setAuthFailureHandler(null);
   }, [pushToast, switchLeague]);
 
-  // The league's colours follow the league. Set on <html> so the page
-  // background, outside the React tree, changes with it.
+  // The league's colours follow the league, and light or dark. Set on
+  // <html> so the page background, outside the React tree, changes too.
+  const leagueColors = league ? `${league.league_id}:${league.primary_color}:${league.secondary_color}` : '';
   useEffect(() => {
-    const root = document.documentElement;
-    if (league) root.dataset.league = league;
-    else delete root.dataset.league;
-  }, [league]);
+    applyLeagueColors(league, theme);
+    // Keyed on the colours, not the league object, which every directory
+    // reload replaces.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leagueColors, theme]);
 
   // The tab's title says when it's your turn, so a player in another tab
   // can see it from the tab strip.
   const yourTurnNow = matchStatus?.status === 'your_turn' && !matchStatus.confirmed;
+  const leagueName = league?.name ?? null;
   useEffect(() => {
-    const base = league ? leagueInfo(league).name : APP_NAME;
+    const base = leagueName ?? APP_NAME;
     document.title = yourTurnNow ? `Your turn! - ${base}` : base;
-  }, [league, yourTurnNow]);
+  }, [leagueName, yourTurnNow]);
 
   // Light or dark. "Automatic" keeps following the device as it changes.
   useEffect(() => {
@@ -263,23 +289,23 @@ export default function App() {
 
   // --- Reference data --------------------------------------------------
 
-  // Which table each league plays on. Retried until it arrives: without
-  // it there is no table to show or queue for.
+  // Every league: names, colours, tables, and where this player can play.
+  // Reloaded when someone signs in or out (read_only is theirs), and on
+  // reloadLeagues(); retried until it arrives - without it there is
+  // nothing to show.
+  const [directoryVersion, setDirectoryVersion] = useState(0);
+  const reloadLeagues = useCallback(() => setDirectoryVersion((v) => v + 1), []);
   useEffect(() => {
-    if (leagueTables) return undefined;
     const controller = new AbortController();
+    const forUser = userId;
     let timer;
 
     const load = async () => {
-      const res = await api.getLeagues(controller.signal);
+      const res = await api.getLeagueDirectory(controller.signal);
       if (controller.signal.aborted || res.aborted) return;
       if (res.ok && Array.isArray(res.data?.leagues)) {
-        const byLeague = {};
-        res.data.leagues.forEach((entry) => {
-          if (isLeague(entry.league_type)) byLeague[entry.league_type] = entry;
-        });
         setOffline(false);
-        setLeagueTables(byLeague);
+        setDirectory({ forUser, leagues: res.data.leagues });
         return;
       }
       if (res.kind === api.ErrorKind.NETWORK) setOffline(true);
@@ -291,7 +317,21 @@ export default function App() {
       controller.abort();
       clearTimeout(timer);
     };
-  }, [leagueTables]);
+  }, [userId, directoryVersion]);
+
+  // A league saved as "billiards" / "ping_pong" by the app before there
+  // were schools: CCNY's league of that game, now it can be looked up.
+  useEffect(() => {
+    if (!leagues || leagueId !== null || !user) return;
+    const stored = api.getStoredLeague();
+    const match = stored && leagues.find((l) => l.legacy_key === stored);
+    if (match) {
+      api.setStoredLeague(match.league_id);
+      switchLeague(match.league_id);
+    } else if (stored && view === 'dashboard') {
+      setView('league');
+    }
+  }, [leagues, leagueId, user, view, switchLeague]);
 
   // Reloaded on every change of screen, so the standings on the league
   // picker and profile page reflect the games just played.
@@ -370,9 +410,7 @@ export default function App() {
       } else {
         fresh.forEach((b) => {
           const where =
-            b.league_type !== leagueRef.current && isLeague(b.league_type)
-              ? ` (${leagueInfo(b.league_type).name})`
-              : '';
+            b.league_id !== leagueRef.current && b.league_name ? ` (${b.league_name})` : '';
           pushToast(`Badge unlocked: ${b.name}${where}`, 'success');
         });
       }
@@ -384,17 +422,17 @@ export default function App() {
 
   const refresh = useCallback(
     async (signal, { withHistory = false, statusOnly = false } = {}) => {
-      if (!league || !tableId) return;
-      const forLeague = league;
+      if (!leagueId) return;
+      const forLeague = leagueId;
       const stale = () => signal?.aborted || leagueRef.current !== forLeague;
 
       // Off the dashboard (a profile page) only your own status matters:
       // enough to tell you when it's your turn.
       if (!statusOnly) {
         const [queueRes, boardRes, tableRes] = await Promise.all([
-          api.getQueue(tableId, signal),
+          api.getLeagueQueue(forLeague, signal),
           api.getLeaderboard(forLeague, signal),
-          api.getTable(tableId, signal),
+          api.getLeagueTables(forLeague, signal),
         ]);
         if (stale()) return;
 
@@ -416,12 +454,11 @@ export default function App() {
         }
 
         let tableMoved = false;
-        if (tableRes.ok && tableRes.data?.table) {
-          const table = tableRes.data.table;
-          tableMoved =
-            tableMatchRef.current !== undefined && tableMatchRef.current !== table.match_id;
-          tableMatchRef.current = table.match_id;
-          setActiveTable(table);
+        if (tableRes.ok && Array.isArray(tableRes.data?.tables)) {
+          const games = tableRes.data.tables.map((t) => `${t.table_id}:${t.match_id}`).join(',');
+          tableMoved = tableMatchRef.current !== undefined && tableMatchRef.current !== games;
+          tableMatchRef.current = games;
+          setTables(tableRes.data.tables);
           setLoaded((l) => (l.table ? l : { ...l, table: true }));
         }
 
@@ -450,7 +487,7 @@ export default function App() {
 
       if (!api.getToken()) return;
 
-      const statusRes = await api.getMatchStatus(tableId, signal);
+      const statusRes = await api.getMatchStatus(forLeague, signal);
       if (stale() || statusRes.aborted) return;
       if (!statusRes.ok) {
         // A dropped connection already has the offline banner; anything
@@ -464,6 +501,15 @@ export default function App() {
       setStatusProblem(null);
       if (statusOnly) setOffline(false);
       setMatchStatus(next);
+      // A changed PIN (or a PIN just entered elsewhere) shows on the
+      // league list too.
+      if (typeof next.read_only === 'boolean') {
+        setLeagues((current) =>
+          current?.some((l) => l.league_id === forLeague && l.read_only !== next.read_only)
+            ? current.map((l) => (l.league_id === forLeague ? { ...l, read_only: next.read_only } : l))
+            : current,
+        );
+      }
       noticeStatusChange(lastStatusRef.current, next);
       lastStatusRef.current = next;
       announceBadges(signal);
@@ -480,14 +526,14 @@ export default function App() {
         announcedMatchRef.current = null;
       }
     },
-    [league, tableId, userId, pushToast, noticeStatusChange, announceBadges],
+    [leagueId, userId, pushToast, noticeStatusChange, announceBadges, setLeagues],
   );
 
   // Polled on the dashboard, and - status only - everywhere else a league
   // is chosen (the profile pages, the league picker), so a player who
   // wandered off the dashboard still hears when it's their turn.
   const onDashboard = view === 'dashboard' && viewingPlayer === null;
-  const polling = Boolean(userId) && Boolean(tableId);
+  const polling = Boolean(userId) && Boolean(leagueId);
 
   useEffect(() => {
     if (!polling) return undefined;
@@ -511,7 +557,7 @@ export default function App() {
       controller.abort();
       clearTimeout(timer);
     };
-    // Restarts when the league (and so the table) changes, or when the
+    // Restarts when the league (and so the tables) changes, or when the
     // dashboard is left and returned to. The queue is data this effect
     // reads, not a reason to restart - depending on it once made every
     // queue change tear down and rebuild the timer.
@@ -607,19 +653,50 @@ export default function App() {
     return { ok: true };
   };
 
+  /** next is a league_id. */
   const chooseLeague = (next) => {
     api.setStoredLeague(next);
-    if (next !== league) switchLeague(next);
+    if (next !== leagueId) switchLeague(next);
     setView('dashboard');
+  };
+
+  /** A 403 that says the league needs its PIN: show the PIN prompt. */
+  const noticeReadOnly = (res) => {
+    if (res.status === 403 && res.data?.read_only) {
+      setMatchStatus((current) => (current ? { ...current, read_only: true } : current));
+      reloadLeagues();
+    }
+  };
+
+  /** Enter the league's PIN. Returns { ok, field?, message? } for the form. */
+  const handleUnlock = async (pin) => {
+    setBusy(true);
+    const res = await api.unlockLeague(leagueId, pin);
+    setBusy(false);
+    if (!res.ok) {
+      const field = res.data?.field;
+      if (!field && res.kind !== api.ErrorKind.AUTH) pushToast(res.message, 'error');
+      return { ok: false, field, message: res.message };
+    }
+    pushToast(res.data?.message || "You're in.", 'success');
+    if (res.data?.league) {
+      setLeagues((current) =>
+        current?.map((l) => (l.league_id === res.data.league.league_id ? res.data.league : l)),
+      );
+    }
+    setMatchStatus((current) => (current ? { ...current, read_only: false } : current));
+    refresh(undefined, { withHistory: true });
+    return { ok: true };
   };
 
   const handleJoin = async () => {
     setBusy(true);
-    const res = await api.joinQueue(tableId, league);
+    const res = await api.joinQueue(leagueId);
     setBusy(false);
 
     if (!res.ok) {
       pushToast(res.message, 'error');
+      noticeReadOnly(res);
       // A refusal usually means the screen was out of date (you're
       // already at the table, say) - catch up with what the server knows.
       refresh();
@@ -639,7 +716,7 @@ export default function App() {
 
   const handleLeave = async () => {
     setBusy(true);
-    const res = await api.leaveQueue(tableId, league);
+    const res = await api.leaveQueue(leagueId);
     setBusy(false);
 
     if (!res.ok) {
@@ -659,11 +736,12 @@ export default function App() {
 
   const handleConfirm = async () => {
     setBusy(true);
-    const res = await api.confirmHere(tableId, league);
+    const res = await api.confirmHere(leagueId);
     setBusy(false);
 
     if (!res.ok) {
       pushToast(res.message, 'error');
+      noticeReadOnly(res);
       // Too late or not your turn yet: catch up with what the server knows.
       if (res.status === 409 || res.status === 404) lastStatusRef.current = null;
       refresh();
@@ -704,7 +782,7 @@ export default function App() {
 
   const handleStepDown = async () => {
     setBusy(true);
-    const res = await api.stepDown(tableId);
+    const res = await api.stepDown();
     setBusy(false);
 
     if (!res.ok) {
@@ -737,26 +815,28 @@ export default function App() {
   /** Take a player out of this table's queue. */
   const handleRemoveFromQueue = async (player) => {
     setBusy(true);
-    const res = await api.adminRemoveFromQueue(player.user_id, tableId, league);
+    const res = await api.adminRemoveFromQueue(player.user_id, leagueId);
     setBusy(false);
     finishRemoval(res, player);
   };
 
-  /** Take a player off the table; matchId is the game the organiser saw there. */
-  const handleRemoveFromTable = async (player, matchId) => {
+  /** Take a player off a table; matchId is the game the organiser saw there. */
+  const handleRemoveFromTable = async (player, matchId, tableId) => {
     setBusy(true);
-    const res = await api.adminRemoveFromTable(player.user_id, tableId, league, matchId);
+    const res = await api.adminRemoveFromTable(player.user_id, tableId, matchId);
     setBusy(false);
     finishRemoval(res, player);
   };
 
-  const handleRecord = async (myScore, oppScore, matchId, gameLeague) => {
+  /** gameLeagueId is the league of the game itself (the status's league_id). */
+  const handleRecord = async (myScore, oppScore, matchId, gameLeagueId) => {
     setBusy(true);
-    const res = await api.recordMatch(myScore, oppScore, matchId, gameLeague);
+    const res = await api.recordMatch(myScore, oppScore, matchId, gameLeagueId);
     setBusy(false);
 
     if (!res.ok) {
       pushToast(res.message, 'error');
+      noticeReadOnly(res);
       // 409: your opponent reported this game first. Move on to whatever
       // the server says is happening now.
       refresh();
@@ -782,7 +862,7 @@ export default function App() {
   /** Choose the badge this league shows by your name; null picks automatically. */
   const handleFeature = async (key) => {
     setBusy(true);
-    const res = await api.setFeaturedBadge(league, key);
+    const res = await api.setFeaturedBadge(leagueId, key);
     setBusy(false);
 
     if (!res.ok) {
@@ -850,15 +930,17 @@ export default function App() {
   // A dashboard with no league chosen can't show anything; ask instead.
   // An account without an email adds one before anything else.
   const gated = Boolean(user) && emailMissing === true;
+  const isAdmin = Boolean(profile?.is_admin);
   const screen = gated
     ? 'add-email'
     : user
-      ? view === 'dashboard' && !league
+      ? (view === 'dashboard' || view === 'league-settings') && leagueId === null
         ? 'league'
-        : view
+        : view === 'league-settings' && !isAdmin
+          ? 'dashboard'
+          : view
       : view;
   const me = profile ?? (user ? { username: user.username } : null);
-  const isAdmin = Boolean(profile?.is_admin);
   const myFlag = flagEmoji(profile?.country_flag);
   const showingPlayer = Boolean(user) && viewingPlayer !== null && !gated;
   // Away from the status panel, a turn coming up still needs answering.
@@ -877,7 +959,7 @@ export default function App() {
         <header className="masthead">
           <h1 className="wordmark">
             <span className="wordmark-dot" aria-hidden="true" />
-            {league ? leagueInfo(league).name : APP_NAME}
+            {league ? league.name : APP_NAME}
           </h1>
 
           <div className="masthead-side">
@@ -902,6 +984,17 @@ export default function App() {
                   >
                     <ArrowLeftRight size={15} aria-hidden="true" />
                     Switch league
+                  </button>
+                )}
+                {isAdmin && league && (
+                  <button
+                    type="button"
+                    className="btn btn-quiet btn-small"
+                    onClick={() => goTo('league-settings')}
+                    aria-current={screen === 'league-settings' && !showingPlayer ? 'page' : undefined}
+                  >
+                    <Settings size={15} aria-hidden="true" />
+                    Manage league
                   </button>
                 )}
                 <button type="button" className="btn btn-quiet btn-small" onClick={signOut}>
@@ -961,6 +1054,7 @@ export default function App() {
             key={viewingPlayer}
             userId={viewingPlayer}
             league={league}
+            leagues={leagues}
             currentUserId={userId}
             onBack={closePlayer}
           />
@@ -1004,9 +1098,10 @@ export default function App() {
 
         {user && !showingPlayer && screen === 'league' && (
           <LeagueSelect
-            current={league}
+            current={leagueId}
+            leagues={leagues}
             profile={profile}
-            leagueTables={leagueTables}
+            theme={theme}
             onChoose={chooseLeague}
           />
         )}
@@ -1025,7 +1120,7 @@ export default function App() {
               onSetEmail={handleSetEmail}
               onUploadPicture={handleUploadPicture}
               onDeleteAccount={handleDeleteAccount}
-              onBack={() => setView(league ? 'dashboard' : 'league')}
+              onBack={() => setView(leagueId !== null ? 'dashboard' : 'league')}
               themeChoice={themeChoice}
               onThemeChoice={chooseTheme}
               busy={busy}
@@ -1036,10 +1131,26 @@ export default function App() {
             </main>
           ))}
 
-        {user && !showingPlayer && screen === 'dashboard' && league && leagueTables && !tableId && (
+        {user && !showingPlayer && screen === 'league-settings' && league && (
+          <LeagueSettings
+            key={league.league_id}
+            league={league}
+            onChanged={reloadLeagues}
+            onBack={() => setView('dashboard')}
+            pushToast={pushToast}
+          />
+        )}
+
+        {user && !showingPlayer && screen === 'dashboard' && leagueId !== null && !league && (
+          <main className="profile-shell">
+            <p className="empty">Loading the league...</p>
+          </main>
+        )}
+
+        {user && !showingPlayer && screen === 'dashboard' && league && league.tables.length === 0 && (
           <main className="auth-shell">
             <div className="card">
-              <p>The {leagueInfo(league).name} doesn&rsquo;t have a table set up yet.</p>
+              <p>{league.name} doesn&rsquo;t have a table set up yet.</p>
               <button
                 type="button"
                 className="btn btn-quiet btn-small"
@@ -1056,13 +1167,15 @@ export default function App() {
           !showingPlayer &&
           screen === 'dashboard' &&
           league &&
-          (!leagueTables || tableId) && (
+          league.tables.length > 0 && (
             <main>
               <StatusPanel
                 status={matchStatus}
                 problem={statusProblem}
                 league={league}
-                tableName={tableName}
+                leagues={leagues}
+                readOnly={readOnly}
+                onUnlock={handleUnlock}
                 queueLength={queue.length}
                 topPlayers={topPlayers}
                 onJoin={handleJoin}
@@ -1077,11 +1190,10 @@ export default function App() {
               />
 
               <div className="grid">
-                <ActiveTableCard
-                  table={activeTable}
+                <TablesCard
+                  tables={tables}
                   loaded={loaded.table}
                   league={league}
-                  tableName={tableName}
                   currentUserId={userId}
                   onRemove={isAdmin ? handleRemoveFromTable : null}
                   busy={busy}
@@ -1092,6 +1204,7 @@ export default function App() {
                   currentUsername={user.username}
                   onRemove={isAdmin ? handleRemoveFromQueue : null}
                   busy={busy}
+                  manyTables={tables.length > 1}
                 />
                 <MatchHistoryCard
                   history={history}
@@ -1108,11 +1221,11 @@ export default function App() {
               </div>
 
               <BadgesCard
-                key={`badges-${userId}-${league}`}
+                key={`badges-${userId}-${league.league_id}`}
                 userId={userId}
                 league={league}
                 version={badgeVersion}
-                title={`Your ${leagueInfo(league).name} badges`}
+                title={`Your ${league.name} badges`}
                 onFeature={handleFeature}
                 busy={busy}
               />

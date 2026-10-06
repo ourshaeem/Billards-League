@@ -6,8 +6,8 @@
  *   AppearanceProvider light or dark (saved on the phone)
  *   ToastProvider     short messages over any screen
  *   SessionProvider   who is signed in (token in SecureStore) and their league
- *   LeagueProvider    the league's table and theme
- *   LiveProvider      status, queue and table, polled; join/leave/report
+ *   LeagueProvider    every league, the chosen one, and its theme
+ *   LiveProvider      status, queue and tables, polled; PIN/join/leave/report
  * then the navigator, which follows the session (src/navigation).
  */
 import React from 'react';

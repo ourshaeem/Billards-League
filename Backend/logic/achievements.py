@@ -1,11 +1,12 @@
 """
 Achievements, and the badges that show them.
 
-Each league has its own set: a Hat Trick in billiards is a different
-badge from a Hat Trick in ping pong, and only that league's games count
-towards it. The 64 achievements are the same in both leagues except
-where the sport differs - a billiards shutout is 8-0, a ping pong one
-11-0 - which is what each Achievement's `variants` spell out.
+Each league has its own set: a Hat Trick at CCNY Ping Pong is a
+different badge from a Hat Trick at John Jay Ping Pong, and only that
+league's games count towards it. The achievements are the same in every
+league except where the game differs - a billiards shutout is 8-0, a ping
+pong one 11-0 - which is what each Achievement's `variants` spell out,
+keyed by game.
 
 Most achievements are worked out from match history, by replaying a
 league's finished games in order (`_replay`). There is one implementation
@@ -36,7 +37,19 @@ from datetime import timedelta
 
 from sqlalchemy.exc import IntegrityError
 
-from models import BILLIARDS, LEAGUE_TYPES, PING_PONG, Match, Player, PlayerAchievement, PoolTable, Rank, db
+from models import (
+    BILLIARDS,
+    GAMES,
+    PING_PONG,
+    League,
+    Match,
+    Player,
+    PlayerAchievement,
+    PoolTable,
+    Rank,
+    Standing,
+    db,
+)
 
 log = logging.getLogger(__name__)
 
@@ -50,7 +63,7 @@ PATIENCE_WAIT_SECONDS = 600
 # winning their only game and never playing again.
 LADDER_MIN_GAMES = 10
 
-# The rules that differ by sport.
+# The rules that differ by game.
 RULES = {
     BILLIARDS: {
         "shutout": (8, 0),  # winner's score, loser's score
@@ -81,14 +94,22 @@ class Achievement:
     progress: tuple = None
     # Earned when something happens, not read from match history.
     event: bool = False
-    # League -> (name, description), where a league says it differently.
+    # Game -> (name, description), where a game says it differently.
     variants: dict = field(default_factory=dict)
 
     def name_in(self, league):
-        return self.variants.get(league, (self.name, self.description))[0]
+        return self.variants.get(_game(league), (self.name, self.description))[0]
 
     def description_in(self, league):
-        return self.variants.get(league, (self.name, self.description))[1]
+        return self.variants.get(_game(league), (self.name, self.description))[1]
+
+
+def _game(league):
+    """The game of a League (or a game name, or any League.of() reference)."""
+    if isinstance(league, str) and league in GAMES:
+        return league
+    resolved = League.of(league)
+    return resolved.game if resolved is not None else BILLIARDS
 
 
 GROUPS = [
@@ -272,7 +293,7 @@ def _iso_week(day):
 
 def _league_matches(league):
     """A league's finished games, in the order they were recorded."""
-    tables = dict(db.session.execute(db.select(PoolTable.table_id, PoolTable.league_type)).all())
+    tables = dict(db.session.execute(db.select(PoolTable.table_id, PoolTable.league_id)).all())
     matches = db.session.scalars(
         db.select(Match)
         .where(
@@ -282,9 +303,14 @@ def _league_matches(league):
         )
         .order_by(Match.match_id)
     )
-    # A table the venue never registered counts as billiards, as it does
-    # everywhere else (tables.league_for_table).
-    return [m for m in matches if (tables.get(m.table_id) or BILLIARDS) == league]
+    # A table the venue never registered counts as CCNY's billiards, as it
+    # does everywhere else (tables.league_for_table).
+    unregistered = league.league_id if league.legacy_key == BILLIARDS else None
+    return [
+        m
+        for m in matches
+        if tables.get(m.table_id, unregistered) == league.league_id
+    ]
 
 
 def _replay(league):
@@ -296,7 +322,8 @@ def _replay(league):
               that earned each achievement
       stats   {user_id: {...}} - totals for progress bars
     """
-    rules = RULES[league]
+    league = League.of(league)
+    rules = RULES[league.game]
     shutout_score = rules["shutout"]
     close = rules["close_loser_score"]
     rank_floor = {
@@ -469,7 +496,7 @@ def _replay(league):
 
 def _is_close(league, winner_score, loser_score):
     """8-7 in billiards; in ping pong, any game that reached 10-10."""
-    if league == PING_PONG:
+    if _game(league) == PING_PONG:
         return loser_score >= RULES[PING_PONG]["close_loser_score"]
     return (winner_score, loser_score) == (8, RULES[BILLIARDS]["close_loser_score"])
 
@@ -494,12 +521,11 @@ def _standings(league):
     the ladder. Covers games from before ratings were recorded per game,
     and the ladder, which no single game decides. Returns {(user_id, key)}.
     """
-    fields = Player.LEAGUE_FIELDS[league]
-    elo = getattr(Player, fields["elo"])
-    wins = getattr(Player, fields["wins"])
-    losses = getattr(Player, fields["losses"])
+    league = League.of(league)
     players = db.session.execute(
-        db.select(Player.user_id, elo, wins, losses).where(Player.deleted_at.is_(None))
+        db.select(Standing.user_id, Standing.elo, Standing.wins, Standing.losses)
+        .join(Player, Player.user_id == Standing.user_id)
+        .where(Standing.league_id == league.league_id, Player.deleted_at.is_(None))
     ).all()
     rank_floor = {
         name.lower(): min_elo
@@ -532,13 +558,14 @@ def _insert(league, rows):
     new. Badges never go to deleted accounts. Retries once if a concurrent
     call stored some first - the unique index settles who wins.
     """
+    league = League.of(league)
     deleted = set(db.session.scalars(db.select(Player.user_id).where(Player.deleted_at.isnot(None))))
     rows = [row for row in rows if row["user_id"] not in deleted]
     for _ in range(2):
         existing = set(
             db.session.execute(
                 db.select(PlayerAchievement.user_id, PlayerAchievement.achievement_key).where(
-                    PlayerAchievement.league_type == league
+                    PlayerAchievement.league_id == league.league_id
                 )
             ).all()
         )
@@ -551,7 +578,9 @@ def _insert(league, rows):
             # rather than storing NULL.
             db.session.add_all(
                 PlayerAchievement(
-                    league_type=league, **{k: v for k, v in row.items() if v is not None}
+                    league_id=league.league_id,
+                    league_type=league.game,
+                    **{k: v for k, v in row.items() if v is not None},
                 )
                 for row in new
             )
@@ -569,7 +598,8 @@ def sync_achievements(league=None):
     returns how many achievements were newly awarded.
     """
     total = 0
-    for lg in [league] if league else LEAGUE_TYPES:
+    leagues = [League.of(league)] if league else list(db.session.scalars(db.select(League)))
+    for lg in leagues:
         try:
             earned, _ = _replay(lg)
             rows = [
@@ -620,7 +650,8 @@ def _best(rows):
 
 
 def _chosen(player, league):
-    return getattr(player, Player.FEATURED_BADGE_FIELDS[league])
+    standing = player.standing_in(league)
+    return standing.featured_badge if standing is not None else None
 
 
 def _featured_key(player, league, rows):
@@ -633,11 +664,13 @@ def _featured_key(player, league, rows):
 
 
 def _rows_for(user_ids, league):
+    league = League.of(league)
     rows = defaultdict(list)
-    if user_ids:
+    if user_ids and league is not None:
         for row in db.session.scalars(
             db.select(PlayerAchievement).where(
-                PlayerAchievement.user_id.in_(user_ids), PlayerAchievement.league_type == league
+                PlayerAchievement.user_id.in_(user_ids),
+                PlayerAchievement.league_id == league.league_id,
             )
         ):
             rows[row.user_id].append(row)
@@ -665,11 +698,12 @@ def player_badges(user_id, league):
     if player is None or player.is_deleted:
         return None
 
+    league = League.of(league)
     rows = _rows_for([user_id], league)[user_id]
     held = {row.achievement_key: row for row in rows}
     _, stats = _replay(league)
     mine = dict(stats.get(user_id, {}))
-    mine["rating"] = getattr(player, Player.LEAGUE_FIELDS[league]["elo"]) or 0
+    mine["rating"] = player.standing(league)["elo"] or 0
 
     badges = []
     for a in ACHIEVEMENTS:
@@ -697,7 +731,8 @@ def player_badges(user_id, league):
     return {
         "user_id": player.user_id,
         "username": player.username,
-        "league_type": league,
+        "league_type": league.game,
+        "league_id": league.league_id,
         "featured": _featured_key(player, league, rows),
         "chosen": chosen if chosen in held else None,
         "earned_count": len([k for k in held if k in BY_KEY]),
@@ -712,13 +747,14 @@ def set_featured_badge(user_id, league, key):
     Choose the badge a league's ladder shows by a name; None goes back to
     automatic. Returns None on success, or a message saying why not.
     """
+    league = League.of(league)
     if key is not None:
         if key not in BY_KEY:
             return "That badge doesn't exist."
         held = db.session.scalar(
             db.select(PlayerAchievement.id).where(
                 PlayerAchievement.user_id == user_id,
-                PlayerAchievement.league_type == league,
+                PlayerAchievement.league_id == league.league_id,
                 PlayerAchievement.achievement_key == key,
             )
         )
@@ -727,7 +763,12 @@ def set_featured_badge(user_id, league, key):
     player = db.session.get(Player, user_id)
     if player is None:
         return "That player doesn't exist."
-    setattr(player, Player.FEATURED_BADGE_FIELDS[league], key)
+    standing = player.standing_in(league)
+    if standing is None:
+        if key is None:
+            return None  # automatic already: nothing chosen anywhere
+        return "You haven't earned that badge in this league yet."
+    standing.featured_badge = key
     db.session.commit()
     return None
 
@@ -735,17 +776,24 @@ def set_featured_badge(user_id, league, key):
 def new_badges(user_id):
     """
     Badges earned in any league but not yet announced on the player's
-    screen: [{id, league_type, key, name, tier}].
+    screen: [{id, league_type, league_id, league_name, key, name, tier}].
     """
+    leagues = {league.league_id: league for league in db.session.scalars(db.select(League))}
     rows = db.session.scalars(
         db.select(PlayerAchievement)
         .where(PlayerAchievement.user_id == user_id, PlayerAchievement.seen.is_(False))
         .order_by(PlayerAchievement.earned_at, PlayerAchievement.id)
     )
     return [
-        {"id": row.id, "league_type": row.league_type, **badge_summary(row.achievement_key, row.league_type)}
+        {
+            "id": row.id,
+            "league_type": leagues[row.league_id].game,
+            "league_id": row.league_id,
+            "league_name": leagues[row.league_id].name,
+            **badge_summary(row.achievement_key, leagues[row.league_id]),
+        }
         for row in rows
-        if row.achievement_key in BY_KEY and row.league_type in LEAGUE_TYPES
+        if row.achievement_key in BY_KEY and row.league_id in leagues
     ]
 
 

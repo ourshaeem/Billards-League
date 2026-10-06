@@ -1,7 +1,9 @@
 /**
  * The two cards under the status panel on the Play tab: who is at the
- * table right now, and who is waiting - ports of ActiveTable.jsx and the
- * queue card in Panels.jsx.
+ * league's tables right now, and who is waiting - ports of ActiveTable.jsx
+ * and the queue card in Panels.jsx. A league has one queue for all its
+ * tables; with more than one table, each table is named, and so is the
+ * table a player whose turn has come is called to.
  *
  * Both tell "still loading" apart from "genuinely empty": a list that
  * failed to load must not read as "nobody is waiting".
@@ -33,15 +35,54 @@ function removalConsequence(table, player) {
   return `Their game with ${name} is called off - nothing is recorded and no points move - and ${name} keeps the table.`;
 }
 
-export function ActiveTableCard({ table, loaded, league, tableName, currentUserId, onRemove = null, busy = false }) {
-  const state = table?.state;
+export function TablesCard({ tables, loaded, league, currentUserId, onRemove = null, busy = false }) {
+  const many = tables.length > 1;
+  const playing = tables.filter((t) => t.state !== 'free').length;
+  const single = !many ? tables[0] : null;
+
+  return (
+    <Card
+      title={many ? 'At the tables' : 'At the table'}
+      icon="target"
+      right={
+        loaded && single ? (
+          <Pill>{STATE_LABEL[single.state] ?? single.state}</Pill>
+        ) : loaded && many ? (
+          <Pill>{`${playing} of ${tables.length} in use`}</Pill>
+        ) : null
+      }
+      footer={loaded && playing > 0 ? 'Tap a player to see their profile.' : null}
+    >
+      {!loaded ? <Txt muted style={styles.empty}>Checking the tables...</Txt> : null}
+
+      {loaded
+        ? tables.map((table, index) => (
+            <TableBlock
+              key={table.table_id}
+              table={table}
+              showName={many}
+              divided={many && index > 0}
+              league={league}
+              currentUserId={currentUserId}
+              onRemove={onRemove}
+              busy={busy}
+            />
+          ))
+        : null}
+    </Card>
+  );
+}
+
+function TableBlock({ table, showName, divided, league, currentUserId, onRemove, busy }) {
+  const theme = useTheme();
+  const state = table.state;
   const occupied = state === 'playing' || state === 'waiting_for_challenger';
   // { userId, matchId } of the player the organiser is asking to remove.
   // Tied to the game it was asked about: once that game is over, the
   // question no longer applies.
   const [asking, setAsking] = useState(null);
   const asked =
-    asking && table?.match_id === asking.matchId
+    asking && table.match_id === asking.matchId
       ? [table.king, table.challenger].find((p) => p?.user_id === asking.userId)
       : null;
 
@@ -57,21 +98,25 @@ export function ActiveTableCard({ table, loaded, league, tableName, currentUserI
       : null;
 
   return (
-    <Card
-      title="At the table"
-      icon="target"
-      right={loaded && state ? <Pill>{STATE_LABEL[state] ?? state}</Pill> : null}
-      footer={loaded && occupied ? 'Tap a player to see their profile.' : null}
-    >
-      {!loaded ? <Txt muted style={styles.empty}>Checking the table...</Txt> : null}
+    <View style={[divided && { borderTopWidth: 1, borderTopColor: theme.lineSoft, marginTop: 10, paddingTop: 12 }]}>
+      {showName ? (
+        <View style={styles.tableHead}>
+          <Txt weight="semibold" style={styles.tableName} numberOfLines={1}>
+            {table.table_name}
+          </Txt>
+          <Txt variant="label" color={occupied ? theme.accentText : theme.textMuted}>
+            {STATE_LABEL[state] ?? state}
+          </Txt>
+        </View>
+      ) : null}
 
-      {loaded && state === 'free' ? (
+      {state === 'free' ? (
         <Txt muted style={styles.empty}>
-          Nobody is on {tableName || 'the table'}. The first two in the queue play.
+          Nobody is on {table.table_name}. The next two in the queue play here.
         </Txt>
       ) : null}
 
-      {loaded && occupied ? (
+      {occupied ? (
         <View style={styles.matchup}>
           <Seat
             label="Holding the table"
@@ -105,23 +150,23 @@ export function ActiveTableCard({ table, loaded, league, tableName, currentUserI
 
       {asked ? (
         <RemoveConfirm
-          question={`Take ${asked.username} off the table?`}
+          question={`Take ${asked.username} off ${table.table_name}?`}
           consequence={removalConsequence(table, asked)}
           busy={busy}
           onCancel={() => setAsking(null)}
           onConfirm={async () => {
-            await onRemove(asked, table.match_id);
+            await onRemove(asked, table.match_id, table.table_id);
             setAsking(null);
           }}
         />
       ) : null}
 
-      {loaded && table?.king_streak >= 2 ? (
+      {table.king_streak >= 2 ? (
         <Txt variant="small" muted style={styles.streak}>
           {table.king.username} has won {table.king_streak} in a row.
         </Txt>
       ) : null}
-    </Card>
+    </View>
   );
 }
 
@@ -156,13 +201,24 @@ function Seat({ label, crown = false, player, league, currentUserId, removal }) 
   );
 }
 
-/** Where someone whose turn has come stands: asked, or confirmed. */
-function turnLabel(entry) {
+/**
+ * Where someone whose turn has come stands: asked, or confirmed - and,
+ * when the league has more than one, at which table.
+ */
+function turnLabel(entry, showTable) {
   if (!entry.called) return null;
-  return entry.confirmed ? 'here' : 'up - confirming';
+  const where = showTable && entry.table_name ? ` - ${entry.table_name}` : '';
+  return entry.confirmed ? `here${where}` : `up${where || ' - confirming'}`;
 }
 
-export function QueueCard({ queue, loaded, currentUsername, onRemove = null, busy = false }) {
+export function QueueCard({
+  queue,
+  loaded,
+  currentUsername,
+  onRemove = null,
+  busy = false,
+  manyTables = false,
+}) {
   const theme = useTheme();
   const openPlayer = useOpenPlayer();
   // user_id of the player the organiser is asking to remove.
@@ -186,7 +242,7 @@ export function QueueCard({ queue, loaded, currentUsername, onRemove = null, bus
         ? queue.map((player, index) => {
             const isYou = currentUsername && player.username === currentUsername;
             const next = index === 0 || player.called;
-            const turn = turnLabel(player);
+            const turn = turnLabel(player, manyTables);
             const said = turn ?? (index === 0 ? 'up next' : null);
             const removable = Boolean(onRemove && player.user_id);
             const askingHere = removable && asking === player.user_id;
@@ -291,6 +347,8 @@ const styles = StyleSheet.create({
   seatLabel: { fontFamily: fonts.semibold, fontSize: 11.5, letterSpacing: 0.5 },
   vs: { fontFamily: fonts.display, fontStyle: 'italic', fontSize: type.large },
   streak: { marginTop: 12 },
+  tableHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 6 },
+  tableName: { flexShrink: 1 },
   queueLine: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   queueRow: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 50, paddingVertical: 8 },
   queuePos: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },

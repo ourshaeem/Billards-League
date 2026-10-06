@@ -22,6 +22,7 @@ import logging
 
 from database import retry_on_deadlock
 from logic.manage_queue import attempt_matchmaking, lock_active_match_for_player
+from logic.tables import league_for_table
 from models import Match, db
 
 log = logging.getLogger(__name__)
@@ -80,7 +81,7 @@ def request_cancel(user_id, expected_match_id=None):
 
     # The table has room again: the next in line is up.
     try:
-        attempt_matchmaking(table_id)
+        attempt_matchmaking(league_for_table(table_id).league_id)
     except Exception:
         log.exception("game called off, but matchmaking failed (table %s)", table_id)
     return CANCEL_RESULT_CANCELLED

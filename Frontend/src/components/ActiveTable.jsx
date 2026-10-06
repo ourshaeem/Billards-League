@@ -1,8 +1,8 @@
 /**
- * Who is at the table right now - for everyone, not just the two
+ * Who is at the league's tables right now - for everyone, not just the
  * players. The status panel answers "can I play?"; this answers "who's
- * on?", with each player's rank and rating a hover away, and their
- * profile a click.
+ * on?", table by table, with each player's rank and rating a hover away,
+ * and their profile a click.
  *
  * For the organiser (onRemove given), each player has a Remove button.
  */
@@ -27,24 +27,62 @@ function removalConsequence(table, player) {
   return `Their game with ${name} is called off - nothing is recorded and no points move - and ${name} keeps the table.`;
 }
 
-export function ActiveTableCard({
-  table,
-  loaded,
-  league,
-  tableName,
-  currentUserId,
-  onRemove = null,
-  busy = false,
-}) {
-  const state = table?.state;
+export function TablesCard({ tables, loaded, league, currentUserId, onRemove = null, busy = false }) {
+  const many = tables.length > 1;
+  const playing = tables.filter((t) => t.state !== 'free').length;
+
+  return (
+    <section className="card" aria-labelledby="tables-heading">
+      <div className="card-head">
+        <h2 className="card-title" id="tables-heading">
+          <Swords size={18} aria-hidden="true" className="card-title-icon" />
+          {many ? 'At the tables' : 'At the table'}
+        </h2>
+        {loaded && !many && tables[0] && (
+          <span className="count-pill">{STATE_LABEL[tables[0].state] ?? tables[0].state}</span>
+        )}
+        {loaded && many && (
+          <span className="count-pill">
+            {playing} of {tables.length} in use
+          </span>
+        )}
+      </div>
+
+      {!loaded && <p className="empty">Checking the tables...</p>}
+
+      {loaded &&
+        tables.map((table) => (
+          <TableBlock
+            key={table.table_id}
+            table={table}
+            showName={many}
+            league={league}
+            currentUserId={currentUserId}
+            onRemove={onRemove}
+            busy={busy}
+          />
+        ))}
+
+      {loaded && playing > 0 && (
+        <p className="small muted card-foot">
+          Hover over a player for their rank and rating, or click for their profile.
+        </p>
+      )}
+    </section>
+  );
+}
+
+function TableBlock({ table, showName, league, currentUserId, onRemove, busy }) {
+  const state = table.state;
   // { userId, matchId } of the player the organiser is asking to remove.
   // Tied to the game it was asked about: once that game is over, the
   // question no longer applies.
   const [asking, setAsking] = useState(null);
   const asked =
-    asking && table?.match_id === asking.matchId
+    asking && table.match_id === asking.matchId
       ? [table.king, table.challenger].find((p) => p?.user_id === asking.userId)
       : null;
+  const confirmId = `remove-from-table-${table.table_id}`;
 
   const removal = (player) =>
     onRemove && player
@@ -60,22 +98,23 @@ export function ActiveTableCard({
       : null;
 
   return (
-    <section className="card" aria-labelledby="table-heading">
-      <div className="card-head">
-        <h2 className="card-title" id="table-heading">
-          <Swords size={18} aria-hidden="true" className="card-title-icon" />
-          At the table
-        </h2>
-        {loaded && state && <span className="count-pill">{STATE_LABEL[state] ?? state}</span>}
-      </div>
-
-      {!loaded && <p className="empty">Checking the table...</p>}
-
-      {loaded && state === 'free' && (
-        <p className="empty">Nobody is on {tableName || 'the table'}. The first two in the queue play.</p>
+    <div className="table-block" data-many={showName ? 'true' : 'false'}>
+      {showName && (
+        <div className="table-block-head">
+          <h3 className="table-block-name">{table.table_name}</h3>
+          <span className="table-block-state" data-state={state}>
+            {STATE_LABEL[state] ?? state}
+          </span>
+        </div>
       )}
 
-      {loaded && (state === 'playing' || state === 'waiting_for_challenger') && (
+      {state === 'free' && (
+        <p className="empty">
+          Nobody is on {table.table_name}. The next two in the queue play here.
+        </p>
+      )}
+
+      {(state === 'playing' || state === 'waiting_for_challenger') && (
         <div className="matchup">
           <Seat
             label="Holding the table"
@@ -85,6 +124,8 @@ export function ActiveTableCard({
             league={league}
             currentUserId={currentUserId}
             removal={removal(table.king)}
+            tableId={table.table_id}
+            confirmId={confirmId}
           />
           <span className="matchup-vs" aria-hidden="true">
             vs
@@ -98,6 +139,8 @@ export function ActiveTableCard({
               currentUserId={currentUserId}
               align="end"
               removal={removal(table.challenger)}
+              tableId={table.table_id}
+              confirmId={confirmId}
             />
           ) : (
             <div className="seat seat-empty" data-align="end">
@@ -110,20 +153,20 @@ export function ActiveTableCard({
 
       {asked && (
         <RemoveConfirm
-          id="remove-from-table"
-          triggerId={`remove-seat-${asked.user_id}`}
-          question={`Take ${asked.username} off the table?`}
+          id={confirmId}
+          triggerId={`remove-seat-${table.table_id}-${asked.user_id}`}
+          question={`Take ${asked.username} off ${table.table_name}?`}
           consequence={removalConsequence(table, asked)}
           busy={busy}
           onCancel={() => setAsking(null)}
           onConfirm={async () => {
-            await onRemove(asked, table.match_id);
+            await onRemove(asked, table.match_id, table.table_id);
             setAsking(null);
           }}
         />
       )}
 
-      {loaded && table?.king_streak >= 2 && (
+      {table.king_streak >= 2 && (
         <p className="small muted matchup-streak">
           {table.king.username} has won {table.king_streak} in a row
           {table.king_streak >= (table.table_record_streak ?? 0)
@@ -131,22 +174,27 @@ export function ActiveTableCard({
             : `. The table record is ${table.table_record_streak}.`}
         </p>
       )}
-      {loaded && !(table?.king_streak >= 2) && table?.table_record_streak >= 2 && (
+      {!(table.king_streak >= 2) && table.table_record_streak >= 2 && (
         <p className="small muted matchup-streak">
           Table record: {table.table_record_streak} wins in a row.
         </p>
       )}
-
-      {loaded && state && state !== 'free' && (
-        <p className="small muted card-foot">
-          Hover over a player for their rank and rating, or click for their profile.
-        </p>
-      )}
-    </section>
+    </div>
   );
 }
 
-function Seat({ label, crown = false, player, badge, league, currentUserId, align = 'start', removal }) {
+function Seat({
+  label,
+  crown = false,
+  player,
+  badge,
+  league,
+  currentUserId,
+  align = 'start',
+  removal,
+  tableId,
+  confirmId,
+}) {
   return (
     <div className="seat" data-align={align}>
       <span className="seat-label">
@@ -165,11 +213,11 @@ function Seat({ label, crown = false, player, badge, league, currentUserId, alig
       </span>
       {removal && (
         <RemoveButton
-          id={`remove-seat-${player.user_id}`}
+          id={`remove-seat-${tableId}-${player.user_id}`}
           name={player.username}
           place="the table"
           expanded={removal.expanded}
-          controls="remove-from-table"
+          controls={confirmId}
           onClick={removal.onAsk}
         />
       )}

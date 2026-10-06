@@ -10,7 +10,6 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 
 import { flagEmoji } from '../flags.js';
-import { leagueInfo } from '../leagues.js';
 import { useOpenPlayer } from '../openPlayer.js';
 
 function initialOf(name) {
@@ -144,7 +143,7 @@ export function PlayerChip({ player, league, size = 'md', align = 'start', isYou
 
       {open && (
         <span className="player-tooltip" role="tooltip" id={tooltipId}>
-          <span className="tooltip-league">{leagueInfo(league).name}</span>
+          <span className="tooltip-league">{league?.name}</span>
           {/* The name again: a long one may be cut short in the row. */}
           <span className="tooltip-name">
             {player.username} {flag}

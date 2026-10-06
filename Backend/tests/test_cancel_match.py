@@ -8,7 +8,7 @@ report a score that never happened.
 import unittest
 
 from tests.conftest_base import ApiTestCase, BaseTestCase
-from models import Match, Player, db
+from models import BILLIARDS, Match, Player, Standing, db
 
 from logic.cancel_match import (
     CANCEL_RESULT_ALREADY_REQUESTED,
@@ -35,8 +35,8 @@ class CancelTestCase(BaseTestCase):
     def ratings(self):
         db.session.expire_all()
         return {
-            p.user_id: (p.elo_rating, p.total_wins, p.total_losses)
-            for p in db.session.scalars(db.select(Player))
+            (st.user_id, st.league_id): (st.elo, st.wins, st.losses)
+            for st in db.session.scalars(db.select(Standing))
         }
 
     def finished_games(self):
@@ -49,10 +49,10 @@ class CancelTestCase(BaseTestCase):
     def king_with_challenger(self):
         """alice won the last game here and stayed on; carol came off the queue to play."""
         record_match_result(self.start_match(self.alice, self.bob), self.alice, self.bob, 16)
-        join_queue(self.carol, 1)
+        join_queue(self.carol, BILLIARDS)
         from logic.manage_queue import attempt_matchmaking
 
-        attempt_matchmaking(1)
+        attempt_matchmaking(BILLIARDS)
         match = self.active_match()
         self.assertEqual((match.player_one_id, match.player_two_id), (self.alice, self.carol))
         return match
@@ -65,8 +65,8 @@ class AskingAndAgreeing(CancelTestCase):
         self.assertEqual(request_cancel(self.bob, match.match_id), CANCEL_RESULT_REQUESTED)
 
         self.assertEqual(self.active_match().match_id, match.match_id, "the game is still on")
-        self.assertEqual(get_player_status(self.bob, 1)["cancel_requested_by"], "you")
-        self.assertEqual(get_player_status(self.alice, 1)["cancel_requested_by"], "opponent")
+        self.assertEqual(get_player_status(self.bob, BILLIARDS)["cancel_requested_by"], "you")
+        self.assertEqual(get_player_status(self.alice, BILLIARDS)["cancel_requested_by"], "opponent")
 
     def test_both_agreeing_calls_the_game_off_with_nothing_recorded(self):
         match = self.start_match(self.alice, self.bob)
@@ -78,8 +78,8 @@ class AskingAndAgreeing(CancelTestCase):
         self.assertEqual(self.ratings(), before, "nobody's rating or record moved")
         self.assertEqual(self.finished_games(), 0, "nothing in the history")
         self.assertIsNone(self.active_match())
-        self.assertEqual(get_player_status(self.alice, 1), {"status": "idle"})
-        self.assertEqual(get_player_status(self.bob, 1), {"status": "idle"})
+        self.assertEqual(get_player_status(self.alice, BILLIARDS), {"status": "idle"})
+        self.assertEqual(get_player_status(self.bob, BILLIARDS), {"status": "idle"})
 
     def test_asking_twice_is_not_agreeing(self):
         match = self.start_match(self.alice, self.bob)
@@ -104,13 +104,13 @@ class WhatHappensToTheTable(CancelTestCase):
         king = self.active_match()
         self.assertEqual((king.player_one_id, king.player_two_id), (self.alice, None))
         self.assertNotEqual(king.match_id, match.match_id, "a fresh row, so old reports can't land on it")
-        self.assertEqual(get_player_status(self.alice, 1)["status"], "waiting_for_challenger")
-        self.assertEqual(get_player_status(self.carol, 1), {"status": "idle"})
+        self.assertEqual(get_player_status(self.alice, BILLIARDS)["status"], "waiting_for_challenger")
+        self.assertEqual(get_player_status(self.carol, BILLIARDS), {"status": "idle"})
 
     def test_the_next_in_line_is_up_against_the_king(self):
         match = self.king_with_challenger()
         dave = self.add_player("dave")
-        join_queue(dave, 1)
+        join_queue(dave, BILLIARDS)
 
         request_cancel(self.alice, match.match_id)
         request_cancel(self.carol, match.match_id)
@@ -159,7 +159,7 @@ class ChangingYourMind(CancelTestCase):
 
         self.assertEqual(keep_playing(self.bob, match.match_id), KEEP_RESULT_KEPT)
 
-        self.assertIsNone(get_player_status(self.bob, 1)["cancel_requested_by"])
+        self.assertIsNone(get_player_status(self.bob, BILLIARDS)["cancel_requested_by"])
         self.assertEqual(request_cancel(self.alice, match.match_id), CANCEL_RESULT_REQUESTED,
                          "alice asking now is a new request, not agreement")
 
@@ -168,7 +168,7 @@ class ChangingYourMind(CancelTestCase):
         request_cancel(self.bob, match.match_id)
 
         self.assertEqual(keep_playing(self.alice, match.match_id), KEEP_RESULT_KEPT)
-        self.assertIsNone(get_player_status(self.alice, 1)["cancel_requested_by"])
+        self.assertIsNone(get_player_status(self.alice, BILLIARDS)["cancel_requested_by"])
 
     def test_nothing_to_take_back(self):
         match = self.start_match(self.alice, self.bob)
@@ -195,10 +195,10 @@ class NothingToCancel(CancelTestCase):
     def test_a_request_for_a_game_that_is_over_does_nothing(self):
         old = self.start_match(self.alice, self.bob)
         report_result(self.alice, 8, 3, expected_match_id=old.match_id)
-        join_queue(self.carol, 1)
+        join_queue(self.carol, BILLIARDS)
         from logic.manage_queue import attempt_matchmaking
 
-        attempt_matchmaking(1)
+        attempt_matchmaking(BILLIARDS)
 
         self.assertEqual(request_cancel(self.alice, old.match_id), CANCEL_RESULT_GAME_OVER)
         self.assertIsNone(self.active_match().cancel_requested_by, "alice's new game is untouched")
@@ -222,7 +222,7 @@ class CancelRoutes(ApiTestCase):
 
         self.assertEqual(agreed.status_code, 200)
         self.assertEqual(agreed.get_json()["status"], "cancelled")
-        self.assertEqual(self.get("/match/status").get_json(), {"status": "idle"})
+        self.assertEqual(self.get("/match/status").get_json()["status"], "idle")
 
     def test_keep_playing(self):
         self.login_as(self.bob)

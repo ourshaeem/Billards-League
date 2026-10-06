@@ -26,7 +26,8 @@ import logging
 
 from database import retry_on_deadlock
 from logic.manage_queue import attempt_matchmaking, leave_queue, lock_active_match_for_player
-from models import Match, Player, PoolTable, db
+from logic.tables import league_for_table
+from models import League, Match, Player, PoolTable, db
 
 log = logging.getLogger(__name__)
 
@@ -51,20 +52,21 @@ def is_admin(user_id):
     return player is not None and not player.is_deleted and bool(player.is_admin)
 
 
-def remove_from_queue(user_id, table_id, by=None):
+def remove_from_queue(user_id, league, by=None):
     """
-    Take a player out of a table's queue. `by` is the admin, for the log.
+    Take a player out of a league's queue. `by` is the admin, for the log.
     Returns one of the QUEUE_REMOVE_RESULT_*.
     """
-    if not leave_queue(user_id, table_id):
+    league = League.of(league)
+    if not leave_queue(user_id, league.league_id):
         return QUEUE_REMOVE_RESULT_NOT_QUEUED
-    log.info("admin %s took player %s out of table %s's queue", by, user_id, table_id)
+    log.info("admin %s took player %s out of %s's queue", by, user_id, league.slug)
 
     # If it was their turn, the next in line is up now, not at the next poll.
     try:
-        attempt_matchmaking(table_id)
+        attempt_matchmaking(league.league_id)
     except Exception:
-        log.exception("removed from the queue, but matchmaking failed (table %s)", table_id)
+        log.exception("removed from the queue, but matchmaking failed (league %s)", league.slug)
     return QUEUE_REMOVE_RESULT_REMOVED
 
 
@@ -92,7 +94,7 @@ def remove_from_table(user_id, table_id, expected_match_id=None, by=None):
     )
     # The table has room again: the next in line is up, or the next two.
     try:
-        attempt_matchmaking(table_id)
+        attempt_matchmaking(league_for_table(table_id).league_id)
     except Exception:
         log.exception("taken off the table, but matchmaking failed (table %s)", table_id)
     return outcome, other_id

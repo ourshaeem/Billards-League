@@ -22,9 +22,9 @@ class AddGamesTestCase(BaseTestCase):
         self.dave = self.add_player("dave")
 
     def numbers(self, user_id):
-        db.session.expire_all()
-        player = db.session.get(Player, user_id)
-        return (player.ping_pong_elo, player.ping_pong_wins, player.ping_pong_losses)
+        """(rating, wins, losses) in CCNY Ping Pong."""
+        standing = self.standing(user_id, PING_PONG)
+        return (standing.elo, standing.wins, standing.losses)
 
     def finished(self):
         return list(
@@ -81,17 +81,14 @@ class AddingPastGames(AddGamesTestCase):
         self.assertEqual((active.player_one_id, active.player_two_id), (self.dave, None))
 
     def test_billiards_is_untouched(self):
-        before = db.session.get(Player, self.alice).elo_rating
+        before = self.rating(self.alice)
 
         add_past_games(PING_PONG, [(self.alice, self.bob, 11, 4)])
 
-        db.session.expire_all()
-        self.assertEqual(db.session.get(Player, self.alice).elo_rating, before)
+        self.assertEqual(self.rating(self.alice), before)
 
     def test_a_loser_at_zero_stays_there(self):
-        bob = db.session.get(Player, self.bob)
-        bob.ping_pong_elo = 0
-        db.session.commit()
+        self.set_rating(self.bob, 0, PING_PONG)
 
         [game] = add_past_games(PING_PONG, [(self.alice, self.bob, 11, 4)])
 

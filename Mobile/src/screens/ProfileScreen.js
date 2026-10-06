@@ -1,6 +1,6 @@
 /**
  * The Profile tab: pick a flag, upload or link a picture, see where you
- * stand in both leagues, choose light or dark, and sign out. Port of
+ * stand in each league, choose light or dark, and sign out. Port of
  * ProfileSettings.jsx.
  *
  * Problems appear beside the field they concern - both the ones caught
@@ -18,7 +18,6 @@ import { Avatar, useOpenPlayer } from '../components/Player';
 import { Button, Card, Field, FieldError, Screen, Segmented, Txt } from '../components/ui';
 import { flagEmoji } from '../flags';
 import { emailProblem } from '../accountRules';
-import { LEAGUE_ORDER, LEAGUES } from '../leagues';
 import { PhotoProblem, pickSquarePhoto } from '../photo';
 import { APPEARANCE_OPTIONS, useAppearance } from '../state/AppearanceContext';
 import { useLeague } from '../state/LeagueContext';
@@ -496,24 +495,30 @@ function AppearanceCard() {
   );
 }
 
+/** One row for each league the player is in - a league's PIN puts them on its ladder. */
 function Standing({ profile }) {
   const { theme } = useLeague();
+  const standings = profile.standings || [];
   return (
     <Card title="Where you stand">
-      {LEAGUE_ORDER.map((key, index) => {
-        const standing = profile.leagues?.[key];
+      {standings.length === 0 ? (
+        <Txt muted style={styles.noStanding}>
+          Not on any ladder yet. Enter a league's PIN to join it.
+        </Txt>
+      ) : null}
+      {standings.map((standing, index) => {
         return (
           <View
-            key={key}
+            key={standing.league_id}
             accessible
-            accessibilityLabel={`${LEAGUES[key].name}: ${standing?.rank_name ?? 'Unranked'}, ${pointsText(standing?.elo)}, ${standing?.wins ?? 0} won, ${standing?.losses ?? 0} lost`}
+            accessibilityLabel={`${standing.name}: ${standing.rank_name ?? 'Unranked'}, ${pointsText(standing.elo)}, ${standing.wins ?? 0} won, ${standing.losses ?? 0} lost`}
             style={[
               styles.standingRow,
-              index < LEAGUE_ORDER.length - 1 && { borderBottomWidth: 1, borderBottomColor: theme.lineSoft },
+              index < standings.length - 1 && { borderBottomWidth: 1, borderBottomColor: theme.lineSoft },
             ]}
           >
             <View style={styles.standingName}>
-              <Txt weight="semibold">{LEAGUES[key].name}</Txt>
+              <Txt weight="semibold">{standing.name}</Txt>
               <Txt variant="small" muted>
                 {standing?.rank_name ?? 'Unranked'}
               </Txt>
@@ -556,6 +561,7 @@ const styles = StyleSheet.create({
   selectText: { flex: 1, fontFamily: fonts.regular, fontSize: type.body },
   standingRow: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 56, paddingVertical: 8 },
   standingName: { flex: 1 },
+  noStanding: { paddingVertical: 12 },
   standingNumber: { fontFamily: fonts.regular, fontSize: type.body, fontVariant: ['tabular-nums'], minWidth: 44, textAlign: 'right' },
   signOut: { marginTop: 4, marginBottom: 16 },
   seeProfile: { alignSelf: 'flex-start', marginTop: 2 },

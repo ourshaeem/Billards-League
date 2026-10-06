@@ -59,7 +59,11 @@ class EmptyDatabase(ApiTestCase):
         )
         self.assertEqual(res.status_code, 201)
         first = db.session.scalars(db.select(Player).where(Player.username == "first")).one()
-        self.assertEqual(first.rank.rank_name, "Unranked", "the tier a rating of 0 earns")
+        from logic.leagues import grant_access
+
+        grant_access(first.user_id, "billiards")
+        standing = first.standing_in("billiards")
+        self.assertEqual(standing.rank.rank_name, "Unranked", "the tier a rating of 0 earns")
 
     def test_rank_tiers_already_there_are_left_alone(self):
         before = db.session.scalar(db.select(db.func.count()).select_from(Rank))

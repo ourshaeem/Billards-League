@@ -13,9 +13,11 @@ Sequence when a score is reported:
 Steps 1-3 happen in one transaction. If anything fails, none of it lands,
 so a match can never be half-recorded with one player's ELO moved.
 
-Both leagues run through the same sequence. What differs is how a score
-is judged valid and how many points it moves - see score_problem() and
-the two calculate_* functions - and which of a player's columns change.
+Every league runs through the same sequence. What differs is the game:
+how a score is judged valid and how many points it moves - see
+score_problem() and the two calculate_* functions. Ratings live in
+Standings, one row per player per league, so a result moves only its own
+league's numbers.
 """
 import logging
 
@@ -23,8 +25,9 @@ from sqlalchemy import func
 
 from database import retry_on_deadlock
 from logic.achievements import sync_achievements
+from logic.leagues import ensure_standing, has_access
 from logic.tables import league_for_table
-from models import BILLIARDS, ELO_FLOOR, PING_PONG, STARTING_ELO, Match, PoolTable, Player, Rank, db
+from models import BILLIARDS, ELO_FLOOR, GAMES, PING_PONG, STARTING_ELO, League, Match, PoolTable, Player, Rank, db
 from logic.manage_queue import attempt_matchmaking, lock_active_match_for_player
 
 log = logging.getLogger(__name__)
@@ -62,26 +65,32 @@ REPORT_RESULT_NO_GAME = "no_game"
 REPORT_RESULT_NO_OPPONENT = "no_opponent"
 REPORT_RESULT_WRONG_LEAGUE = "wrong_league"
 REPORT_RESULT_INVALID_SCORE = "invalid_score"
+REPORT_RESULT_NO_ACCESS = "no_access"
 
 
-def _rating(player, league=BILLIARDS):
+def game_of(league):
+    """The game a league plays, from a League, "billiards"/"ping_pong", or any League.of() reference."""
+    if isinstance(league, str) and league in GAMES:
+        return league
+    resolved = League.of(league)
+    return resolved.game if resolved is not None else BILLIARDS
+
+
+def _rating(standing):
     """
-    A player's rating in a league, treating only a missing value as the
-    default.
+    A player's rating in a league, from their Standing, treating only a
+    missing value as the default.
 
-    `player.elo_rating or DEFAULT_ELO` - what this used to say - also
-    replaces a real rating of 0 with the default, and 0 is where every
-    player in this league starts.
+    `rating or DEFAULT_ELO` - what this used to say - also replaces a real
+    rating of 0 with the default, and 0 is where every player starts.
     """
-    if player is None:
+    if standing is None or standing.elo is None:
         return DEFAULT_ELO
-    rating = getattr(player, Player.LEAGUE_FIELDS[league]["elo"])
-    return DEFAULT_ELO if rating is None else rating
+    return standing.elo
 
 
-def _games_played(player, league):
-    fields = Player.LEAGUE_FIELDS[league]
-    return (getattr(player, fields["wins"]) or 0) + (getattr(player, fields["losses"]) or 0)
+def _games_played(standing):
+    return 0 if standing is None else (standing.wins or 0) + (standing.losses or 0)
 
 
 def _expected_win(winner_elo, loser_elo):
@@ -91,12 +100,13 @@ def _expected_win(winner_elo, loser_elo):
 
 def score_problem(league, my_score, opp_score):
     """
-    Why a reported score can't be right for this league, or None if it can.
+    Why a reported score can't be right for this league's game, or None if
+    it can.
 
     The message is shown to the player as-is. Scores are already whole
     numbers by the time they get here.
     """
-    if league == PING_PONG:
+    if game_of(league) == PING_PONG:
         winner, loser = max(my_score, opp_score), min(my_score, opp_score)
         if min(my_score, opp_score) < 0 or winner > PING_PONG_MAX_POINTS:
             return f"Scores must be between 0 and {PING_PONG_MAX_POINTS}."
@@ -119,7 +129,8 @@ def score_problem(league, my_score, opp_score):
 
 def calculate_elo_change(winner, loser):
     """
-    Billiards: points the winner gains and the loser drops.
+    Billiards: points the winner gains and the loser drops. winner and
+    loser are their Standings in the league (None for no games yet).
 
     Real ELO, not the flat 20 the original code awarded: beating someone
     rated above you is worth more than beating someone below you, which is
@@ -130,18 +141,19 @@ def calculate_elo_change(winner, loser):
     return max(1, int(round(ELO_K_FACTOR * (1 - expected_win))))
 
 
-def ping_pong_k_factor(player):
-    """A player's K-factor in ping pong: provisional, established or top."""
-    if _games_played(player, PING_PONG) < PING_PONG_PROVISIONAL_GAMES:
+def ping_pong_k_factor(standing):
+    """A player's K-factor in a ping pong league: provisional, established or top."""
+    if _games_played(standing) < PING_PONG_PROVISIONAL_GAMES:
         return PING_PONG_K_PROVISIONAL
-    if _rating(player, PING_PONG) >= PING_PONG_TOP_RATING:
+    if _rating(standing) >= PING_PONG_TOP_RATING:
         return PING_PONG_K_TOP
     return PING_PONG_K_ESTABLISHED
 
 
 def calculate_ping_pong_elo_change(winner, loser, winner_points, loser_points):
     """
-    Ping pong: points the winner gains and the loser drops.
+    Ping pong: points the winner gains and the loser drops. winner and
+    loser are their Standings in the league.
 
     Standard Elo expectation, scaled by two things billiards doesn't use:
 
@@ -155,7 +167,7 @@ def calculate_ping_pong_elo_change(winner, loser, winner_points, loser_points):
     Always at least 1, so a heavily favoured win still registers.
     """
     k = (ping_pong_k_factor(winner) + ping_pong_k_factor(loser)) / 2
-    expected_win = _expected_win(_rating(winner, PING_PONG), _rating(loser, PING_PONG))
+    expected_win = _expected_win(_rating(winner), _rating(loser))
 
     margin = winner_points - loser_points
     closest, widest = 2, PING_PONG_GAME_POINT
@@ -166,8 +178,11 @@ def calculate_ping_pong_elo_change(winner, loser, winner_points, loser_points):
 
 
 def elo_change_for(league, winner, loser, winner_score, loser_score):
-    """The points a game moves, by its league's formula, from the players' ratings now."""
-    if league == PING_PONG:
+    """
+    The points a game moves, by its league's game's formula, from the
+    players' Standings now.
+    """
+    if game_of(league) == PING_PONG:
         return calculate_ping_pong_elo_change(winner, loser, winner_score, loser_score)
     return calculate_elo_change(winner, loser)
 
@@ -182,24 +197,25 @@ def apply_result(match, winner, loser, elo_change, league):
 
     The one place a result changes ratings - a reported game
     (record_match_result) and a game added afterwards by the organiser
-    (corrections.add_past_games) both come here. Doesn't commit.
+    (corrections.add_past_games) both come here. winner and loser are the
+    players' Standings in the game's league, locked by the caller.
+    Doesn't commit.
     """
-    fields = Player.LEAGUE_FIELDS[league]
     # Before anything moves: achievements judge upsets by these.
-    match.winner_elo_before = _rating(winner, league)
-    match.loser_elo_before = _rating(loser, league)
-    setattr(winner, fields["wins"], (getattr(winner, fields["wins"]) or 0) + 1)
-    setattr(winner, fields["elo"], _rating(winner, league) + elo_change)
+    match.winner_elo_before = _rating(winner)
+    match.loser_elo_before = _rating(loser)
+    winner.wins = (winner.wins or 0) + 1
+    winner.elo = _rating(winner) + elo_change
 
-    loser_before = _rating(loser, league)
+    loser_before = _rating(loser)
     loser_after = lowered_rating(loser_before, elo_change)
     loser_change = loser_before - loser_after
     match.loser_elo_change = loser_change
-    setattr(loser, fields["losses"], (getattr(loser, fields["losses"]) or 0) + 1)
-    setattr(loser, fields["elo"], loser_after)
+    loser.losses = (loser.losses or 0) + 1
+    loser.elo = loser_after
 
-    update_player_rank(winner, league)
-    update_player_rank(loser, league)
+    update_player_rank(winner)
+    update_player_rank(loser)
     return loser_change
 
 
@@ -212,18 +228,21 @@ def lowered_rating(rating, points):
     return max(rating - points, min(rating, ELO_FLOOR))
 
 
-def update_player_rank(player, league=BILLIARDS):
+def update_player_rank(standing):
     """
-    Move a player into whatever rank their current ELO in `league`
-    qualifies for. Below every tier means no rank at all, shown as
-    "Unranked" - not keeping whatever tier they last held.
+    Move a player into whatever rank their rating in a league (their
+    Standing there) qualifies for. Below every tier means no rank at all,
+    shown as "Unranked" - not keeping whatever tier they last held.
     """
-    rank = Rank.for_elo(_rating(player, league))
-    setattr(player, Player.LEAGUE_FIELDS[league]["rank_id"], rank.rank_id if rank else None)
+    rank = Rank.for_elo(_rating(standing))
+    standing.rank_id = rank.rank_id if rank else None
+    standing.rank = rank
 
 
 @retry_on_deadlock
-def report_result(user_id, my_score, opp_score, expected_match_id=None, league_type=None):
+def report_result(
+    user_id, my_score, opp_score, expected_match_id=None, league_type=None, league_id=None
+):
     """
     A player reports the score of their game. The scores are whole numbers;
     whether they make sense is judged here, against the league of the game
@@ -241,8 +260,14 @@ def report_result(user_id, my_score, opp_score, expected_match_id=None, league_t
     whatever match the sender is in NOW: for a winner, their next game,
     against someone who hasn't played yet.
 
-    league_type is the league the player thinks the game is in. Optional,
-    for old clients; when sent and wrong, nothing is recorded.
+    league_id is the league the player thinks the game is in (league_type,
+    its game, from apps before schools). Optional; when sent and wrong,
+    nothing is recorded, and WRONG_LEAGUE's details carry the game's real
+    league_type and league_id.
+
+    Reporting takes access to the game's league (NO_ACCESS): a player
+    whose access went when the organiser changed the PIN enters the new
+    one first.
     """
     try:
         # Locked, so two reports of the same game queue up and the second
@@ -264,9 +289,19 @@ def report_result(user_id, my_score, opp_score, expected_match_id=None, league_t
             return REPORT_RESULT_NO_OPPONENT, None
 
         league = league_for_table(match.table_id)
-        if league_type is not None and league_type != league:
+        if (league_type is not None and league_type != league.game) or (
+            league_id is not None and league_id != league.league_id
+        ):
             db.session.rollback()
-            return REPORT_RESULT_WRONG_LEAGUE, {"league_type": league}
+            return REPORT_RESULT_WRONG_LEAGUE, {
+                "league_type": league.game,
+                "league_id": league.league_id,
+                "league_name": league.name,
+            }
+
+        if not has_access(user_id, league):
+            db.session.rollback()
+            return REPORT_RESULT_NO_ACCESS, {"league_id": league.league_id, "league_name": league.name}
 
         problem = score_problem(league, my_score, opp_score)
         if problem:
@@ -280,8 +315,8 @@ def report_result(user_id, my_score, opp_score, expected_match_id=None, league_t
             winner_id, loser_id = opponent_id, user_id
             winner_score, loser_score = opp_score, my_score
 
-        winner = match.player_one if match.player_one_id == winner_id else match.player_two
-        loser = match.player_one if match.player_one_id == loser_id else match.player_two
+        winner = ensure_standing(winner_id, league, lock=True)
+        loser = ensure_standing(loser_id, league, lock=True)
         elo_change = elo_change_for(league, winner, loser, winner_score, loser_score)
     except Exception:
         db.session.rollback()
@@ -298,7 +333,7 @@ def report_result(user_id, my_score, opp_score, expected_match_id=None, league_t
 
 
 def record_match_result(
-    match, winner_id, loser_id, elo_change, winner_balls=None, loser_balls=None, league=BILLIARDS
+    match, winner_id, loser_id, elo_change, winner_balls=None, loser_balls=None, league=None
 ):
     """
     Close out a match and hand the table to the winner.
@@ -309,21 +344,20 @@ def record_match_result(
     The caller is also expected to have locked that row (see
     /match/record), so two reports of one game can't both land.
 
-    `league` says whose numbers move: a ping pong result changes ping pong
-    ratings and records and leaves billiards alone, and vice versa.
-    winner_balls / loser_balls are the score in that league's units -
-    balls sunk, or points.
+    `league` is the league whose numbers move (by default the table's);
+    every other league is left alone. winner_balls / loser_balls are the
+    score in its game's units - balls sunk, or points.
 
     The winner gains elo_change. The loser loses it too, unless that would
     take them below ELO_FLOOR, where they stop. Returns what the loser
     actually lost.
     """
+    league = League.of(league) if league is not None else league_for_table(match.table_id)
     try:
-        winner = db.session.get(Player, winner_id)
-        loser = db.session.get(Player, loser_id)
-
-        if winner is None or loser is None:
+        if db.session.get(Player, winner_id) is None or db.session.get(Player, loser_id) is None:
             raise ValueError("Both players must exist to record a result.")
+        winner = ensure_standing(winner_id, league, lock=True)
+        loser = ensure_standing(loser_id, league, lock=True)
 
         # 1. Close the match. winner_id now means the winner and nothing
         #    else, so no seat-shuffling is needed.
@@ -366,7 +400,7 @@ def record_match_result(
     #    transaction above: the result is already safely recorded, and a
     #    matchmaking hiccup must not roll back somebody's ELO.
     try:
-        attempt_matchmaking(match.table_id)
+        attempt_matchmaking(league.league_id)
     except Exception:
         log.exception("result saved, but matchmaking failed (table %s)", match.table_id)
 
@@ -392,7 +426,7 @@ def start_new_session(table_id):
     match ends. Delegates to the single implementation in manage_queue.
     """
     try:
-        return attempt_matchmaking(table_id)
+        return attempt_matchmaking(league_for_table(table_id).league_id)
     except Exception:
         log.exception("error starting a new session (table %s)", table_id)
         return False

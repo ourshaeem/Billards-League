@@ -191,10 +191,6 @@ def check_schema():
 ADDED_COLUMNS = [
     ("Queue", "joined_at", "TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP"),
     ("Pool_Tables", "league_type", "VARCHAR(20) NOT NULL DEFAULT 'billiards'"),
-    ("Players", "ping_pong_elo", "INTEGER NOT NULL DEFAULT 0"),
-    ("Players", "ping_pong_wins", "INTEGER NOT NULL DEFAULT 0"),
-    ("Players", "ping_pong_losses", "INTEGER NOT NULL DEFAULT 0"),
-    ("Players", "ping_pong_rank_id", "INTEGER NULL"),
     ("Players", "country_flag", "VARCHAR(2) NULL"),
     ("Players", "profile_picture", "VARCHAR(512) NULL"),
     ("Players", "deleted_at", "DATETIME NULL"),
@@ -204,11 +200,32 @@ ADDED_COLUMNS = [
     ("Players", "email", "VARCHAR(254) NULL"),
     ("Matches", "loser_elo_change", "INTEGER NULL"),
     ("Players", "is_admin", "BOOLEAN NOT NULL DEFAULT 0"),
-    ("Players", "billiards_featured_badge", "VARCHAR(40) NULL"),
-    ("Players", "ping_pong_featured_badge", "VARCHAR(40) NULL"),
     ("Matches", "winner_elo_before", "INTEGER NULL"),
     ("Matches", "loser_elo_before", "INTEGER NULL"),
+    ("Pool_Tables", "is_active", "BOOLEAN NOT NULL DEFAULT 1"),
+    ("Queue", "league_id", "INTEGER NULL"),
+    ("Player_Achievements", "league_id", "INTEGER NULL"),
 ]
+# (Ratings used to be columns on Players - elo_rating, ping_pong_elo and
+# the rest - and each league's chosen badge too. They moved to Standings;
+# the columns are left in the database as they were, unused, and no
+# longer added to a new one.)
+
+# The leagues a database starts with, in the order the apps list them:
+# (slug, name, school, game, primary colour, secondary colour, legacy key).
+# CCNY's two are the leagues that existed before there were schools - the
+# legacy key is what apps from then call them.
+CCNY_LAVENDER = "#B57EDC"
+LEAGUES = [
+    ("ccny-billiards", "CCNY Billiards", "CCNY", "billiards", CCNY_LAVENDER, "#000000", "billiards"),
+    ("ccny-ping-pong", "CCNY Ping Pong", "CCNY", "ping_pong", CCNY_LAVENDER, "#000000", "ping_pong"),
+    ("john-jay-billiards", "John Jay Billiards", "John Jay", "billiards", "#232C64", "#00AEEF", None),
+    ("john-jay-ping-pong", "John Jay Ping Pong", "John Jay", "ping_pong", "#232C64", "#00AEEF", None),
+    ("brooklyn-billiards", "Brooklyn College Billiards", "Brooklyn College", "billiards", "#882345", "#EBB700", None),
+    ("brooklyn-ping-pong", "Brooklyn College Ping Pong", "Brooklyn College", "ping_pong", "#882345", "#EBB700", None),
+]
+# What a new league's first table is called.
+FIRST_TABLE_NAME = "Table 1"
 
 # The name ping pong's first table is given when ensure_schema creates it.
 PING_PONG_TABLE_NAME = "Ping Pong Table"
@@ -235,29 +252,31 @@ def ensure_schema():
     Steps:
       1. Every table the models map exists. On an empty database this
          builds them all; on an existing one it creates only what's
-         missing (such as Player_Pictures, for uploaded photos) and
-         touches nothing else.
-      2. Every column in ADDED_COLUMNS exists: the leave-queue timer, each
-         table's league, the ping pong ratings, profile flag/picture, the
-         ready check's turn times, a game's cancel request, players'
-         emails, what a game's loser actually lost, each league's chosen
-         badge, and both players' ratings before each game.
-         Players.ping_pong_rank_id also gets its foreign key to Ranks.
+         missing (Leagues, Standings, League_Access, Pin_Attempts, ...)
+         and touches nothing else.
+      2. Every column in ADDED_COLUMNS exists, and Queue.table_id allows
+         NULL (a queue row names a table only once its player is called).
       3. An empty Ranks table gets the DEFAULT_RANKS tiers.
-      4. Table 1 exists in Pool_Tables. The UI plays on table 1, and Queue
-         and Matches both have foreign keys to it, so without the row
-         every join fails.
-      5. The ping pong league has a table. Without one, nobody could join
-         its queue.
-      6. Players who have never played ping pong start in the rank a
-         rating of 0 earns, exactly as a newly registered player would.
+      4. Table 1, and a ping pong table, exist - what every database had
+         before there were schools.
+      5. The leagues exist. The first time - an empty Leagues table - this
+         also moves a database from before schools across, in one go:
+         its tables become CCNY's (each new league gets a "Table 1"),
+         every player's ratings, records, ranks and chosen badges become
+         their Standings in CCNY's two leagues, and every player there is
+         gets into both without the PIN. Only that first time: after it,
+         access is the PIN's to give, and a changed PIN must stay changed.
+      6. Every table, queue row and badge belongs to a league - the ones
+         from before schools go to CCNY's league of their game.
       7. Old-style Matches rows are converted. The original code kept the
          two seats in winner_id/loser_id during a game; the app now keeps
          them in king_id/challenger_id. Left unconverted, an old Active
          row is a king nobody can see or play.
       8. Duplicate queue entries are removed, then every index the models
-         declare is created if missing - including the unique index that
-         stops a double-tapped Join queueing someone twice.
+         declare is created if missing - including the unique ones that
+         stop a double-tapped Join queueing someone twice, and a badge
+         being earned twice in one league - and the old one-badge-per-game
+         index goes (it would stop the same badge in two leagues).
       9. No rating is below ELO_FLOOR (0): any older one is raised to it,
          with the rank that earns. Games no longer take anyone below it,
          so after the first run this finds nothing.
@@ -269,15 +288,16 @@ def ensure_schema():
     from models import (
         BILLIARDS,
         ELO_FLOOR,
-        LEAGUE_NAMES,
-        LEAGUE_TYPES,
         PING_PONG,
-        STARTING_ELO,
+        League,
+        LeagueAccess,
         Match,
         Player,
+        PlayerAchievement,
         PoolTable,
         QueueEntry,
         Rank,
+        Standing,
     )
 
     def step(label, fn):
@@ -320,21 +340,21 @@ def ensure_schema():
             added.append(f"{table}.{column}")
         return f"added {', '.join(added)}" if added else None
 
-    def add_ping_pong_rank_key():
-        # SQLite (the tests) can't add a constraint to an existing table,
-        # and gets it from the model when the tests build their tables.
+    def queue_table_optional():
+        # SQLite (the tests) builds Queue from the models, where it already
+        # allows NULL.
         if db.engine.dialect.name != "mysql":
             return None
-        keys = inspect(db.engine).get_foreign_keys(Player.__tablename__)
-        if any(k["constrained_columns"] == ["ping_pong_rank_id"] for k in keys):
+        column = next(
+            (c for c in inspect(db.engine).get_columns(QueueEntry.__tablename__) if c["name"] == "table_id"),
+            None,
+        )
+        if column is None or column["nullable"]:
             return None
         db.session.execute(
-            text(
-                f"ALTER TABLE {Player.__tablename__} ADD CONSTRAINT fk_players_ping_pong_rank "
-                f"FOREIGN KEY (ping_pong_rank_id) REFERENCES {Rank.__tablename__} (rank_id)"
-            )
+            text(f"ALTER TABLE {QueueEntry.__tablename__} MODIFY COLUMN table_id INT NULL DEFAULT NULL")
         )
-        return "added the foreign key from Players.ping_pong_rank_id to Ranks"
+        return "Queue.table_id now allows NULL"
 
     def add_table_one():
         if db.session.get(PoolTable, 1) is not None:
@@ -351,23 +371,132 @@ def ensure_schema():
         db.session.add(PoolTable(table_name=PING_PONG_TABLE_NAME, league_type=PING_PONG))
         return f"added '{PING_PONG_TABLE_NAME}' to Pool_Tables"
 
-    def seed_ping_pong_ranks():
-        # Only players with no ping pong games and no rank yet, so this
-        # never overrides a rank that play has earned (or lost).
-        starting = Rank.for_elo(STARTING_ELO)
-        if starting is None:
+    def add_leagues():
+        if db.session.scalar(db.select(League.league_id).limit(1)) is not None:
             return None
-        count = db.session.execute(
-            db.update(Player)
-            .where(
-                Player.ping_pong_rank_id.is_(None),
-                Player.ping_pong_elo == STARTING_ELO,
-                Player.ping_pong_wins == 0,
-                Player.ping_pong_losses == 0,
+        leagues = []
+        for order, (slug, name, school, game, primary, secondary, legacy) in enumerate(LEAGUES):
+            league = League(
+                slug=slug,
+                name=name,
+                school=school,
+                game=game,
+                primary_color=primary,
+                secondary_color=secondary,
+                legacy_key=legacy,
+                sort_order=order,
             )
-            .values(ping_pong_rank_id=starting.rank_id)
-        ).rowcount
-        return f"gave {count} player(s) their starting ping pong rank" if count else None
+            db.session.add(league)
+            leagues.append(league)
+        db.session.flush()
+        legacy = {league.legacy_key: league for league in leagues if league.legacy_key}
+
+        # The tables there are were all CCNY's: each goes to the league of
+        # its game. Every league without a table gets its first.
+        for table in db.session.scalars(db.select(PoolTable)):
+            if table.league_id not in {league.league_id for league in leagues}:
+                table.league_id = legacy[table.league_type or BILLIARDS].league_id
+        db.session.flush()
+        for league in leagues:
+            has_table = db.session.scalar(
+                db.select(PoolTable.table_id).where(PoolTable.league_id == league.league_id).limit(1)
+            )
+            if has_table is None:
+                db.session.add(
+                    PoolTable(table_name=FIRST_TABLE_NAME, league_id=league.league_id, league_type=league.game)
+                )
+
+        moved = _move_ratings_to_standings(legacy)
+
+        # Everyone who already plays gets into CCNY's leagues without the
+        # PIN, as they always could.
+        players = list(db.session.scalars(db.select(Player.user_id).where(Player.deleted_at.is_(None))))
+        for user_id in players:
+            for league in legacy.values():
+                db.session.add(LeagueAccess(user_id=user_id, league_id=league.league_id))
+        return (
+            f"added the {len(leagues)} leagues ({', '.join(l.name for l in leagues)}); "
+            f"moved {moved} player(s)' ratings into Standings; let {len(players)} player(s) into "
+            f"{' and '.join(l.name for l in legacy.values())}"
+        )
+
+    def _move_ratings_to_standings(legacy):
+        """
+        Every player's numbers, from the old Players columns into Standings
+        in CCNY's two leagues. Plain SQL: the models no longer map those
+        columns. A new database has none of them, and nothing to move.
+        """
+        # The step's own connection: a separate one could reset this one's
+        # transaction where the tests share a single connection.
+        present = {c["name"] for c in inspect(db.session.connection()).get_columns(Player.__tablename__)}
+        sources = {
+            BILLIARDS: ("elo_rating", "total_wins", "total_losses", "rank_id", "billiards_featured_badge"),
+            PING_PONG: ("ping_pong_elo", "ping_pong_wins", "ping_pong_losses", "ping_pong_rank_id", "ping_pong_featured_badge"),
+        }
+        moved = set()
+        for game, columns in sources.items():
+            if not set(columns[:3]) <= present or game not in legacy:
+                continue
+            picked = ", ".join(c if c in present else "NULL" for c in columns)
+            rows = db.session.execute(
+                text(f"SELECT user_id, {picked} FROM {Player.__tablename__}")
+            ).all()
+            for user_id, elo, wins, losses, rank_id, badge in rows:
+                db.session.add(
+                    Standing(
+                        user_id=user_id,
+                        league_id=legacy[game].league_id,
+                        elo=elo or 0,
+                        wins=wins or 0,
+                        losses=losses or 0,
+                        rank_id=rank_id,
+                        featured_badge=badge,
+                    )
+                )
+                moved.add(user_id)
+        return len(moved)
+
+    def place_tables():
+        homeless = list(db.session.scalars(db.select(PoolTable).where(PoolTable.league_id.is_(None))))
+        for table in homeless:
+            league = League.of(table.league_type or BILLIARDS)
+            if league is not None:
+                table.league_id = league.league_id
+                table.league_type = league.game
+        return f"placed {len(homeless)} table(s) in a league" if homeless else None
+
+    def place_queue_rows():
+        rows = list(db.session.scalars(db.select(QueueEntry).where(QueueEntry.league_id.is_(None))))
+        for entry in rows:
+            entry.league_id = db.session.scalar(
+                db.select(PoolTable.league_id).where(PoolTable.table_id == entry.table_id)
+            ) or League.of(BILLIARDS).league_id
+            # Called to that table, or only waiting: before there were
+            # leagues the row's table meant the line it was in.
+            if entry.called_at is None:
+                entry.table_id = None
+        return f"put {len(rows)} queue entr{'y' if len(rows) == 1 else 'ies'} in their league's line" if rows else None
+
+    def place_badges():
+        rows = list(
+            db.session.scalars(db.select(PlayerAchievement).where(PlayerAchievement.league_id.is_(None)))
+        )
+        for row in rows:
+            league = League.of(row.league_type or BILLIARDS)
+            if league is not None:
+                row.league_id = league.league_id
+        return f"put {len(rows)} badge(s) in their league" if rows else None
+
+    def drop_old_badge_index():
+        table = PlayerAchievement.__tablename__
+        names = {index["name"] for index in inspect(db.session.connection()).get_indexes(table)}
+        if "uq_achievement" not in names:
+            return None
+        if db.engine.dialect.name == "mysql":
+            db.session.execute(text(f"ALTER TABLE {table} DROP INDEX uq_achievement"))
+        else:
+            db.session.execute(text("DROP INDEX uq_achievement"))
+        return "dropped the old one-badge-per-game index"
 
     def convert_legacy_matches():
         # A row written by the new code always has a king, so "no king but
@@ -402,17 +531,17 @@ def ensure_schema():
         return None
 
     def dedupe_queue():
-        # Keep each player's earliest entry per table; the rest are what a
+        # Keep each player's earliest entry per league; the rest are what a
         # unique index would have prevented.
         rows = db.session.execute(
-            db.select(QueueEntry.queue_id, QueueEntry.user_id, QueueEntry.table_id)
+            db.select(QueueEntry.queue_id, QueueEntry.user_id, QueueEntry.league_id)
             .order_by(QueueEntry.queue_id)
         ).all()
         seen, duplicates = set(), []
-        for queue_id, user_id, table_id in rows:
-            if (user_id, table_id) in seen:
+        for queue_id, user_id, league_id in rows:
+            if (user_id, league_id) in seen:
                 duplicates.append(queue_id)
-            seen.add((user_id, table_id))
+            seen.add((user_id, league_id))
         if not duplicates:
             return None
         db.session.execute(db.delete(QueueEntry).where(QueueEntry.queue_id.in_(duplicates)))
@@ -429,30 +558,29 @@ def ensure_schema():
         return f"added index(es) {', '.join(added)}" if added else None
 
     def raise_ratings_to_floor():
-        raised = []
         floor_rank = Rank.for_elo(ELO_FLOOR)
-        for league in LEAGUE_TYPES:
-            fields = Player.LEAGUE_FIELDS[league]
-            elo = getattr(Player, fields["elo"])
-            below = list(db.session.scalars(db.select(Player).where(elo < ELO_FLOOR)))
-            for player in below:
-                raised.append(f"{player.username} ({LEAGUE_NAMES[league]}, {getattr(player, fields['elo'])})")
-                setattr(player, fields["elo"], ELO_FLOOR)
-                setattr(player, fields["rank_id"], floor_rank.rank_id if floor_rank else None)
-        return f"raised {len(raised)} rating(s) to {ELO_FLOOR}: {', '.join(raised)}" if raised else None
+        below = list(db.session.scalars(db.select(Standing).where(Standing.elo < ELO_FLOOR)))
+        for standing in below:
+            standing.elo = ELO_FLOOR
+            standing.rank_id = floor_rank.rank_id if floor_rank else None
+        return f"raised {len(below)} rating(s) to {ELO_FLOOR}" if below else None
 
     # Tables and columns first: every later step reads models that map them.
     step("Missing tables", create_missing_tables)
     step("New columns", add_columns)
-    step("Ping pong rank key", add_ping_pong_rank_key)
+    step("Queue tables optional", queue_table_optional)
     # Before anything that looks a rank up by rating.
     step("Rank tiers", seed_ranks)
     step("Table 1", add_table_one)
     step("Ping pong table", add_ping_pong_table)
-    step("Ping pong ranks", seed_ping_pong_ranks)
+    step("Leagues", add_leagues)
+    step("Tables' leagues", place_tables)
+    step("Queue entries' leagues", place_queue_rows)
+    step("Badges' leagues", place_badges)
     step("Old match rows", convert_legacy_matches)
     step("Duplicate queue entries", dedupe_queue)
     step("Indexes", add_indexes)
+    step("Old badge index", drop_old_badge_index)
     step("Ratings below the floor", raise_ratings_to_floor)
 
 

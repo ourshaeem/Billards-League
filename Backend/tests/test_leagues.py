@@ -25,11 +25,12 @@ from logic.tables import default_table_for, league_for_table
 
 class TableLeagueTests(BaseTestCase):
     def test_each_table_knows_its_league(self):
-        self.assertEqual(league_for_table(1), BILLIARDS)
-        self.assertEqual(league_for_table(PING_PONG_TABLE_ID), PING_PONG)
+        self.assertEqual(league_for_table(1).league_id, self.billiards_league_id)
+        self.assertEqual(league_for_table(PING_PONG_TABLE_ID).league_id, self.ping_pong_league_id)
+        self.assertEqual(league_for_table(PING_PONG_TABLE_ID).game, PING_PONG)
 
-    def test_an_unregistered_table_counts_as_billiards(self):
-        self.assertEqual(league_for_table(99), BILLIARDS)
+    def test_an_unregistered_table_counts_as_ccny_billiards(self):
+        self.assertEqual(league_for_table(99).league_id, self.billiards_league_id)
 
     def test_each_league_has_a_default_table(self):
         self.assertEqual(default_table_for(BILLIARDS), 1)
@@ -44,7 +45,7 @@ class LeagueRouting(ApiTestCase):
         leagues = {entry["league_type"]: entry for entry in res.get_json()["leagues"]}
         self.assertEqual(leagues[BILLIARDS]["table_id"], 1)
         self.assertEqual(leagues[PING_PONG]["table_id"], PING_PONG_TABLE_ID)
-        self.assertEqual(leagues[PING_PONG]["name"], "Ping Pong League")
+        self.assertEqual(leagues[PING_PONG]["name"], "CCNY Ping Pong")
 
     def test_joining_by_league_uses_that_leagues_table(self):
         self.login_as(self.alice)
@@ -52,8 +53,8 @@ class LeagueRouting(ApiTestCase):
         res = self.post("/queue/join", json={"league_type": "ping_pong"})
 
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(self.queued_user_ids(PING_PONG_TABLE_ID), [self.alice])
-        self.assertEqual(self.queued_user_ids(1), [], "nobody joined the pool table")
+        self.assertEqual(self.queued_user_ids(PING_PONG), [self.alice])
+        self.assertEqual(self.queued_user_ids(BILLIARDS), [], "nobody joined the pool table")
 
     def test_two_ping_pong_players_are_matched_at_the_ping_pong_table(self):
         """The same king-of-the-hill matchmaking, on the other league's table."""
@@ -72,8 +73,8 @@ class LeagueRouting(ApiTestCase):
         res = self.post("/queue/join", json={"table_id": 1, "league_type": "ping_pong"})
 
         self.assertEqual(res.status_code, 400)
-        self.assertIn("Billiards League", res.get_json()["message"])
-        self.assertEqual(self.queued_user_ids(1), [])
+        self.assertIn("CCNY Billiards", res.get_json()["message"])
+        self.assertEqual(self.queued_user_ids(BILLIARDS), [])
 
     def test_an_unknown_league_is_refused(self):
         self.login_as(self.alice)
@@ -85,7 +86,7 @@ class LeagueRouting(ApiTestCase):
         self.login_as(self.alice)
         res = self.post("/queue/join", json={"league_type": "  Ping_Pong "})
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(self.queued_user_ids(PING_PONG_TABLE_ID), [self.alice])
+        self.assertEqual(self.queued_user_ids(PING_PONG), [self.alice])
 
     def test_a_league_with_no_table_says_so(self):
         db.session.delete(db.session.get(PoolTable, PING_PONG_TABLE_ID))
@@ -106,7 +107,7 @@ class LeagueRouting(ApiTestCase):
 
         self.assertEqual(ping_pong["status"], "queued")
         self.assertEqual(ping_pong["league_type"], PING_PONG)
-        self.assertEqual(billiards, {"status": "idle"})
+        self.assertEqual(billiards["status"], "idle")
 
     def test_status_names_the_league_of_the_game_wherever_you_look(self):
         """Mid-game in ping pong, looking at billiards: still told it's ping pong."""
@@ -122,12 +123,12 @@ class LeagueRouting(ApiTestCase):
     def test_leaving_by_league(self):
         self.login_as(self.alice)
         self.post("/queue/join", json={"league_type": "ping_pong"})
-        self.backdate_queue_join(self.alice, 60, table_id=PING_PONG_TABLE_ID)
+        self.backdate_queue_join(self.alice, 60, league=PING_PONG)
 
         res = self.post("/queue/leave", json={"league_type": "ping_pong"})
 
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(self.queued_user_ids(PING_PONG_TABLE_ID), [])
+        self.assertEqual(self.queued_user_ids(PING_PONG), [])
 
 
 class PingPongRecording(ApiTestCase):
@@ -135,10 +136,6 @@ class PingPongRecording(ApiTestCase):
         super().setUp()
         self.match = self.start_match(self.alice, self.bob, table_id=PING_PONG_TABLE_ID)
         self.login_as(self.bob)
-
-    def player(self, user_id):
-        db.session.expire_all()
-        return db.session.get(Player, user_id)
 
     def report(self, mine, theirs, **extra):
         return self.post("/match/record", json={"my_balls": mine, "opp_balls": theirs, **extra})
@@ -148,20 +145,26 @@ class PingPongRecording(ApiTestCase):
 
         self.assertEqual(res.status_code, 200)
         change = res.get_json()["elo_change"]
-        bob, alice = self.player(self.bob), self.player(self.alice)
-        self.assertEqual(bob.ping_pong_elo, 1200 + change)
-        self.assertEqual(alice.ping_pong_elo, 1200 - change)
-        self.assertEqual((bob.ping_pong_wins, alice.ping_pong_losses), (1, 1))
-        self.assertEqual((bob.elo_rating, alice.elo_rating), (1200, 1200))
-        self.assertEqual((bob.total_wins, alice.total_losses), (0, 0))
+        self.assertEqual(self.rating(self.bob, PING_PONG), 1200 + change)
+        self.assertEqual(self.rating(self.alice, PING_PONG), 1200 - change)
+        self.assertEqual((self.record(self.bob, PING_PONG), self.record(self.alice, PING_PONG)), ((1, 0), (0, 1)))
+        self.assertEqual((self.rating(self.bob), self.rating(self.alice)), (1200, 1200))
+        self.assertEqual((self.record(self.bob), self.record(self.alice)), ((0, 0), (0, 0)))
 
     def test_without_league_type_the_games_own_league_decides(self):
         """Old clients don't send league_type; a ping pong game is still ping pong."""
         res = self.report(11, 5)
 
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(self.player(self.bob).ping_pong_wins, 1)
-        self.assertEqual(self.player(self.bob).total_wins, 0)
+        self.assertEqual(self.record(self.bob, PING_PONG), (1, 0))
+        self.assertEqual(self.record(self.bob), (0, 0))
+
+    def test_a_league_id_that_isnt_the_games_records_nothing(self):
+        res = self.report(11, 5, league_id=self.billiards_league_id)
+
+        self.assertEqual(res.status_code, 409)
+        self.assertEqual(res.get_json()["league_id"], self.ping_pong_league_id)
+        self.assertTrue(self.active_match(PING_PONG_TABLE_ID).is_in_progress)
 
     def test_a_billiards_score_is_refused_for_a_ping_pong_game(self):
         res = self.report(8, 3)
@@ -175,12 +178,12 @@ class PingPongRecording(ApiTestCase):
 
         self.assertEqual(res.status_code, 409)
         self.assertEqual(res.get_json()["league_type"], PING_PONG)
-        self.assertIn("Ping Pong League", res.get_json()["message"])
+        self.assertIn("CCNY Ping Pong", res.get_json()["message"])
         self.assertTrue(self.active_match(PING_PONG_TABLE_ID).is_in_progress)
 
     def test_a_deuce_game_is_accepted(self):
         self.assertEqual(self.report(10, 12).status_code, 200)
-        self.assertEqual(self.player(self.alice).ping_pong_wins, 1)
+        self.assertEqual(self.record(self.alice, PING_PONG), (1, 0))
 
     def test_the_winner_holds_the_ping_pong_table(self):
         self.report(11, 4)
@@ -191,20 +194,20 @@ class PingPongRecording(ApiTestCase):
         self.assertIsNone(self.active_match(1), "the pool table is untouched")
 
     def test_the_ping_pong_rank_follows_the_ping_pong_rating(self):
-        bob = self.player(self.bob)
-        bob.ping_pong_elo = 1290
-        db.session.commit()
+        self.set_rating(self.bob, 1290, PING_PONG)
+        billiards_rank = self.standing(self.bob).rank_id
 
         self.report(11, 0)
 
-        bob = self.player(self.bob)
-        self.assertEqual(bob.ping_pong_rank.rank_name, "Gold", "1290 + at least 10 crosses 1300")
-        self.assertIsNone(bob.rank_id, "the billiards rank isn't recalculated")
+        self.assertEqual(
+            self.standing(self.bob, PING_PONG).rank.rank_name, "Gold", "1290 + at least 10 crosses 1300"
+        )
+        self.assertEqual(self.standing(self.bob).rank_id, billiards_rank, "the billiards rank isn't touched")
 
     def test_ratings_stay_zero_sum(self):
-        before = self.player(self.alice).ping_pong_elo + self.player(self.bob).ping_pong_elo
+        before = self.rating(self.alice, PING_PONG) + self.rating(self.bob, PING_PONG)
         self.report(11, 3)
-        after = self.player(self.alice).ping_pong_elo + self.player(self.bob).ping_pong_elo
+        after = self.rating(self.alice, PING_PONG) + self.rating(self.bob, PING_PONG)
         self.assertEqual(before, after)
 
 
@@ -222,9 +225,8 @@ class BilliardsStillBilliards(ApiTestCase):
         match = self.start_match(self.alice, self.bob)
         record_match_result(match, self.alice, self.bob, 16, 8, 2)
 
-        alice = db.session.get(Player, self.alice)
-        self.assertEqual(alice.elo_rating, 1216)
-        self.assertEqual((alice.ping_pong_elo, alice.ping_pong_wins), (1200, 0))
+        self.assertEqual(self.rating(self.alice), 1216)
+        self.assertEqual((self.rating(self.alice, PING_PONG), self.record(self.alice, PING_PONG)), (1200, (0, 0)))
 
 
 class PingPongScoreRules(unittest.TestCase):
@@ -257,11 +259,9 @@ class PingPongScoreRules(unittest.TestCase):
 
 class PingPongEloTests(BaseTestCase):
     def player(self, user_id, rating=1000, games=0):
-        player = db.session.get(Player, user_id)
-        player.ping_pong_elo = rating
-        player.ping_pong_wins = games
-        db.session.commit()
-        return player
+        """The player's ping pong Standing, at this rating after this many games."""
+        self.set_rating(user_id, rating, PING_PONG, wins=games, losses=0)
+        return self.standing(user_id, PING_PONG)
 
     def test_k_factor_tiers(self):
         self.assertEqual(ping_pong_k_factor(self.player(self.alice, games=0)), PING_PONG_K_PROVISIONAL)
@@ -313,9 +313,8 @@ class PingPongEloTests(BaseTestCase):
 
 class LeaderboardByLeague(ApiTestCase):
     def test_each_league_has_its_own_ladder(self):
-        db.session.get(Player, self.carol).ping_pong_elo = 1500
-        db.session.get(Player, self.alice).elo_rating = 1500
-        db.session.commit()
+        self.set_rating(self.carol, 1500, PING_PONG)
+        self.set_rating(self.alice, 1500)
 
         ping_pong = self.client.get("/leaderboard?league_type=ping_pong").get_json()
         billiards = self.client.get("/leaderboard?league_type=billiards").get_json()
@@ -330,8 +329,7 @@ class LeaderboardByLeague(ApiTestCase):
         )
 
     def test_no_league_means_billiards(self):
-        db.session.get(Player, self.alice).elo_rating = 1500
-        db.session.commit()
+        self.set_rating(self.alice, 1500)
         self.assertEqual(self.client.get("/leaderboard").get_json()[0]["username"], "alice")
 
     def test_an_unknown_league_is_refused(self):
@@ -351,8 +349,7 @@ class TableSnapshotRoute(ApiTestCase):
         self.assertEqual(table["league_type"], BILLIARDS)
 
     def test_a_game_in_progress_shows_both_players_with_their_league_numbers(self):
-        db.session.get(Player, self.alice).ping_pong_elo = 1350
-        db.session.commit()
+        self.set_rating(self.alice, 1350, PING_PONG)
         self.start_match(self.alice, self.bob, table_id=PING_PONG_TABLE_ID)
 
         table = self.snapshot(PING_PONG_TABLE_ID)
@@ -365,7 +362,7 @@ class TableSnapshotRoute(ApiTestCase):
             set(table["king"].keys()),
             {
                 "user_id", "username", "country_flag", "profile_picture",
-                "league_type", "elo", "rank_name", "wins", "losses",
+                "league_type", "league_id", "elo", "rank_name", "wins", "losses",
             },
         )
 

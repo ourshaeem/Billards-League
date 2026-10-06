@@ -11,7 +11,6 @@ import { ArrowLeft, ImageUp, Trash2 } from 'lucide-react';
 import { emailProblem } from '../accountRules.js';
 import { PRIVACY_POLICY_URL } from '../api.js';
 import { flagEmoji } from '../flags.js';
-import { LEAGUE_ORDER, LEAGUES } from '../leagues.js';
 import { PhotoProblem, squarePhoto } from '../photo.js';
 import { THEME_CHOICES } from '../theme.js';
 import { useOpenPlayer } from '../openPlayer.js';
@@ -215,23 +214,27 @@ export function ProfileSettings({
               </tr>
             </thead>
             <tbody>
-              {LEAGUE_ORDER.map((key) => {
-                const standing = profile.leagues?.[key];
-                return (
-                  <tr key={key}>
-                    <th scope="row" className="standing-league">
-                      {LEAGUES[key].name}
-                    </th>
-                    <td>{standing?.rank_name ?? 'Unranked'}</td>
-                    <td className="elo">{standing?.elo ?? 0}</td>
-                    <td className="record">
-                      <span className="record-win">{standing?.wins ?? 0}</span>
-                      <span className="muted"> &ndash; </span>
-                      <span className="record-loss">{standing?.losses ?? 0}</span>
-                    </td>
-                  </tr>
-                );
-              })}
+              {(profile.standings || []).length === 0 && (
+                <tr>
+                  <td colSpan={4} className="muted">
+                    Not in any league yet - choose one and enter its PIN to play.
+                  </td>
+                </tr>
+              )}
+              {(profile.standings || []).map((standing) => (
+                <tr key={standing.league_id}>
+                  <th scope="row" className="standing-league">
+                    {standing.name}
+                  </th>
+                  <td>{standing.rank_name ?? 'Unranked'}</td>
+                  <td className="elo">{standing.elo ?? 0}</td>
+                  <td className="record">
+                    <span className="record-win">{standing.wins ?? 0}</span>
+                    <span className="muted"> &ndash; </span>
+                    <span className="record-loss">{standing.losses ?? 0}</span>
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>

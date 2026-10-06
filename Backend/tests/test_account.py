@@ -123,8 +123,8 @@ class DeleteAccount(ApiTestCase):
 
     def test_a_king_hands_the_table_to_the_next_two_in_line(self):
         self.make_king(self.alice)
-        db.session.add(QueueEntry(user_id=self.bob, table_id=1, queue_position=1))
-        db.session.add(QueueEntry(user_id=self.carol, table_id=1, queue_position=2))
+        db.session.add(QueueEntry(user_id=self.bob, league_id=self.billiards_league_id, queue_position=1))
+        db.session.add(QueueEntry(user_id=self.carol, league_id=self.billiards_league_id, queue_position=2))
         db.session.commit()
 
         self.assertEqual(self.delete().status_code, 200)
@@ -194,17 +194,17 @@ class OrganiserDeletesPlayers(ApiTestCase):
         from logic.record_match import record_match_result
 
         record_match_result(self.start_match(self.alice, self.bob), self.alice, self.bob, 16)
-        alice_points = self.player(self.alice).elo_rating
+        alice_points = self.rating(self.alice)
 
         self.run_command("bob")
 
-        self.assertEqual(self.player(self.alice).elo_rating, alice_points)
+        self.assertEqual(self.rating(self.alice), alice_points)
         history = self.client.get("/matches/history").get_json()["matches"]
         self.assertEqual(history[0]["loser"]["username"], "Deleted player")
 
     def test_a_held_table_is_given_up_and_queues_left(self):
         self.make_king(self.bob)
-        db.session.add(QueueEntry(user_id=self.dave, table_id=10, queue_position=1))
+        db.session.add(QueueEntry(user_id=self.dave, league_id=self.ping_pong_league_id, queue_position=1))
         db.session.commit()
 
         result = self.run_command("bob", "dave")

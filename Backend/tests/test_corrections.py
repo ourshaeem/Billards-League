@@ -18,15 +18,12 @@ from logic.record_match import report_result
 
 class VoidTestCase(BaseTestCase):
     def numbers(self, user_id, league=PING_PONG):
-        db.session.expire_all()
-        player = db.session.get(Player, user_id)
-        fields = Player.LEAGUE_FIELDS[league]
-        rank = getattr(player, fields["rank"])
+        standing = self.standing(user_id, league)
         return (
-            getattr(player, fields["elo"]),
-            getattr(player, fields["wins"]),
-            getattr(player, fields["losses"]),
-            rank.rank_name if rank else None,
+            standing.elo,
+            standing.wins,
+            standing.losses,
+            standing.rank.rank_name if standing.rank else None,
         )
 
     def ping_pong_game(self, winner, loser, points=(11, 3)):
@@ -60,12 +57,10 @@ class VoidingAGame(VoidTestCase):
 
     def test_the_rank_follows_the_rating_back(self):
         """bob starts at Silver (1100+); the game drops him to Bronze, the void restores it."""
-        bob = db.session.get(Player, self.bob)
-        bob.ping_pong_elo = 1110
-        db.session.commit()
+        self.set_rating(self.bob, 1110, PING_PONG)
         from logic.record_match import update_player_rank
 
-        update_player_rank(db.session.get(Player, self.bob), PING_PONG)
+        update_player_rank(self.standing(self.bob, PING_PONG))
         db.session.commit()
         game = self.ping_pong_game(self.alice, self.bob)
         self.assertEqual(self.numbers(self.bob)[3], "Bronze")
@@ -100,9 +95,7 @@ class VoidingAGame(VoidTestCase):
     def test_a_record_never_goes_below_zero(self):
         """After a league reset, an older game's win is already gone."""
         game = self.ping_pong_game(self.alice, self.bob)
-        alice = db.session.get(Player, self.alice)
-        alice.ping_pong_wins = 0
-        db.session.commit()
+        self.set_rating(self.alice, self.rating(self.alice, PING_PONG), PING_PONG, wins=0)
 
         void_finished_match(game)
 

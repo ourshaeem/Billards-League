@@ -13,16 +13,20 @@ import { RemoveButton, RemoveConfirm } from './AdminControls.jsx';
 import { NameBadge } from './Badges.jsx';
 import { PlayerChip, PlayerLink } from './Player.jsx';
 
-/** Where someone whose turn has come stands: asked, or confirmed. */
-function TurnTag({ entry }) {
+/**
+ * Where someone whose turn has come stands: asked, or confirmed - and,
+ * in a league with more than one table, at which.
+ */
+function TurnTag({ entry, showTable }) {
   if (!entry.called) return null;
+  const where = showTable && entry.table_name ? ` - ${entry.table_name}` : '';
   return entry.confirmed ? (
     <span className="queue-tag" data-tag="here">
-      here
+      here{where}
     </span>
   ) : (
     <span className="queue-tag" data-tag="up">
-      up - confirming
+      up{where || ' - confirming'}
     </span>
   );
 }
@@ -31,7 +35,14 @@ function TurnTag({ entry }) {
  * onRemove is given for the organiser only: each waiting player then has
  * a Remove button, which asks first.
  */
-export function QueueCard({ queue, loaded, currentUsername, onRemove = null, busy = false }) {
+export function QueueCard({
+  queue,
+  loaded,
+  currentUsername,
+  onRemove = null,
+  busy = false,
+  manyTables = false,
+}) {
   // user_id of the player the organiser is asking to remove.
   const [asking, setAsking] = useState(null);
 
@@ -73,7 +84,7 @@ export function QueueCard({ queue, loaded, currentUsername, onRemove = null, bus
                   {isYou && <span className="tag-you">you</span>}
                 </span>
                 {player.called ? (
-                  <TurnTag entry={player} />
+                  <TurnTag entry={player} showTable={manyTables} />
                 ) : (
                   index === 0 && <span className="up-next">up next</span>
                 )}
@@ -126,7 +137,8 @@ function asCard(row, league) {
     username: row.username,
     country_flag: row.country_flag,
     profile_picture: row.profile_picture,
-    league_type: league,
+    league_type: league.game,
+    league_id: league.league_id,
     elo: row.elo_rating,
     rank_name: row.rank_name,
     wins: row.total_wins,

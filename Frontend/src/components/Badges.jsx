@@ -163,10 +163,11 @@ export function BadgesCard({ userId, league, version = 0, title = 'Your badges',
   const [data, setData] = useState(null);
   const [problem, setProblem] = useState(null);
   const [filter, setFilter] = useState('all');
+  const leagueId = league?.league_id;
 
   useEffect(() => {
     const controller = new AbortController();
-    api.getPlayerBadges(userId, league, controller.signal).then((res) => {
+    api.getPlayerBadges(userId, leagueId, controller.signal).then((res) => {
       if (controller.signal.aborted || res.aborted) return;
       if (res.ok && res.data) {
         setData(res.data);
@@ -176,7 +177,7 @@ export function BadgesCard({ userId, league, version = 0, title = 'Your badges',
       }
     });
     return () => controller.abort();
-  }, [userId, league, version]);
+  }, [userId, leagueId, version]);
 
   const head = (
     <div className="card-head">

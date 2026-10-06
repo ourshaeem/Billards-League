@@ -29,7 +29,7 @@ function emptyFor(key) {
 }
 
 export function HistoryScreen() {
-  const { league } = useLeague();
+  const { leagueId } = useLeague();
   const { user } = useSession();
   const { gamesVersion } = useLive();
   const focused = useIsFocused();
@@ -39,7 +39,7 @@ export function HistoryScreen() {
 
   // Games belong to one player in one league; switching either drops
   // the old list at once rather than showing it under the new name.
-  const key = `${user?.user_id}:${league}`;
+  const key = `${user?.user_id}:${leagueId}`;
   const [data, setData] = useState(() => emptyFor(key));
   if (data.key !== key) setData(emptyFor(key));
 
@@ -47,8 +47,8 @@ export function HistoryScreen() {
   const load = useCallback(
     async (signal) => {
       const [allRes, mineRes] = await Promise.all([
-        api.getMatchHistory(league, { limit: HISTORY_LIMIT }, signal),
-        userId ? api.getPlayerMatches(userId, league, { limit: HISTORY_LIMIT }, signal) : null,
+        api.getMatchHistory(leagueId, { limit: HISTORY_LIMIT }, signal),
+        userId ? api.getPlayerMatches(userId, leagueId, { limit: HISTORY_LIMIT }, signal) : null,
       ]);
       if (signal?.aborted || allRes.aborted) return;
       setData((current) => {
@@ -69,10 +69,10 @@ export function HistoryScreen() {
     },
     // gamesVersion isn't read inside, but a new value means a game just
     // ended: fetch again now rather than at the next tick.
-    [key, league, userId, gamesVersion],
+    [key, leagueId, userId, gamesVersion],
   );
 
-  usePolling(load, SLOW_POLL_INTERVAL_MS, focused && active && Boolean(league));
+  usePolling(load, SLOW_POLL_INTERVAL_MS, focused && active && Boolean(leagueId));
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -116,7 +116,7 @@ export function HistoryScreen() {
             <GameRow
               key={match.match_id}
               match={match}
-              league={league}
+              league={leagueId}
               currentUserId={user?.user_id}
               last={index === matches.length - 1}
             />

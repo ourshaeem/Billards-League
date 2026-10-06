@@ -36,14 +36,14 @@ class ResetLeague(BaseTestCase):
 
         self.assertEqual(count, 3)
         for user_id in (self.alice, self.bob, self.carol):
-            p = self.player(user_id)
-            self.assertEqual((p.ping_pong_elo, p.ping_pong_wins, p.ping_pong_losses), (0, 0, 0))
-            self.assertEqual(p.ping_pong_rank.rank_name, "Bronze", "the rank a rating of 0 earns")
+            st = self.standing(user_id, PING_PONG)
+            self.assertEqual((st.elo, st.wins, st.losses), (0, 0, 0))
+            self.assertEqual(st.rank.rank_name, "Bronze", "the rank a rating of 0 earns")
 
     def test_the_other_league_is_untouched(self):
-        before = (self.player(self.carol).elo_rating, self.player(self.carol).total_wins)
+        before = (self.rating(self.carol), self.record(self.carol)[0])
         reset_league_standings(PING_PONG)
-        after = (self.player(self.carol).elo_rating, self.player(self.carol).total_wins)
+        after = (self.rating(self.carol), self.record(self.carol)[0])
         self.assertEqual(before, after)
         self.assertEqual(after[1], 1)
 
@@ -88,10 +88,9 @@ class ResetLeagueCommand(BaseTestCase):
         self.assertEqual(len(files), 1)
         with open(os.path.join(self.backups, files[0])) as f:
             saved = json.load(f)
-        self.assertEqual(saved["league"], "ping_pong")
+        self.assertEqual(saved["league"], "ccny-ping-pong")
         self.assertIn(1220, [p["elo"] for p in saved["players"]])
-        db.session.expire_all()
-        self.assertEqual(db.session.get(Player, self.alice).ping_pong_elo, 0)
+        self.assertEqual(self.rating(self.alice, PING_PONG), 0)
 
     def test_answering_no_changes_nothing(self):
         result = self.runner.invoke(
@@ -100,8 +99,7 @@ class ResetLeagueCommand(BaseTestCase):
 
         self.assertNotEqual(result.exit_code, 0)
         self.assertEqual(os.listdir(self.backups), [])
-        db.session.expire_all()
-        self.assertEqual(db.session.get(Player, self.alice).ping_pong_elo, 1220)
+        self.assertEqual(self.rating(self.alice, PING_PONG), 1220)
 
     def test_only_real_leagues(self):
         result = self.runner.invoke(args=["reset-league", "chess", "--yes", "--backup-dir", self.backups])

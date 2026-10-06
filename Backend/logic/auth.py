@@ -17,7 +17,7 @@ import re
 
 import bcrypt
 
-from models import STARTING_ELO, Player, Rank, db
+from models import Player, db
 
 log = logging.getLogger(__name__)
 
@@ -133,8 +133,8 @@ def register_user(username, first_name, last_name, password_text, email=None):
         if email_in_use(email):
             return False, EMAIL_TAKEN, "email"
 
-        starting_rank = Rank.for_elo(STARTING_ELO)
-
+        # No leagues yet: a player gets a place in one (a Standing, where
+        # everyone starts) on entering its PIN - see logic/leagues.py.
         db.session.add(
             Player(
                 username=username,
@@ -142,11 +142,6 @@ def register_user(username, first_name, last_name, password_text, email=None):
                 last_name=last_name,
                 email=email,
                 password_hash=hash_password(password_text),
-                # Everyone starts level in both leagues.
-                billiards_elo=STARTING_ELO,
-                billiards_rank_id=starting_rank.rank_id if starting_rank else None,
-                ping_pong_elo=STARTING_ELO,
-                ping_pong_rank_id=starting_rank.rank_id if starting_rank else None,
             )
         )
         db.session.commit()

@@ -1,14 +1,16 @@
 /**
- * The two leagues, as the screens need to know them: names, how a score
- * is written, and the quick-pick buttons on the scorecard.
+ * The two games a league can play, as the screens need to know them: how
+ * a score is written, and the quick-pick buttons on the scorecard.
+ *
+ * The leagues themselves - CCNY Billiards, John Jay Ping Pong and the
+ * rest, their names, colours and tables - are NOT here: they come from
+ * GET /leagues/directory, because they're the league's data, not the
+ * app's. Each league plays one of these games (league.game).
  *
  * Score checks here mirror the server's (score_problem in
  * Backend/logic/record_match.py) so a typo is caught before the round
  * trip. They're a courtesy - the server judges every score against the
  * game's real league regardless of what this file says.
- *
- * Which table each league plays on is NOT here: that comes from
- * GET /leagues, because it's the venue's data, not the app's.
  *
  * Copied from Frontend/src/leagues.js - a rule changed in one must be
  * changed in the other.
@@ -24,7 +26,7 @@ const PING_PONG_MAX_POINTS = 99;
 export const LEAGUES = {
   [BILLIARDS]: {
     key: BILLIARDS,
-    name: 'Billiards League',
+    name: 'Billiards',
     sport: 'billiards',
     blurb: 'Eight-ball, king of the table. Win and you stay on.',
     scoreUnit: 'balls',
@@ -43,7 +45,7 @@ export const LEAGUES = {
   },
   [PING_PONG]: {
     key: PING_PONG,
-    name: 'Ping Pong League',
+    name: 'Ping Pong',
     sport: 'ping pong',
     blurb: 'One game to 11, win by two. Win and you stay on.',
     scoreUnit: 'points',
@@ -75,11 +77,25 @@ export const LEAGUES = {
   },
 };
 
-/** The league's details, falling back to billiards for anything unknown. */
-export function leagueInfo(key) {
-  return LEAGUES[key] || LEAGUES[BILLIARDS];
+/** A game's details - pass league.game - falling back to billiards for anything unknown. */
+export function gameInfo(game) {
+  return LEAGUES[game] || LEAGUES[BILLIARDS];
 }
 
-export function isLeague(key) {
-  return Object.prototype.hasOwnProperty.call(LEAGUES, key);
+export function isGame(game) {
+  return Object.prototype.hasOwnProperty.call(LEAGUES, game);
+}
+
+/** Leagues grouped by school, in the order the server lists them: [{school, leagues}]. */
+export function bySchool(leagues) {
+  const groups = [];
+  (leagues || []).forEach((league) => {
+    let group = groups.find((g) => g.school === league.school);
+    if (!group) {
+      group = { school: league.school, leagues: [] };
+      groups.push(group);
+    }
+    group.leagues.push(league);
+  });
+  return groups;
 }

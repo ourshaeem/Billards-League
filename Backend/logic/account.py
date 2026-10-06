@@ -31,7 +31,7 @@ from logic.auth import password_matches
 from logic.manage_queue import STEP_DOWN_RESULT_IN_GAME, leave_all_queues, step_down
 from logic.password_reset import forget_reset_code
 from logic.pictures import forget_uploaded_picture
-from models import Player, db
+from models import LeagueAccess, PinAttempt, Player, db
 
 log = logging.getLogger(__name__)
 
@@ -107,6 +107,10 @@ def _wipe(user_id):
         # The photo itself, if they uploaded one - not just the link to it.
         forget_uploaded_picture(user_id)
         forget_reset_code(user_id)
+        # So do the leagues they'd unlocked. Their standings stay, as their
+        # games do; ladders leave deleted accounts out.
+        db.session.execute(db.delete(LeagueAccess).where(LeagueAccess.user_id == user_id))
+        db.session.execute(db.delete(PinAttempt).where(PinAttempt.user_id == user_id))
         player.deleted_at = func.now()
         db.session.commit()
     except Exception:

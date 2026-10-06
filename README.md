@@ -1,16 +1,18 @@
 # Billiards & Ping Pong League
 
-Queue up for the pool table or the ping pong table, report your score,
-and track each league's ladder.
+Queue up for a pool table or a ping pong table, report your score, and
+track your league's ladder - at CCNY, John Jay and Brooklyn College, a
+billiards league and a ping pong league at each.
 
-After signing in, players pick a league for the session. Both leagues run
-the same king-of-the-hill queue: winner stays on, next in line plays
-them. When it's your turn you have a minute to say you're here, or the
-next person is up; and a game both players agree to call off is cancelled
-with nothing recorded. Each league has its own ratings, ranks, ladder,
-match history and colours (billiards: purple, white, gray; ping pong:
-white, purple, gray), each in light and dark. Tap any player to see their
-profile, their games and their record against you.
+After signing in, players pick a league for the session. Anyone can look
+at any league; playing in one takes its 4-digit PIN, entered once. Every
+league runs the same king-of-the-hill queue - winner stays on, next in
+line plays them - with one line for all of its tables. When it's your
+turn you have a minute to say you're here, or the next person is up; and
+a game both players agree to call off is cancelled with nothing
+recorded. Each league has its own ratings, ranks, ladder, match history
+and colours - the school's, each in light and dark. Tap any player to
+see their profile, their games and their record against you.
 
 Stack: **MySQL + Python/Flask + React (Vite)**. Kept deliberately plain so
 the app can be ported to React Native later.
@@ -34,7 +36,8 @@ There is no SQL to run by hand. On startup `ensure_schema()` (in
 `Backend/database.py`) builds an empty database or brings an existing one
 up to date, and `check_schema()` then reports anything still missing in
 plain words. `ensure_schema()` only ever adds - no column or table is
-dropped - and it is safe to run on every start. It:
+dropped (the one thing it removes is an index the leagues replaced) -
+and it is safe to run on every start. It:
 
 - creates any table the models map that doesn't exist yet (on a brand-new
   database, all of them), and fills an empty `Ranks` table with the
@@ -48,6 +51,14 @@ dropped - and it is safe to run on every start. It:
 - adds a "Ping Pong Table" if no table belongs to the ping pong league,
 - gives players who have never played ping pong the starting ping pong
   rank, as registration now does,
+- adds the six leagues the first time (while `Leagues` is empty): CCNY
+  Billiards and Ping Pong (lavender and black) take over the existing
+  tables, games, ratings and badges, and every existing player is let into
+  both without a PIN; John Jay (navy and blue) and Brooklyn College
+  (maroon and gold) start with a table each and no PIN. Each player's old
+  ratings are copied into `Standings`, one row per player per league -
+  the old columns on `Players` stay, untouched and unused,
+- puts any table, queue entry or badge with no league into its league,
 - converts match rows written by the original code, which kept the two
   seats in `winner_id`/`loser_id`, into `king_id`/`challenger_id`,
 - removes duplicate queue entries, then adds the indexes the models
@@ -159,8 +170,12 @@ league alone. Everyone's old numbers are saved to `Backend/backups/`
 
 ```bash
 DATABASE_URL="<the live DATABASE_URL, with ssl_ca pointing at a downloaded RDS bundle>" \
-  flask --app app reset-league ping_pong      # or billiards
+  flask --app app reset-league ccny-ping-pong
 ```
+
+Leagues are named by slug: `ccny-billiards`, `ccny-ping-pong`,
+`john-jay-billiards`, `john-jay-ping-pong`, `brooklyn-billiards`,
+`brooklyn-ping-pong` (`billiards` and `ping_pong` still mean CCNY's).
 
 It prints which database and how many players before asking to confirm.
 
@@ -210,7 +225,7 @@ reported then, against the ratings the game before it left. Nobody's
 place at the table changes. From `Backend/`, against the live database:
 
 ```bash
-DATABASE_URL="<the live DATABASE_URL>" flask --app app add-games ping_pong \
+DATABASE_URL="<the live DATABASE_URL>" flask --app app add-games ccny-ping-pong \
   --game Giant Mel 11-8 \
   --game Mel "Tom Holland" 11-1
 ```
@@ -238,11 +253,28 @@ The server checks on every request, so the buttons appear the next time
 the app loads that player's profile (reopening the phone app, or
 changing screen on the web).
 
+### PINs and tables
+
+Each league's PIN and tables are the organiser's, changed from inside
+either app: **Manage league** at the top of the website, or **Manage
+...** under the queue on the phone's Play tab - shown only to an admin.
+
+- **The PIN** is 4 digits, kept hashed. A player enters it once and is
+  remembered. A league with no PIN can be looked at but not played in,
+  except by an admin - so new players can't join CCNY until it has one.
+  Changing a PIN means everyone has to enter the new one (players
+  already in a game or in line keep their place, and are asked for it).
+  Five wrong tries in 15 minutes and that player has to wait.
+- **Tables** can be added, renamed and removed at any time. The league's
+  one queue fills them: whoever is next goes to the first table that
+  needs a player. A table with someone at it can't be removed; a removed
+  table's games stay in the history.
+
 ### Deleting duplicate or joke accounts
 
 Deletes accounts exactly as if each player had deleted their own: their
 details are wiped, they leave every queue, a table they hold is given
-up, and they drop off both ladders. Games they played stay in everyone
+up, and they drop off every ladder. Games they played stay in everyone
 else's history as "Deleted player", and nobody's points change - to
 undo one of those games as well, use `void-game`. From `Backend/`,
 against the live database (as for a reset), naming each account by its
@@ -468,9 +500,9 @@ Backend/
                             truth) with its one-minute ready check, player
                             status, giving up the table
     record_match.py         reporting results, score rules and ELO for
-                            both leagues, king handoff
+                            both games, king handoff
     cancel_match.py         calling a game off when both players agree
-    tables.py               which league a table is in, and who's at it
+    tables.py               a league's tables, and who's at each
     match_history.py        finished games, per league, per player and
                             head to head; records against each opponent
     profile.py              reading profiles, changing flag and picture
@@ -482,6 +514,8 @@ Backend/
     password_reset.py       forgot your password: an emailed code
     mailer.py               sending email through Brevo's HTTPS API
     leaderboard.py          top 50, per league
+    leagues.py              who may play where: PINs, access, standings;
+                            the organiser's table changes
   tests/                    ORM tests against in-memory SQLite
 
 Frontend/
@@ -489,23 +523,27 @@ Frontend/
   src/
     api.js                  ALL backend calls (the React Native port starts here)
     App.jsx                 session, league choice, polling, actions
-    leagues.js              league names, score rules, quick-score buttons
+    leagues.js              the two games: score rules, quick-score buttons
+    leagueColors.js         a league's two colours -> every colour token,
+                            with contrast worked out (shared with Mobile/)
     flags.js                country code -> flag emoji
     theme.js                light / dark choice, remembered on the device
     photo.js                cropping and shrinking a photo before upload
     openPlayer.js           how any name opens that player's profile
-    index.css               design tokens (both league themes, light and
-                            dark) and styles
+    index.css               design tokens (overridden per league by
+                            leagueColors.js, light and dark) and styles
     components/
       StatusPanel.jsx       the five player states: join, I'm here, leave,
-                            report or cancel a game, give up the table
-      LeagueSelect.jsx      choosing billiards or ping pong after sign-in
-      ActiveTable.jsx       who is at the table right now
+                            report or cancel a game, give up the table -
+                            or the PIN, where the player has none
+      LeagueSelect.jsx      choosing a league after sign-in, by school
+      LeagueSettings.jsx    the organiser's: a league's PIN and tables
+      ActiveTable.jsx       who is at each table right now
       MatchHistory.jsx      recent games, everyone's or yours
       PlayerProfile.jsx     another player: standings, record against
                             everyone and against you, their games
       ProfileSettings.jsx   flag, photo or picture link, light / dark,
-                            standing in both leagues
+                            standing in each league
       Player.jsx            avatar, name + flag, hover card (rank, rating)
       Panels.jsx            queue list, ladder
       AuthScreens.jsx       sign in, register
@@ -517,15 +555,17 @@ Mobile/                     the Expo / React Native app
     api.js                  ALL backend calls - the twin of Frontend/src/api.js
     config.js               server address (live Render by default), polling pace
     storage.js              session and light / dark choice in SecureStore
-    theme.js                design tokens, both league themes, light and dark
+    theme.js                design tokens; a league's theme from its colours
+    leagueColors.js         copied from Frontend/src - keep in step
     photo.js                picking, cropping and shrinking a photo
     leagues.js, flags.js    copied from Frontend/src - keep in step
-    state/                  appearance, session, league, live queue/table
+    state/                  appearance, session, leagues, live queue/tables
                             data and actions, toasts
     navigation/             sign-in stack -> league picker -> tabs, player
                             profiles over the tabs
     screens/                sign in, register, league picker, Play, Games,
-                            Ladder, Profile, a player's profile
+                            Ladder, Profile, a player's profile, league
+                            settings (the organiser's)
     components/             status panel, turn banner, table and queue
                             cards, game rows, player chip, flag picker,
                             buttons and fields
@@ -534,23 +574,33 @@ AGENTS.md                   the six roles and the contracts between them
 render.yaml                 Render Blueprint: deploys Backend/ as a Docker service
 ```
 
-## How the two leagues work
+## How the leagues work
 
-A league is a property of a table (`Pool_Tables.league_type`). Queues
-and matches were already keyed on `table_id`, so matchmaking - still
-exactly one implementation, `attempt_matchmaking()` - serves both
-leagues without knowing either exists. A match's league is its table's.
+A league is a row in `Leagues`: a school, a game (`billiards` or
+`ping_pong`), two colours, a PIN hash, and an order. Its tables are the
+`Pool_Tables` rows with its `league_id` and `is_active` set. A match
+belongs to its table's league.
 
-- **Billiards** ratings are the original `elo_rating` / `rank_id`
-  columns. The model also calls them `billiards_elo` /
-  `billiards_rank_id`; those are aliases, not second copies.
-- **Ping pong** has its own `ping_pong_elo`, `ping_pong_rank_id`,
-  `ping_pong_wins`, `ping_pong_losses`. Both leagues share the `Ranks`
-  tiers.
+- **One queue per league.** `Queue` rows carry `league_id`; a queued
+  player's `table_id` is empty until their turn comes, when it says which
+  table they're called to. Matchmaking - still exactly one
+  implementation, `attempt_matchmaking()` - serves a whole league at
+  once: a player already called keeps their table; then kings waiting
+  for a challenger; then free tables, two players at a time.
+- **Ratings** live in `Standings`, one row per player per league (elo,
+  wins, losses, rank, featured badge). A player gets one when they first
+  enter a league's PIN. All leagues share the `Ranks` tiers.
+- **Access.** `League_Access` says who has entered which league's PIN.
+  Joining, saying "I'm here" and reporting a score are refused (403,
+  `read_only`) without it; everything else is open to look at. Admins
+  play anywhere.
+- **Older apps** still work at CCNY: they send `league_type`
+  (`billiards` / `ping_pong`) or a `table_id`, which the server reads as
+  CCNY's league of that game, or the table's league.
 - **Scores** are judged by the rules of the game's own league, whatever
   league the request claims: billiards 0-8, no tie; ping pong one game to
-  11, won by two (11-9, 12-10). A report sent with the wrong
-  `league_type` is refused (409) and nothing is saved.
+  11, won by two (11-9, 12-10). A report sent for the wrong league is
+  refused (409) and nothing is saved.
 - **Nobody goes below 0 points.** A loss that would take a player under
   0 stops at 0; the winner still gains the full amount. The game
   remembers what the loser really lost (`loser_elo_change`), which the
@@ -560,6 +610,10 @@ leagues without knowing either exists. A match's league is its table's.
   rating of 1200 - averaged between the two players so the ladder stays
   zero-sum. A lopsided game moves up to 50% more than a close one (11-0
   vs 11-9 or a deuce game). Billiards keeps its flat K of 32.
+- **Colours.** Each app turns a league's two colours into its whole
+  colour scheme (`leagueColors.js`): the status panel in the first, with
+  the second along its top and on its main button, and text darkened or
+  lightened until it reads at 4.5:1 or better.
 
 ## Taking turns, and calling a game off
 
@@ -581,6 +635,6 @@ leagues without knowing either exists. A match's league is its table's.
 
 ## Next steps
 
-`AGENTS.md` lists candidates. With two leagues on two tables, **more
-tables per league** is mostly a frontend job now: the backend already
-accepts any `table_id`, and the UI uses each league's first table.
+`AGENTS.md` lists candidates: an admin view to void a game from the app
+(by hand for now: `void-game`), and seasons that keep each one's final
+ladder.

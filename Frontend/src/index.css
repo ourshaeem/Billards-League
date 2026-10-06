@@ -10,19 +10,20 @@
    the only question anyone opens this for: can I play right now?
    Everything else stays white and calm beneath it.
 
-   Two themes, one per league, chosen by <html data-league="...">:
-     Billiards (the default): purple, white, gray. The status panel is a
-       solid block of deep purple.
-     Ping pong: white, purple, gray. The status panel turns white - a
-       ball on a bright table - with purple doing the accent work.
-   The ping pong theme only redefines tokens; no component knows which
-   league it is drawn in.
+   Every league dresses the page in its own two colours (the league's
+   primary_color and secondary_color, from the server). src/leagueColors.js
+   turns them into the colour tokens below - the status panel in the
+   primary with the secondary along its top, the primary marking what you
+   can act on - checking contrast as it goes, and src/theme.js sets them
+   on <html>, where they override the defaults here. With no league
+   (signed out, choosing one) the defaults below are the app's own purple.
+   No component knows which league it is drawn in.
 
    Each also comes dark, chosen by <html data-theme="dark"> (see
-   src/theme.js). Dark keeps the same roles on a near-black page: the
-   billiards panel stays its deep purple, and the ping pong panel - white
-   by day - becomes charcoal under its purple band. Again only tokens
-   change.
+   src/theme.js): the same roles on a near-black page, with a light
+   league colour deepened so its panel isn't a floodlight at night.
+   <html data-league> is the league's game, for the few touches that
+   belong to the game rather than the league (the ping pong ball).
 
    Colours are defined once, here. Components use the role tokens
    (--text, --accent, --panel-text...) rather than raw values.
@@ -84,13 +85,6 @@
 
   /* The page's backdrop glow */
   --page-glow: var(--accent-soft);
-
-  /* Each league's preview on the league picker. Billiards is the same in
-     both themes; ping pong is white by day. */
-  --preview-pp-bg: linear-gradient(165deg, var(--white) 0%, var(--white) 55%, var(--purple-50) 100%);
-  --preview-pp-text: var(--purple-950);
-  --preview-pp-border: var(--purple-200);
-  --preview-pp-shadow: 0 16px 36px rgba(46, 16, 101, 0.1);
 
   /* Roles on the status panel - billiards: white on deep purple */
   --panel-bg: linear-gradient(155deg, var(--purple-600) 0%, var(--purple-800) 60%, var(--purple-900) 100%);
@@ -160,34 +154,6 @@
   color-scheme: light;
 }
 
-/* --- Ping pong theme: white, purple, gray ---
-   Only the tokens change. White leads (the panel is white), purple is
-   the accent that marks what you can act on, gray does the rest. */
-:root[data-league='ping_pong'] {
-  --page-glow: var(--gray-100);
-
-  --panel-bg: linear-gradient(165deg, var(--white) 0%, var(--white) 55%, var(--purple-50) 100%);
-  --panel-bg-playing: linear-gradient(165deg, var(--white) 0%, var(--purple-50) 55%, var(--purple-100) 100%);
-  --panel-border: var(--purple-200);
-  --panel-edge: linear-gradient(90deg, var(--purple-600), var(--purple-300));
-  --panel-edge-size: 4px;
-  --panel-shadow: 0 18px 40px rgba(46, 16, 101, 0.12);
-  --panel-text: var(--purple-950);
-  --panel-dim: var(--gray-700);
-  --panel-faint: var(--gray-500);
-  --panel-line: var(--gray-300);
-  --panel-fill: var(--purple-50);
-  --panel-fill-hover: var(--purple-100);
-  --panel-fill-strong: var(--purple-200);
-  --panel-icon: var(--purple-500);
-  --panel-focus: var(--purple-500);
-  --panel-cta-bg: var(--purple-600);
-  --panel-cta-text: var(--white);
-  --panel-cta-hover: var(--purple-700);
-  --panel-cta-shadow: 0 2px 8px rgba(109, 40, 217, 0.28);
-  --panel-error-edge: var(--danger);
-}
-
 /* --- Dark: the same roles on a near-black page ---
    A touch of purple in the blacks keeps it the league's own dark rather
    than a generic one. Text sits at 7:1 or better against its card;
@@ -222,11 +188,6 @@
 
   --page-glow: #261c40;
 
-  --preview-pp-bg: linear-gradient(165deg, #1e1b27 0%, #1e1b27 55%, #281e40 100%);
-  --preview-pp-text: #f4f2fa;
-  --preview-pp-border: #3d3060;
-  --preview-pp-shadow: 0 16px 36px rgba(0, 0, 0, 0.4);
-
   /* The billiards panel keeps its purple; only its shadow deepens. */
   --panel-shadow: 0 20px 44px rgba(0, 0, 0, 0.5);
 
@@ -252,33 +213,6 @@
   --avatar-ring: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
 
   color-scheme: dark;
-}
-
-/* Dark ping pong: the white panel turns charcoal under its purple band,
-   so it still reads as ping pong's - and isn't a floodlight at night. */
-:root[data-theme='dark'][data-league='ping_pong'] {
-  --page-glow: #1e1a28;
-
-  --panel-bg: linear-gradient(165deg, #1e1b27 0%, #1e1b27 55%, #261d3c 100%);
-  --panel-bg-playing: linear-gradient(165deg, #1e1b27 0%, #261d3c 55%, #301f55 100%);
-  --panel-border: #3d3060;
-  --panel-edge: linear-gradient(90deg, var(--purple-500), var(--purple-300));
-  --panel-edge-size: 4px;
-  --panel-shadow: 0 18px 40px rgba(0, 0, 0, 0.45);
-  --panel-text: #f4f2fa;
-  --panel-dim: #c9c6d7;
-  --panel-faint: #9f9bb0;
-  --panel-line: #3f394c;
-  --panel-fill: #272231;
-  --panel-fill-hover: #30293f;
-  --panel-fill-strong: #3b3151;
-  --panel-icon: #a78bfa;
-  --panel-focus: #a78bfa;
-  --panel-cta-bg: var(--purple-500);
-  --panel-cta-text: var(--white);
-  --panel-cta-hover: var(--purple-600);
-  --panel-cta-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
-  --panel-error-edge: var(--danger);
 }
 
 *,
@@ -365,14 +299,14 @@ p {
   gap: 12px;
 }
 
-/* The 4-ball: solid purple with its white number spot. */
+/* The 4-ball: solid in the league's colour, with its white number spot. */
 .wordmark-dot {
   position: relative;
   width: 0.66em;
   height: 0.66em;
   border-radius: 50%;
-  background: radial-gradient(circle at 32% 28%, #a98bfa 0%, var(--purple-600) 42%, var(--purple-900) 100%);
-  box-shadow: 0 2px 6px rgba(46, 16, 101, 0.35);
+  background: radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.5) 0%, var(--accent) 42%, var(--accent-strong) 100%), var(--accent);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
   flex: none;
 }
 
@@ -385,10 +319,10 @@ p {
   opacity: 0.92;
 }
 
-/* In ping pong it's the ball: white, shaded gray, ringed in purple. */
+/* In ping pong it's the ball: white, shaded gray, ringed in the league's colour. */
 :root[data-league='ping_pong'] .wordmark-dot {
   background: radial-gradient(circle at 32% 28%, var(--white) 0%, var(--gray-100) 50%, var(--gray-300) 100%);
-  box-shadow: 0 0 0 2px var(--purple-500), 0 2px 6px rgba(46, 16, 101, 0.2);
+  box-shadow: 0 0 0 2px var(--accent), 0 2px 6px rgba(0, 0, 0, 0.2);
 }
 
 :root[data-league='ping_pong'] .wordmark-dot::after {
@@ -2012,15 +1946,33 @@ select[aria-invalid='true'] {
   margin-bottom: 8px;
 }
 
+.league-school {
+  margin-bottom: 32px;
+}
+
+.league-school-name {
+  font-size: var(--step--1);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+
 .league-options {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr));
   gap: 20px;
 }
 
-/* Each option wears its own league's colours, as a preview. */
+/* Each option wears its own league's colours, as a preview: the same
+   tokens its status panel gets (leagueColors.js), set inline as --opt-*. */
 .league-option {
   position: relative;
+  color: var(--opt-text);
+  background: var(--opt-bg);
+  border: 1px solid var(--opt-border, transparent);
+  box-shadow: var(--opt-shadow);
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -2049,26 +2001,13 @@ select[aria-invalid='true'] {
   outline-offset: 3px;
 }
 
-.league-option[data-league-option='billiards'] {
-  color: var(--white);
-  background: linear-gradient(155deg, var(--purple-600) 0%, var(--purple-800) 60%, var(--purple-900) 100%);
-  border: 1px solid transparent;
-  box-shadow: 0 16px 36px rgba(46, 16, 101, 0.24);
-}
-
-.league-option[data-league-option='ping_pong'] {
-  color: var(--preview-pp-text);
-  background: var(--preview-pp-bg);
-  border: 1px solid var(--preview-pp-border);
-  box-shadow: var(--preview-pp-shadow);
-}
-
-.league-option[data-league-option='ping_pong']::before {
+/* The secondary colour along the top, as on the league's status panel. */
+.league-option::before {
   content: '';
   position: absolute;
   inset: 0 0 auto 0;
   height: 4px;
-  background: linear-gradient(90deg, var(--purple-600), var(--purple-300));
+  background: var(--opt-edge);
 }
 
 .league-ball {
@@ -2080,7 +2019,7 @@ select[aria-invalid='true'] {
 }
 
 .league-ball[data-ball='billiards'] {
-  background: radial-gradient(circle at 32% 28%, #a98bfa 0%, var(--purple-600) 42%, var(--purple-950) 100%);
+  background: radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.55) 0%, var(--opt-ball) 42%, rgba(0, 0, 0, 0.55) 100%), var(--opt-ball);
   box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.35);
 }
 
@@ -2094,7 +2033,7 @@ select[aria-invalid='true'] {
 
 .league-ball[data-ball='ping_pong'] {
   background: radial-gradient(circle at 32% 28%, var(--white) 0%, var(--gray-100) 50%, var(--gray-300) 100%);
-  box-shadow: 0 0 0 2px var(--purple-500), 0 3px 8px rgba(46, 16, 101, 0.18);
+  box-shadow: 0 0 0 2px var(--opt-ball), 0 3px 8px rgba(0, 0, 0, 0.18);
 }
 
 .league-option-name {
@@ -2133,6 +2072,13 @@ select[aria-invalid='true'] {
   padding: 2px 10px;
   border-radius: 999px;
   border: 1px solid currentColor;
+}
+
+.league-option-lock {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 600;
 }
 
 /* --- Profile --- */
@@ -2640,4 +2586,171 @@ select[aria-invalid='true'] {
   font-weight: 600;
   overflow-wrap: anywhere;
   margin-bottom: 4px;
+}
+
+/* --- Leagues: where a game is, and the PIN to play --- */
+
+/* "At Table 2", under a headline, in a league with more than one table. */
+.status-where {
+  margin: -4px 0 12px;
+  font-size: var(--step--1);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--panel-dim);
+}
+
+.pin-prompt .status-sub {
+  margin-bottom: 18px;
+}
+
+.pin-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: stretch;
+}
+
+.pin-input {
+  width: 9.5rem !important;
+  text-align: center;
+  font-size: var(--step-2) !important;
+  letter-spacing: 0.45em;
+  padding: 10px 14px !important;
+  font-variant-numeric: tabular-nums;
+}
+
+.pin-error {
+  margin-top: 10px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  border-left: 3px solid var(--panel-error-edge);
+  background: var(--panel-fill);
+  color: var(--panel-text);
+  font-size: var(--step--1);
+}
+
+/* Above a game or a place in line, after the PIN changed: a quieter box. */
+.pin-prompt-compact {
+  margin-bottom: 22px;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  background: var(--panel-fill);
+  border: 1px solid var(--panel-line);
+}
+
+.pin-prompt-compact .status-sub {
+  margin-bottom: 12px;
+  font-size: var(--step--1);
+}
+
+.pin-prompt-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+  font-weight: 700;
+}
+
+.pin-prompt-compact .headline-icon {
+  margin-right: 0;
+}
+
+/* One block per table on the tables card. */
+.table-block + .table-block {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line-soft);
+}
+
+.table-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.table-block-name {
+  font-size: var(--step-0);
+  font-weight: 700;
+  color: var(--heading);
+}
+
+.table-block-state {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.table-block-state[data-state='playing'] {
+  color: var(--accent-text);
+}
+
+/* --- The organiser's league settings --- */
+
+.settings-title {
+  font-family: var(--font-display);
+  font-size: clamp(1.8rem, 5vw, var(--step-3));
+  font-weight: 400;
+  color: var(--heading);
+  margin: 6px 0 18px;
+}
+
+.settings-note {
+  margin-bottom: 16px;
+  max-width: 60ch;
+}
+
+.settings-form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
+  gap: 0 16px;
+  align-items: start;
+}
+
+.settings-form .btn {
+  grid-column: 1 / -1;
+  justify-self: start;
+}
+
+.settings-tables {
+  list-style: none;
+  margin: 0 0 18px;
+  padding: 0;
+}
+
+.settings-table {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.settings-table-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.settings-table-form input {
+  flex: 1 1 180px;
+  width: auto;
+}
+
+.settings-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 12px;
+  align-items: end;
+}
+
+.settings-add .field {
+  flex: 1 1 220px;
+  margin-bottom: 0;
+}
+
+.settings-add .btn {
+  margin-bottom: 2px;
 }

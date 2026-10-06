@@ -2,21 +2,23 @@
  * The design system, as React Native style values - the same colours and
  * roles as :root in Frontend/src/index.css.
  *
- * Purple and white, with gray as the quiet secondary. Purple marks what
- * you can act on; white carries the screen; gray does the supporting
- * work. Red and amber are for things going wrong, and nothing else.
+ * Out of a league (signing in, choosing one) the app is its own purple and
+ * white, with gray as the quiet secondary. Inside one, it wears that
+ * league's colours - CCNY's lavender and black, John Jay's navy and blue,
+ * Brooklyn's maroon and gold - built from the league's primary_color and
+ * secondary_color by leagueColors.js, the same file the web app uses:
+ *   - the status panel is the primary colour, with the secondary as the
+ *     band along its top and its main button;
+ *   - on the screen, the primary marks what you can act on.
+ * Contrast is worked out there, not assumed. Red and amber are for things
+ * going wrong, and nothing else, in every league.
  *
- * Two themes, one per league:
- *   Billiards (the default): purple, white, gray. The status panel is a
- *     solid block of deep purple.
- *   Ping pong: white, purple, gray. The status panel turns white with a
- *     purple band - a ball on a bright table.
- * Each also comes dark (Profile > Appearance, or the phone's own setting):
- * the same roles on a near-black screen. The billiards panel keeps its
- * purple; the ping pong panel turns charcoal under its purple band.
- * A theme only swaps token values; no component asks which league or
- * scheme it's drawn in. Components get the current theme from useTheme().
+ * Each comes dark too (Profile > Appearance, or the phone's own setting):
+ * the same roles on a near-black screen. A theme only swaps token values;
+ * no component asks which league or scheme it's drawn in. Components get
+ * the current theme from useTheme().
  */
+import { alpha, leagueColors, mix } from './leagueColors';
 
 export const palette = {
   purple950: '#1e0b3d',
@@ -168,7 +170,8 @@ const sharedDark = {
   shadowRaised: '0px 1px 3px rgba(0, 0, 0, 0.5)',
 };
 
-// The 4-ball and the purple status panel, the same by day and night.
+// The app's own look, outside any league: the purple 4-ball and a purple
+// status panel, the same by day and night.
 const billiardsTable = {
   // The 4-ball: solid purple with a white spot.
   ballFill: p.purple600,
@@ -208,75 +211,74 @@ const billiards = {
   panelShadow: '0px 16px 36px rgba(46, 16, 101, 0.26)',
 };
 
-const pingPong = {
-  ...shared,
-  pageGlow: p.gray50,
-
-  // The ping pong ball: white, ringed in purple.
-  ballFill: p.white,
-  ballRing: p.purple500,
-  ballSpot: null,
-
-  panelBg: p.white,
-  panelBgPlaying: p.purple50,
-  panelBorder: p.purple200,
-  panelEdge: p.purple600,
-  panelEdgeSize: 4,
-  panelShadow: '0px 16px 36px rgba(46, 16, 101, 0.1)',
-  panelText: p.purple950,
-  panelDim: p.gray700,
-  panelFaint: p.gray500,
-  panelLine: p.gray300,
-  panelFill: p.purple50,
-  panelFillStrong: p.purple100,
-  panelIcon: p.purple500,
-  panelCtaBg: p.purple600,
-  panelCtaText: p.white,
-  panelCtaPressed: p.purple700,
-  panelErrorEdge: p.danger,
-  panelInputBorder: p.gray300,
-};
-
-// Ping pong at night: the white panel becomes charcoal under its purple
-// band, so it still reads as ping pong's - and isn't a floodlight.
-const pingPongDark = {
-  ...sharedDark,
-  pageGlow: '#1e1a28',
-
-  ballFill: p.white,
-  ballRing: p.purple500,
-  ballSpot: null,
-
-  panelBg: '#1e1b27',
-  panelBgPlaying: '#261d3c',
-  panelBorder: '#3d3060',
-  panelEdge: p.purple500,
-  panelEdgeSize: 4,
-  panelShadow: '0px 16px 36px rgba(0, 0, 0, 0.45)',
-  panelText: '#f4f2fa',
-  panelDim: '#c9c6d7',
-  panelFaint: '#9f9bb0',
-  panelLine: '#3f394c',
-  panelFill: '#272231',
-  panelFillStrong: '#30293f',
-  panelIcon: '#a78bfa',
-  panelCtaBg: p.purple500,
-  panelCtaText: p.white,
-  panelCtaPressed: p.purple600,
-  panelErrorEdge: '#f97066',
-  panelInputBorder: '#3f394c',
-};
-
-const THEMES = {
-  light: { billiards, ping_pong: pingPong },
-  dark: { billiards: billiardsDark, ping_pong: pingPongDark },
-};
+const APP_THEMES = { light: billiards, dark: billiardsDark };
 
 /**
- * The theme for a league, by day ("light") or night ("dark"); billiards
- * for anything else (including no league yet).
+ * One league's theme: the shared roles for the scheme, with the accent and
+ * the status panel in the league's colours. The ball by its name is the
+ * game's - a 4-ball in billiards, a ringed white ball in ping pong.
+ */
+function buildLeagueTheme(league, scheme) {
+  const dark = scheme === 'dark';
+  const c = leagueColors(league.primary_color, league.secondary_color, scheme);
+  const pingPong = league.game === 'ping_pong';
+  const panel = c['panel-solid'];
+  const text = c['panel-text'];
+
+  return {
+    ...(dark ? sharedDark : shared),
+    pageGlow: c['page-glow'],
+
+    textStrong: c.heading,
+    accent: c.accent,
+    accentPressed: c['accent-hover'],
+    accentText: c['accent-text'],
+    accentStrong: c['accent-strong'],
+    accentSoft: c['accent-soft'],
+    accentWash: c['accent-wash'],
+    onAccent: c['on-accent'],
+    inputFocus: c.focus,
+
+    ballFill: pingPong ? p.white : c.accent,
+    ballRing: pingPong ? c.accent : 'transparent',
+    ballSpot: pingPong ? null : p.white,
+
+    panelBg: panel,
+    panelBgPlaying: c['panel-solid-playing'],
+    panelBorder: dark ? c['panel-border'] : panel,
+    panelEdge: c['panel-band'],
+    panelEdgeSize: 4,
+    panelShadow: dark
+      ? '0px 16px 36px rgba(0, 0, 0, 0.5)'
+      : `0px 16px 36px ${alpha(mix(panel, '#000000', 0.5), 0.26)}`,
+    panelText: text,
+    panelDim: c['panel-dim'],
+    panelFaint: c['panel-faint'],
+    panelLine: c['panel-line'],
+    panelFill: c['panel-fill'],
+    panelFillStrong: c['panel-fill-strong'],
+    panelIcon: c['panel-icon'],
+    panelCtaBg: c['panel-cta-bg'],
+    panelCtaText: c['panel-cta-text'],
+    panelCtaPressed: c['panel-cta-hover'],
+    panelErrorEdge: c['panel-error-edge'],
+    panelInputBorder: alpha(text, 0.4),
+  };
+}
+
+// Built once per league, colours and scheme, so screens that ask for the
+// theme on every render get the same object back.
+const built = new Map();
+
+/**
+ * The theme for a league (an entry from GET /leagues/directory), by day
+ * ("light") or night ("dark"). With no league - signed out, choosing one -
+ * the app's own purple.
  */
 export function themeFor(league, scheme = 'light') {
-  const themes = THEMES[scheme] || THEMES.light;
-  return themes[league] || themes.billiards;
+  const mode = scheme === 'dark' ? 'dark' : 'light';
+  if (!league?.primary_color) return APP_THEMES[mode];
+  const key = [league.primary_color, league.secondary_color, league.game, mode].join('|');
+  if (!built.has(key)) built.set(key, buildLeagueTheme(league, mode));
+  return built.get(key);
 }

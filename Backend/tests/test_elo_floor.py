@@ -15,14 +15,6 @@ from logic.record_match import record_match_result
 
 
 class FloorTestCase(ApiTestCase):
-    def rating(self, user_id, league=BILLIARDS):
-        db.session.expire_all()
-        return getattr(db.session.get(Player, user_id), Player.LEAGUE_FIELDS[league]["elo"])
-
-    def set_rating(self, user_id, rating, league=BILLIARDS):
-        setattr(db.session.get(Player, user_id), Player.LEAGUE_FIELDS[league]["elo"], rating)
-        db.session.commit()
-
     def play(self, winner, loser, change, table_id=1, league=BILLIARDS):
         match = self.start_match(winner, loser, table_id=table_id)
         record_match_result(match, winner, loser, change, 8, 2, league=league)
@@ -125,7 +117,7 @@ class RatingsAlreadyBelowZero(FloorTestCase):
         self.assertEqual(self.rating(self.carol), 0)
         self.assertEqual(self.rating(self.alice, PING_PONG), 12, "left alone")
         floor_rank = Rank.for_elo(0)
-        self.assertEqual(db.session.get(Player, self.bob).ping_pong_rank_id, floor_rank.rank_id)
+        self.assertEqual(self.standing(self.bob, PING_PONG).rank_id, floor_rank.rank_id)
 
     def test_running_it_again_changes_nothing(self):
         self.set_rating(self.bob, -1)

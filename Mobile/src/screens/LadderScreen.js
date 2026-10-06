@@ -21,7 +21,7 @@ import { pointsText } from '../format';
 import { fonts, type } from '../theme';
 
 export function LadderScreen() {
-  const { league, theme } = useLeague();
+  const { leagueId, theme } = useLeague();
   const { user } = useSession();
   const { gamesVersion } = useLive();
   const focused = useIsFocused();
@@ -29,25 +29,25 @@ export function LadderScreen() {
   const openPlayer = useOpenPlayer();
   const [refreshing, setRefreshing] = useState(false);
 
-  const [data, setData] = useState(() => ({ league, players: [], loaded: false, problem: null }));
-  if (data.league !== league) setData({ league, players: [], loaded: false, problem: null });
+  const [data, setData] = useState(() => ({ leagueId, players: [], loaded: false, problem: null }));
+  if (data.leagueId !== leagueId) setData({ leagueId, players: [], loaded: false, problem: null });
 
   const load = useCallback(
     async (signal) => {
-      const res = await api.getLeaderboard(league, signal);
+      const res = await api.getLeaderboard(leagueId, signal);
       if (signal?.aborted || res.aborted) return;
       setData((current) => {
-        if (current.league !== league) return current;
+        if (current.leagueId !== leagueId) return current;
         if (!res.ok) return current.loaded ? current : { ...current, problem: res.message };
-        return { league, players: Array.isArray(res.data) ? res.data : [], loaded: true, problem: null };
+        return { leagueId, players: Array.isArray(res.data) ? res.data : [], loaded: true, problem: null };
       });
     },
     // gamesVersion isn't read inside, but a new value means a game just
     // ended: fetch again now rather than at the next tick.
-    [league, gamesVersion],
+    [leagueId, gamesVersion],
   );
 
-  usePolling(load, SLOW_POLL_INTERVAL_MS, focused && active && Boolean(league));
+  usePolling(load, SLOW_POLL_INTERVAL_MS, focused && active && Boolean(leagueId));
 
   const onRefresh = async () => {
     setRefreshing(true);

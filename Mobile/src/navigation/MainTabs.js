@@ -3,10 +3,10 @@
  * page; on a phone each part gets a tab:
  *
  *   Play     your status (join, leave, report a score), who's at the
- *            table, and the queue - the web app's status panel and cards
+ *            tables, and the queue - the web app's status panel and cards
  *   Games    recent games, everyone's or yours
  *   Ladder   the league's leaderboard
- *   Profile  flag, picture, standing in both leagues, sign out
+ *   Profile  flag, picture, standing in each league, sign out
  *
  * The header carries the league's name and a Switch league button, as
  * the web masthead did.
@@ -42,13 +42,13 @@ const TAB_ICONS = {
 };
 
 export function MainTabs() {
-  const { theme, info } = useLeague();
+  const { theme, league } = useLeague();
   const insets = useSafeAreaInsets();
 
   return (
     <Tab.Navigator
       screenOptions={({ route, navigation }) => ({
-        headerTitle: () => <Wordmark title={info.name} />,
+        headerTitle: () => <Wordmark title={league?.name ?? ''} />,
         headerTitleAlign: 'left',
         headerStyle: { backgroundColor: theme.page },
         headerShadowVisible: false,

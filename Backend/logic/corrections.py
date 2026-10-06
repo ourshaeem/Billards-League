@@ -33,8 +33,9 @@ from logic.record_match import (
     score_problem,
     update_player_rank,
 )
-from logic.tables import default_table_for, league_for_table
-from models import LEAGUE_NAMES, STARTING_ELO, Match, Player, db
+from logic.leagues import ensure_standing
+from logic.tables import active_tables, league_for_table
+from models import STARTING_ELO, League, Match, Player, PoolTable, db
 
 
 log = logging.getLogger(__name__)
@@ -45,14 +46,13 @@ class GameProblem(ValueError):
 
 
 def _numbers(player, league):
-    fields = Player.LEAGUE_FIELDS[league]
-    elo = getattr(player, fields["elo"])
+    standing = player.standing(league)
     return {
         "user_id": player.user_id,
         "username": player.username,
-        "elo": STARTING_ELO if elo is None else elo,
-        "wins": getattr(player, fields["wins"]) or 0,
-        "losses": getattr(player, fields["losses"]) or 0,
+        "elo": STARTING_ELO if standing["elo"] is None else standing["elo"],
+        "wins": standing["wins"],
+        "losses": standing["losses"],
     }
 
 
@@ -72,8 +72,9 @@ def _finished_game(match_id, lock=False):
 def game_summary(match_id):
     """
     What voiding a game would undo, without changing anything:
-    {match_id, league_type, league_name, seconds_ago, elo_change, score,
-     winner: {user_id, username, elo, wins, losses}, loser: {...}}
+    {match_id, league_type, league_id, league_name, seconds_ago,
+     elo_change, score, winner: {user_id, username, elo, wins, losses},
+     loser: {...}}
     - the players' numbers as they are now. Raises GameProblem.
     """
     match = _finished_game(match_id)
@@ -83,8 +84,9 @@ def game_summary(match_id):
     )
     return {
         "match_id": match.match_id,
-        "league_type": league,
-        "league_name": LEAGUE_NAMES[league],
+        "league_type": league.game,
+        "league_id": league.league_id,
+        "league_name": league.name,
         "seconds_ago": None if seconds is None else max(0, int(seconds)),
         "elo_change": match.elo_change or 0,
         # Less than elo_change when the loser stopped at the floor.
@@ -111,22 +113,21 @@ def void_finished_match(match_id):
         table_id = _finished_game(match_id).table_id
         _lock_table(table_id)
         match = _finished_game(match_id, lock=True)
+        league = league_for_table(table_id)
         # Locked and re-read, so the numbers changed are the latest ones,
         # not a copy loaded before this request waited for the lock.
-        winner = db.session.get(Player, match.winner_id, with_for_update=True, populate_existing=True)
-        loser = db.session.get(Player, match.loser_id, with_for_update=True, populate_existing=True)
+        winner_standing = ensure_standing(match.winner_id, league, lock=True)
+        loser_standing = ensure_standing(match.loser_id, league, lock=True)
+        winner, loser = match.winner, match.loser
         before = game_summary(match_id)
-
-        league = before["league_type"]
-        fields = Player.LEAGUE_FIELDS[league]
         change = before["elo_change"]
 
-        setattr(winner, fields["elo"], lowered_rating(before["winner"]["elo"], change))
-        setattr(winner, fields["wins"], max(0, before["winner"]["wins"] - 1))
-        setattr(loser, fields["elo"], before["loser"]["elo"] + before["loser_elo_change"])
-        setattr(loser, fields["losses"], max(0, before["loser"]["losses"] - 1))
-        update_player_rank(winner, league)
-        update_player_rank(loser, league)
+        winner_standing.elo = lowered_rating(before["winner"]["elo"], change)
+        winner_standing.wins = max(0, before["winner"]["wins"] - 1)
+        loser_standing.elo = before["loser"]["elo"] + before["loser_elo_change"]
+        loser_standing.losses = max(0, before["loser"]["losses"] - 1)
+        update_player_rank(winner_standing)
+        update_player_rank(loser_standing)
 
         db.session.delete(match)
         db.session.commit()
@@ -175,6 +176,9 @@ def add_past_games(league, games):
     {match_id, winner, loser, score, elo_change, loser_elo_change,
      winner_elo, loser_elo} - the ratings being those after the game.
     """
+    league = League.of(league)
+    if league is None:
+        raise GameProblem("There's no such league.")
     if not games:
         raise GameProblem("No games to add.")
     for winner_id, loser_id, winner_score, loser_score in games:
@@ -184,26 +188,37 @@ def add_past_games(league, games):
         if problem:
             raise GameProblem(problem)
 
-    table_id = default_table_for(league)
-    if table_id is None:
-        raise GameProblem(f"The {LEAGUE_NAMES[league]} has no table to record games at.")
+    # A table in use, or failing that any table the league has had: the
+    # games only need to belong to the league.
+    tables = active_tables(league) or list(
+        db.session.scalars(
+            db.select(PoolTable)
+            .where(PoolTable.league_id == league.league_id)
+            .order_by(PoolTable.table_id)
+        )
+    )
+    if not tables:
+        raise GameProblem(f"{league.name} has no table to record games at.")
+    table_id = tables[0].table_id
 
     try:
         _lock_table(table_id)
         # Every player locked and read once, up front, in id order: each
         # game then changes the same in-memory rows the next one reads.
-        players = {}
+        players, standings = {}, {}
         for user_id in sorted({p for game in games for p in game[:2]}):
-            player = db.session.get(Player, user_id, with_for_update=True, populate_existing=True)
+            player = db.session.get(Player, user_id)
             if player is None or player.is_deleted:
                 raise GameProblem(f"There's no player #{user_id}.")
             players[user_id] = player
+            standings[user_id] = ensure_standing(user_id, league, lock=True)
 
-        fields = Player.LEAGUE_FIELDS[league]
         results = []
         for winner_id, loser_id, winner_score, loser_score in games:
             winner, loser = players[winner_id], players[loser_id]
-            elo_change = elo_change_for(league, winner, loser, winner_score, loser_score)
+            elo_change = elo_change_for(
+                league, standings[winner_id], standings[loser_id], winner_score, loser_score
+            )
             match = Match(
                 table_id=table_id,
                 player_one_id=winner_id,
@@ -216,7 +231,9 @@ def add_past_games(league, games):
                 match_status=Match.STATUS_FINISHED,
             )
             db.session.add(match)
-            loser_change = apply_result(match, winner, loser, elo_change, league)
+            loser_change = apply_result(
+                match, standings[winner_id], standings[loser_id], elo_change, league
+            )
             db.session.flush()
             results.append(
                 {
@@ -226,8 +243,8 @@ def add_past_games(league, games):
                     "score": [winner_score, loser_score],
                     "elo_change": elo_change,
                     "loser_elo_change": loser_change,
-                    "winner_elo": getattr(winner, fields["elo"]),
-                    "loser_elo": getattr(loser, fields["elo"]),
+                    "winner_elo": standings[winner_id].elo,
+                    "loser_elo": standings[loser_id].elo,
                 }
             )
         db.session.commit()

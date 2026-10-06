@@ -7,10 +7,9 @@ Each entry carries both players as cards - avatar, flag, and their
 current rank and rating in that league - so the feed and its hover cards
 need no further requests. See Match.to_history_dict for the shape.
 """
-from sqlalchemy.orm import selectinload
-
 from database import seconds_since
-from models import BILLIARDS, PING_PONG, Match, Player, PoolTable, db
+from logic.tables import in_league
+from models import League, Match, Player, PoolTable, db
 
 DEFAULT_LIMIT = 20
 MAX_LIMIT = 50
@@ -22,10 +21,9 @@ def _finished_in_league(league):
     paired with how many seconds ago it finished.
 
     The outer join counts a game on a table the venue never registered as
-    billiards - the same default league_for_table() uses.
+    CCNY's billiards - the same default league_for_table() uses.
     """
     seconds_ago = seconds_since(Match.played_at).label("seconds_ago")
-    table_league = db.func.coalesce(PoolTable.league_type, BILLIARDS)
 
     stmt = (
         db.select(Match, seconds_ago)
@@ -33,22 +31,16 @@ def _finished_in_league(league):
         .where(
             Match.match_status == Match.STATUS_FINISHED,
             Match.winner_id.isnot(None),
-            table_league == league,
+            in_league(league),
         )
         .order_by(Match.played_at.desc(), Match.match_id.desc())
     )
-    if league == PING_PONG:
-        # Each card shows a ping pong rank. Load every one needed in one
-        # query up front, rather than one per player as the cards are drawn.
-        stmt = stmt.options(
-            selectinload(Match.winner).selectinload(Player.ping_pong_rank),
-            selectinload(Match.loser).selectinload(Player.ping_pong_rank),
-        )
     return stmt
 
 
 def league_history(league, table_id=None, limit=DEFAULT_LIMIT):
     """The latest finished games in a league, optionally at one table."""
+    league = League.of(league)
     stmt = _finished_in_league(league)
     if table_id is not None:
         stmt = stmt.where(Match.table_id == table_id)
@@ -63,6 +55,7 @@ def player_history(user_id, league, limit=DEFAULT_LIMIT, opponent_id=None):
     "lost") from their side. With opponent_id, only the games between
     those two - head to head.
     """
+    league = League.of(league)
     stmt = _finished_in_league(league).where(
         db.or_(Match.winner_id == user_id, Match.loser_id == user_id)
     )
@@ -88,6 +81,7 @@ def player_opponents(user_id, league):
     against each: [{opponent: card, wins, losses}], most games first.
     wins and losses are from the player's side.
     """
+    league = League.of(league)
     won = db.case((Match.winner_id == user_id, 1), else_=0)
     games = (
         db.select(
@@ -102,7 +96,7 @@ def player_opponents(user_id, league):
             Match.match_status == Match.STATUS_FINISHED,
             Match.winner_id.isnot(None),
             Match.loser_id.isnot(None),
-            db.func.coalesce(PoolTable.league_type, BILLIARDS) == league,
+            in_league(league),
             db.or_(Match.winner_id == user_id, Match.loser_id == user_id),
         )
         .subquery()
@@ -117,8 +111,6 @@ def player_opponents(user_id, league):
     ).all()
 
     stmt = db.select(Player).where(Player.user_id.in_([row[0] for row in rows]))
-    if league == PING_PONG:
-        stmt = stmt.options(selectinload(Player.ping_pong_rank))
     players = {player.user_id: player for player in db.session.scalars(stmt)}
 
     return [

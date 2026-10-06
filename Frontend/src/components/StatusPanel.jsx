@@ -16,15 +16,20 @@
  * Until the first answer arrives, status is null and the panel says it's
  * checking - rather than guessing "idle" and offering that same button.
  *
- * `league` is the league on screen. A game or a held table is reported
- * with its own league_type, which can be the other league - one person
- * plays one game at a time, whichever screen they're looking at. The
- * scorecard always follows the game's league, never the screen's.
+ * `league` is the league on screen (from GET /leagues/directory). A game
+ * or a held table is reported with its own league_id, which can be
+ * another league - one person plays one game at a time, whichever screen
+ * they're looking at. The scorecard always follows the game's league (its
+ * game's rules), never the screen's.
+ *
+ * readOnly: the player hasn't entered this league's PIN. Instead of Join
+ * the panel asks for it; anything they're already in (a game from before
+ * the PIN changed, say) still shows, with the prompt above it.
  */
 import React, { useEffect, useState } from 'react';
-import { BellRing, Swords, Users, Clock, Crown, LoaderCircle } from 'lucide-react';
+import { BellRing, Swords, Users, Clock, Crown, LoaderCircle, Lock } from 'lucide-react';
 
-import { leagueInfo } from '../leagues.js';
+import { gameInfo } from '../leagues.js';
 import { Podium } from './Podium.jsx';
 
 // The states with room beside them for the players of the day, week and
@@ -72,7 +77,9 @@ export function StatusPanel({
   status,
   problem,
   league,
-  tableName,
+  leagues,
+  readOnly,
+  onUnlock,
   queueLength,
   topPlayers,
   onJoin,
@@ -86,14 +93,18 @@ export function StatusPanel({
   busy,
 }) {
   const state = status ? status.status || 'idle' : 'loading';
-  const elsewhere =
-    (state === 'playing' || state === 'waiting_for_challenger') &&
-    status.league_type &&
-    status.league_type !== league
-      ? status.league_type
-      : null;
+  // The league of the game or held table, which can be another one.
+  const gameLeague =
+    (state === 'playing' || state === 'waiting_for_challenger') && status.league_id
+      ? (leagues?.find((l) => l.league_id === status.league_id) ?? league)
+      : league;
+  const elsewhere = gameLeague.league_id !== league.league_id ? gameLeague : null;
+  // Without the PIN, idle becomes "enter the PIN"; anything else keeps its
+  // own panel, with the prompt above it.
+  const locked = readOnly && state !== 'loading';
+  const askOnly = locked && state === 'idle';
 
-  const showPodium = Boolean(topPlayers) && PODIUM_STATES.has(state);
+  const showPodium = Boolean(topPlayers) && PODIUM_STATES.has(state) && !(locked && !askOnly);
 
   return (
     <section
@@ -110,20 +121,36 @@ export function StatusPanel({
       )}
       {elsewhere && (
         <p className="status-problem status-elsewhere">
-          This is your game in the {leagueInfo(elsewhere).name}.{' '}
-          <button type="button" className="btn-link" onClick={() => onSwitchLeague(elsewhere)}>
+          This is your game in {elsewhere.name}.{' '}
+          <button
+            type="button"
+            className="btn-link"
+            onClick={() => onSwitchLeague(elsewhere.league_id)}
+          >
             Switch to that league
           </button>
         </p>
       )}
       <div className="status-layout" data-podium={showPodium ? 'true' : 'false'}>
         <div className="status-main">
+          {locked && !askOnly && (
+            <PinPrompt
+              league={league}
+              onUnlock={onUnlock}
+              busy={busy}
+              compact
+              // In this league already (a game, a place in line): the PIN
+              // must have changed since. A game elsewhere: they just haven't
+              // entered this league's yet.
+              changed={!elsewhere}
+            />
+          )}
           {state === 'loading' && <LoadingState />}
           {state === 'playing' && (
             <PlayingState
               key={status.match_id}
               status={status}
-              league={status.league_type || league}
+              league={gameLeague}
               onRecord={onRecord}
               onCancelGame={onCancelGame}
               onKeepPlaying={onKeepPlaying}
@@ -144,13 +171,106 @@ export function StatusPanel({
           {state === 'queued' && (
             <QueuedState status={status} onLeave={onLeave} busy={busy} queueLength={queueLength} />
           )}
-          {state === 'idle' && (
-            <IdleState onJoin={onJoin} busy={busy} queueLength={queueLength} tableName={tableName} />
+          {askOnly && <PinPrompt league={league} onUnlock={onUnlock} busy={busy} />}
+          {state === 'idle' && !askOnly && (
+            <IdleState onJoin={onJoin} busy={busy} queueLength={queueLength} league={league} />
           )}
         </div>
         {showPodium && <Podium topPlayers={topPlayers} />}
       </div>
     </section>
+  );
+}
+
+/**
+ * "Enter the PIN to play": the league is open to look at, but playing
+ * here needs its 4-digit PIN - once; it's remembered. compact is the
+ * smaller version shown above a game or a place in line; changed says the
+ * PIN changed since the player got there (rather than that they're
+ * looking at this league while their game is in another).
+ */
+function PinPrompt({ league, onUnlock, busy, compact = false, changed = false }) {
+  const [pin, setPin] = useState('');
+  const [error, setError] = useState(null);
+  const fieldId = `pin-${league.league_id}`;
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!/^\d{4}$/.test(pin)) {
+      setError('The PIN is 4 digits.');
+      return;
+    }
+    setError(null);
+    const result = await onUnlock(pin);
+    if (!result.ok) {
+      if (result.field === 'pin') setError(result.message);
+      setPin('');
+    }
+  };
+
+  const Heading = compact ? 'p' : 'h2';
+  return (
+    <div className={compact ? 'pin-prompt pin-prompt-compact' : 'pin-prompt'}>
+      <Heading
+        className={compact ? 'pin-prompt-title' : 'status-headline'}
+        id={compact ? undefined : 'status-headline'}
+      >
+        <Lock size={compact ? 16 : 26} aria-hidden="true" className="headline-icon" />
+        {compact && !league.has_pin
+          ? `No playing at ${league.name} yet`
+          : compact && changed
+            ? `${league.name}'s PIN has changed`
+            : compact
+              ? `To play at ${league.name}, enter its PIN`
+              : 'Enter the 4-digit PIN to play'}
+      </Heading>
+      {!league.has_pin ? (
+        <p className="status-sub">
+          {league.name} doesn&rsquo;t have a PIN yet. Ask the organiser - until they set one, you
+          can look around but not play.
+        </p>
+      ) : (
+        <>
+          <p className="status-sub">
+            {compact && changed
+              ? 'Enter the new one to keep playing here - you only need to once.'
+              : compact
+                ? 'You only need to once.'
+                : `Look around all you like. To join the line at ${league.name}, enter its PIN - you only need to once. Ask the organiser if you don't have it.`}
+          </p>
+          <form className="pin-form" onSubmit={submit} noValidate>
+            <label htmlFor={fieldId} className="sr-only">
+              {league.name}&rsquo;s 4-digit PIN
+            </label>
+            <input
+              id={fieldId}
+              className="pin-input"
+              type="password"
+              inputMode="numeric"
+              autoComplete="off"
+              pattern="[0-9]*"
+              maxLength={4}
+              placeholder="••••"
+              value={pin}
+              onChange={(e) => {
+                setPin(e.target.value.replace(/\D/g, '').slice(0, 4));
+                setError(null);
+              }}
+              aria-invalid={error ? 'true' : undefined}
+              aria-describedby={error ? `${fieldId}-error` : undefined}
+            />
+            <button type="submit" className="btn btn-primary" disabled={busy || pin.length !== 4}>
+              {busy ? 'Checking...' : 'Unlock'}
+            </button>
+          </form>
+          {error && (
+            <p className="pin-error" id={`${fieldId}-error`} role="alert">
+              {error}
+            </p>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 
@@ -168,11 +288,12 @@ function LoadingState() {
   );
 }
 
-function IdleState({ onJoin, busy, queueLength, tableName }) {
+function IdleState({ onJoin, busy, queueLength, league }) {
+  const tables = league.tables || [];
   return (
     <>
       <h2 className="status-headline" id="status-headline">
-        {tableName || 'The table'} is open to you
+        {tables.length === 1 ? tables[0].table_name : league.name} is open to you
       </h2>
       <p className="status-sub">
         {queueLength === 0
@@ -270,7 +391,7 @@ function HoldingTableState({ status, queueLength, onStepDown, busy }) {
     <>
       <h2 className="status-headline" id="status-headline">
         <Crown size={30} aria-hidden="true" className="headline-icon headline-icon-crown" />
-        You hold the table
+        You hold {status.table_name || 'the table'}
       </h2>
       <p className="status-sub">{sub}</p>
       <div className="status-actions">
@@ -292,7 +413,7 @@ function HoldingTableState({ status, queueLength, onStepDown, busy }) {
 function PlayingState({ status, league, onRecord, onCancelGame, onKeepPlaying, busy }) {
   const [scores, setScores] = useState({ mine: '', theirs: '' });
   const [error, setError] = useState(null);
-  const info = leagueInfo(league);
+  const info = gameInfo(league.game);
   const unit = info.scoreUnit;
 
   // Note: a new match gets a clean scorecard because the parent gives
@@ -330,7 +451,7 @@ function PlayingState({ status, league, onRecord, onCancelGame, onKeepPlaying, b
     // already reported it, the server refuses rather than filing this
     // score against the next game. The league lets the server refuse a
     // score sent under the wrong league's rules.
-    onRecord(mine, theirs, status.match_id, league);
+    onRecord(mine, theirs, status.match_id, status.league_id ?? league.league_id);
   };
 
   const cancelAsked = status.cancel_requested_by;
@@ -341,6 +462,7 @@ function PlayingState({ status, league, onRecord, onCancelGame, onKeepPlaying, b
         <Swords size={28} aria-hidden="true" className="headline-icon" />
         You're playing {status.opponent}
       </h2>
+      {status.table_name && <p className="status-where">At {status.table_name}</p>}
 
       {cancelAsked === 'opponent' && (
         <div className="panel-notice" role="status">
@@ -384,7 +506,7 @@ function PlayingState({ status, league, onRecord, onCancelGame, onKeepPlaying, b
         </div>
       )}
       <p className="status-sub">
-        {info.name}, table {status.table_id}. When the game is done,{' '}
+        {league.name}. When the game is done,{' '}
         {unit === 'points'
           ? 'put the points each of you scored below'
           : 'put the balls each of you sank below'}{' '}
@@ -491,6 +613,7 @@ function YourTurnState({ status, onConfirm, onLeave, busy }) {
         <h2 className="status-headline" id="status-headline">
           You&rsquo;re in - get ready
         </h2>
+        {status.table_name && <p className="status-where">At {status.table_name}</p>}
         <p className="status-sub">
           {opponent ? `Waiting for ${opponent} to say they're here` : 'Waiting for your opponent'}
           {theirs !== null ? ` - they have ${clockText(theirs)} left.` : '.'} The game starts the
@@ -516,6 +639,7 @@ function YourTurnState({ status, onConfirm, onLeave, busy }) {
         <BellRing size={28} aria-hidden="true" className="headline-icon" />
         It&rsquo;s your turn
       </h2>
+      {status.table_name && <p className="status-where">At {status.table_name}</p>}
       <p className="status-sub">
         {opponent
           ? `You're up against ${opponent}. Tap "I'm here" to play.`

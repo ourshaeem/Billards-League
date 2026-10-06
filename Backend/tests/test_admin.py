@@ -9,7 +9,7 @@ hold everyone else up until someone ran SQL by hand.
 import unittest
 
 from tests.conftest_base import ApiTestCase, BaseTestCase, PING_PONG_TABLE_ID
-from models import Match, Player, PoolTable, QueueEntry, db
+from models import BILLIARDS, Match, PING_PONG, Player, PoolTable, QueueEntry, Standing, db
 
 from logic.manage_queue import RECENTLY_HERE_SECONDS, attempt_matchmaking, join_queue
 
@@ -34,11 +34,11 @@ class AdminTestCase(ApiTestCase):
     def remove_from_table(self, user_id, **body):
         return self.post("/admin/table/remove", json={"user_id": user_id, **body})
 
-    def entry(self, user_id, table_id=1):
+    def entry(self, user_id, league=BILLIARDS):
         db.session.expire_all()
         return db.session.scalars(
             db.select(QueueEntry).where(
-                QueueEntry.user_id == user_id, QueueEntry.table_id == table_id
+                QueueEntry.user_id == user_id, QueueEntry.league_id == self.league_id(league)
             )
         ).first()
 
@@ -48,10 +48,11 @@ class AdminTestCase(ApiTestCase):
         return None if match is None else (match.player_one_id, match.player_two_id)
 
     def ratings(self):
+        """Everyone's (rating, wins, losses) in every league."""
         db.session.expire_all()
         return {
-            p.user_id: (p.elo_rating, p.total_wins, p.total_losses)
-            for p in db.session.scalars(db.select(Player))
+            (st.user_id, st.league_id): (st.elo, st.wins, st.losses)
+            for st in db.session.scalars(db.select(Standing))
         }
 
     def finished_games(self):
@@ -64,7 +65,7 @@ class AdminTestCase(ApiTestCase):
 
 class OnlyTheOrganiser(AdminTestCase):
     def test_a_player_who_isnt_an_admin_is_refused(self):
-        join_queue(self.bob, 1)
+        join_queue(self.bob, BILLIARDS)
         self.make_king(self.carol)
         self.login_as(self.dave)
 
@@ -76,7 +77,7 @@ class OnlyTheOrganiser(AdminTestCase):
 
     def test_taking_the_right_away_works_at_once(self):
         """Checked against the database on every request, not the login token."""
-        join_queue(self.bob, 1)
+        join_queue(self.bob, BILLIARDS)
         self.make_admin(self.alice, admin=False)
 
         self.assertEqual(self.remove_from_queue(self.bob).status_code, 403)
@@ -108,7 +109,7 @@ class OnlyTheOrganiser(AdminTestCase):
         self.assertFalse(db.session.get(Player, self.alice).is_admin)
 
     def test_the_player_must_be_named_and_exist(self):
-        join_queue(self.bob, 1)
+        join_queue(self.bob, BILLIARDS)
 
         missing = self.post("/admin/queue/remove", json={"table_id": 1})
         not_a_number = self.remove_from_queue("bob")
@@ -123,12 +124,12 @@ class OnlyTheOrganiser(AdminTestCase):
 class TakingSomeoneOutOfTheQueue(AdminTestCase):
     def test_out_at_once_however_short_their_wait(self):
         """The wait before leaving binds players, not the organiser."""
-        join_queue(self.bob, 1)
-        join_queue(self.carol, 1)
+        join_queue(self.bob, BILLIARDS)
+        join_queue(self.carol, BILLIARDS)
         self.make_king(self.dave)
         # Bob is up against the king; carol waits behind him.
         self.backdate_queue_join(self.bob, A_WHILE)
-        attempt_matchmaking(1)
+        attempt_matchmaking(BILLIARDS)
 
         res = self.remove_from_queue(self.carol, table_id=1)
 
@@ -140,9 +141,9 @@ class TakingSomeoneOutOfTheQueue(AdminTestCase):
     def test_when_it_was_their_turn_the_next_in_line_is_up(self):
         self.make_king(self.dave)
         for player in (self.bob, self.carol):
-            join_queue(player, 1)
+            join_queue(player, BILLIARDS)
             self.backdate_queue_join(player, A_WHILE)
-        attempt_matchmaking(1)
+        attempt_matchmaking(BILLIARDS)
         self.assertTrue(self.entry(self.bob).is_called, "bob is up, and hasn't said he's here")
 
         self.remove_from_queue(self.bob)
@@ -152,12 +153,12 @@ class TakingSomeoneOutOfTheQueue(AdminTestCase):
         self.assertEqual(self.seats(), (self.dave, None), "no game until carol says she's here")
 
     def test_the_league_picks_the_queue(self):
-        join_queue(self.bob, PING_PONG_TABLE_ID)
+        join_queue(self.bob, PING_PONG)
 
         res = self.remove_from_queue(self.bob, league_type="ping_pong")
 
         self.assertEqual(res.status_code, 200)
-        self.assertIsNone(self.entry(self.bob, PING_PONG_TABLE_ID))
+        self.assertIsNone(self.entry(self.bob, PING_PONG))
 
     def test_someone_not_in_the_queue(self):
         res = self.remove_from_queue(self.bob, table_id=1)
@@ -172,7 +173,7 @@ class TakingSomeoneOffTheTable(AdminTestCase):
         # Queued but not yet matched: the king had a challenger seat for
         # only one of them.
         for player in (self.carol, self.dave):
-            db.session.add(QueueEntry(user_id=player, table_id=1, queue_position=player))
+            db.session.add(QueueEntry(user_id=player, league_id=self.billiards_league_id, queue_position=player))
         db.session.commit()
 
         res = self.remove_from_table(self.bob, table_id=1)
@@ -231,7 +232,7 @@ class TakingSomeoneOffTheTable(AdminTestCase):
 
     def test_the_next_in_line_is_up_against_whoever_stays(self):
         self.start_match(self.bob, self.carol)
-        join_queue(self.dave, 1)
+        join_queue(self.dave, BILLIARDS)
 
         self.remove_from_table(self.bob)
 

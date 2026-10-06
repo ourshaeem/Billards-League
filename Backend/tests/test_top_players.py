@@ -140,7 +140,7 @@ class TopPlayersRoute(TopPlayersTestCase, ApiTestCase):
 
         self.assertEqual(res.status_code, 200)
         body = res.get_json()
-        self.assertEqual(set(body), {"league_type", "timezone", "day", "week", "month"})
+        self.assertEqual(set(body), {"league_type", "league_id", "timezone", "day", "week", "month"})
         self.assertEqual(body["league_type"], "ping_pong")
         self.assertEqual(body["timezone"], "America/New_York")
         self.assertEqual(set(body["day"]), {"player", "points", "wins", "losses"})
