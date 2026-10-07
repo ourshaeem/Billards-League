@@ -2,7 +2,8 @@
    Billiards & Ping Pong League - design system
 
    Purple and white, with gray as the quiet secondary. Purple is the
-   league's colour - the 4-ball - and it marks everything you can act on.
+   app's colour - each league brings its own - and it marks everything you
+   can act on. The ball by the name is an 8-ball in billiards.
    White carries the page, and gray does the supporting work: secondary
    text, borders, and controls that shouldn't compete.
 
@@ -127,6 +128,13 @@
   --radius-sm: 8px;
   --radius: 12px;
   --radius-lg: 20px;
+
+  /* The 8-ball, the same in every league and every theme: glossy black,
+     lit from the top left, with its white circle and 8. */
+  --eight-ball: radial-gradient(circle at 34% 30%, #4a4a52 0%, #1d1d23 30%, #09090c 62%, #000 100%);
+  --eight-ball-circle: radial-gradient(circle at 42% 36%, #ffffff 0%, #ffffff 58%, #e4e4ea 100%);
+  --eight-ball-ink: #0b0b0e;
+  --ball-shine: radial-gradient(ellipse at center, rgba(255, 255, 255, 0.75) 0%, rgba(255, 255, 255, 0) 70%);
 
   /* Player hover cards share the toasts' dark gray, for the same reason */
   --tooltip-bg: var(--toast-bg);
@@ -299,24 +307,49 @@ p {
   gap: 12px;
 }
 
-/* The 4-ball: solid in the league's colour, with its white number spot. */
+/* The 8-ball: glossy black with its white circle and 8, ringed in the
+   league's colour - which also keeps it visible on a dark page. */
 .wordmark-dot {
   position: relative;
   width: 0.66em;
   height: 0.66em;
   border-radius: 50%;
-  background: radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.5) 0%, var(--accent) 42%, var(--accent-strong) 100%), var(--accent);
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+  background: var(--eight-ball);
+  box-shadow: 0 0 0 0.045em var(--accent), 0 3px 8px rgba(0, 0, 0, 0.35);
   flex: none;
 }
 
+/* The white circle, a little above centre, as the ball sits on the cloth. */
 .wordmark-dot::after {
+  content: '8';
+  position: absolute;
+  top: 20%;
+  left: 28%;
+  width: 44%;
+  height: 44%;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--eight-ball-circle);
+  color: var(--eight-ball-ink);
+  font-family: var(--font-ui);
+  font-size: 0.2em;
+  font-weight: 800;
+  line-height: 1;
+}
+
+/* The shine, over everything, top left. */
+.wordmark-dot::before {
   content: '';
   position: absolute;
-  inset: 30%;
+  top: 8%;
+  left: 13%;
+  width: 36%;
+  height: 20%;
   border-radius: 50%;
-  background: var(--white);
-  opacity: 0.92;
+  background: var(--ball-shine);
+  transform: rotate(-35deg);
+  z-index: 1;
 }
 
 /* In ping pong it's the ball: white, shaded gray, ringed in the league's colour. */
@@ -2018,17 +2051,41 @@ select[aria-invalid='true'] {
   margin-bottom: 6px;
 }
 
+/* The 8-ball, ringed in the league's second colour. */
 .league-ball[data-ball='billiards'] {
-  background: radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.55) 0%, var(--opt-ball) 42%, rgba(0, 0, 0, 0.55) 100%), var(--opt-ball);
-  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.35);
+  background: var(--eight-ball);
+  box-shadow: 0 0 0 2px var(--opt-ball), 0 4px 10px rgba(0, 0, 0, 0.35);
 }
 
 .league-ball[data-ball='billiards']::after {
+  content: '8';
+  position: absolute;
+  top: 20%;
+  left: 28%;
+  width: 44%;
+  height: 44%;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--eight-ball-circle);
+  color: var(--eight-ball-ink);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.league-ball::before {
   content: '';
   position: absolute;
-  inset: 30%;
+  top: 8%;
+  left: 13%;
+  width: 36%;
+  height: 20%;
   border-radius: 50%;
-  background: var(--white);
+  background: var(--ball-shine);
+  transform: rotate(-35deg);
+  z-index: 1;
 }
 
 .league-ball[data-ball='ping_pong'] {

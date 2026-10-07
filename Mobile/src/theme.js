@@ -170,10 +170,10 @@ const sharedDark = {
   shadowRaised: '0px 1px 3px rgba(0, 0, 0, 0.5)',
 };
 
-// The app's own look, outside any league: the purple 4-ball and a purple
-// status panel, the same by day and night.
+// The app's own look, outside any league: the 8-ball ringed in purple, and
+// a purple status panel, the same by day and night.
 const billiardsTable = {
-  // The 4-ball: solid purple with a white spot.
+  // The 8-ball (Wordmark.js): ballSpot says to draw it, ballFill is its ring.
   ballFill: p.purple600,
   ballRing: 'transparent',
   ballSpot: p.white,
@@ -216,7 +216,7 @@ const APP_THEMES = { light: billiards, dark: billiardsDark };
 /**
  * One league's theme: the shared roles for the scheme, with the accent and
  * the status panel in the league's colours. The ball by its name is the
- * game's - a 4-ball in billiards, a ringed white ball in ping pong.
+ * game's - an 8-ball in billiards, a ringed white ball in ping pong.
  */
 function buildLeagueTheme(league, scheme) {
   const dark = scheme === 'dark';
