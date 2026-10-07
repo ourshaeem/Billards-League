@@ -80,7 +80,8 @@ export function StatusPanel({
   leagues,
   readOnly,
   onUnlock,
-  queueLength,
+  queue = [],
+  queueLength = queue.length,
   topPlayers,
   onJoin,
   onLeave,
@@ -169,11 +170,25 @@ export function StatusPanel({
             />
           )}
           {state === 'queued' && (
-            <QueuedState status={status} onLeave={onLeave} busy={busy} queueLength={queueLength} />
+            <QueuedState
+              status={status}
+              league={league}
+              queue={queue}
+              onJoin={onJoin}
+              onLeave={onLeave}
+              busy={busy}
+              queueLength={queueLength}
+            />
           )}
           {askOnly && <PinPrompt league={league} onUnlock={onUnlock} busy={busy} />}
           {state === 'idle' && !askOnly && (
-            <IdleState onJoin={onJoin} busy={busy} queueLength={queueLength} league={league} />
+            <IdleState
+              onJoin={onJoin}
+              busy={busy}
+              queueLength={queueLength}
+              queue={queue}
+              league={league}
+            />
           )}
         </div>
         {showPodium && <Podium topPlayers={topPlayers} />}
@@ -288,8 +303,55 @@ function LoadingState() {
   );
 }
 
-function IdleState({ onJoin, busy, queueLength, league }) {
+/**
+ * Where to play, at a league with more than one table: whichever table
+ * frees up first, or one in particular. Radio buttons drawn as chips,
+ * each saying how many are already waiting in that line.
+ */
+function TableChoice({ legend, tables, queue, value, onChange, disabled, compact = false }) {
+  const waiting = (key) => queue.filter((entry) => (entry.target_table_id ?? null) === key).length;
+  const options = [
+    { key: null, label: 'First available' },
+    ...tables.map((t) => ({ key: t.table_id, label: t.table_name })),
+  ];
+  return (
+    <fieldset className="table-choice" data-compact={compact ? 'true' : 'false'} disabled={disabled}>
+      <legend className="table-choice-legend">{legend}</legend>
+      <div className="table-choice-options">
+        {options.map((option) => {
+          const count = waiting(option.key);
+          const checked = value === option.key;
+          return (
+            <label
+              key={option.key ?? 'any'}
+              className="table-choice-option"
+              data-checked={checked ? 'true' : 'false'}
+            >
+              <input
+                type="radio"
+                name={compact ? 'table-choice-queued' : 'table-choice'}
+                className="sr-only"
+                checked={checked}
+                onChange={() => onChange(option.key)}
+              />
+              <span className="table-choice-name">{option.label}</span>
+              <span className="table-choice-count">
+                {count === 0 ? 'nobody waiting' : `${count} waiting`}
+              </span>
+            </label>
+          );
+        })}
+      </div>
+    </fieldset>
+  );
+}
+
+function IdleState({ onJoin, busy, queueLength, queue, league }) {
   const tables = league.tables || [];
+  const many = tables.length > 1;
+  // null: the first table that frees up.
+  const [choice, setChoice] = useState(null);
+  const chosen = many ? tables.find((t) => t.table_id === choice) : null;
   return (
     <>
       <h2 className="status-headline" id="status-headline">
@@ -300,16 +362,31 @@ function IdleState({ onJoin, busy, queueLength, league }) {
           ? 'Nobody is waiting. Join and you play as soon as someone else does.'
           : `${queueLength} ${queueLength === 1 ? 'player is' : 'players are'} waiting. Join the line to get a game.`}
       </p>
+      {many && (
+        <TableChoice
+          legend="Where do you want to play?"
+          tables={tables}
+          queue={queue}
+          value={chosen ? chosen.table_id : null}
+          onChange={setChoice}
+          disabled={busy}
+        />
+      )}
       <div className="status-actions">
-        <button type="button" className="btn btn-primary" onClick={onJoin} disabled={busy}>
-          {busy ? 'Joining...' : 'Join the queue'}
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={() => onJoin(chosen ? chosen.table_id : null)}
+          disabled={busy}
+        >
+          {busy ? 'Joining...' : chosen ? `Join the line for ${chosen.table_name}` : 'Join the queue'}
         </button>
       </div>
     </>
   );
 }
 
-function QueuedState({ status, onLeave, busy, queueLength }) {
+function QueuedState({ status, league, queue, onJoin, onLeave, busy, queueLength }) {
   // Ticks locally so the number moves every second rather than lurching
   // each time the server is polled. The server enforces the wait itself,
   // so a second of drift here can't let anyone leave early.
@@ -318,12 +395,22 @@ function QueuedState({ status, onLeave, busy, queueLength }) {
   const canLeave = secondsLeft <= 0;
   const position = status.queue_position;
   const ahead = Math.max(0, (position ?? 1) - 1);
+  const tables = league.tables || [];
+  const many = tables.length > 1;
+  const target = status.target_table_id ?? null;
 
   return (
     <>
       <h2 className="status-headline" id="status-headline">
         {ahead === 0 ? "You're up next" : `You're number ${position} in line`}
       </h2>
+      {many && (
+        <p className="status-where">
+          {status.target_table_name
+            ? `Waiting for ${status.target_table_name}`
+            : 'Waiting for the first free table'}
+        </p>
+      )}
       <p className="status-sub">
         {ahead === 0
           ? "Stay close to the table. When it's your turn you'll have a minute to say you're here."
@@ -367,6 +454,18 @@ function QueuedState({ status, onLeave, busy, queueLength }) {
           Joined by accident? Leaving unlocks shortly, so nobody drops out of a match that was about
           to start.
         </p>
+      )}
+
+      {many && (
+        <TableChoice
+          legend="Change where you'll play - you keep your place"
+          tables={tables}
+          queue={queue}
+          value={target}
+          onChange={(key) => key !== target && onJoin(key)}
+          disabled={busy}
+          compact
+        />
       )}
     </>
   );

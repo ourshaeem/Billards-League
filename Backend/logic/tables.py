@@ -107,13 +107,15 @@ def table_snapshot(table_id):
 
         {table_id, table_name, league_type, league_id, is_active, state,
          match_id, king, challenger, king_streak, table_record_streak,
-         king_badge, challenger_badge}
+         table_record_holder, king_badge, challenger_badge}
 
     state is "free", "waiting_for_challenger" or "playing". king and
     challenger are player cards (see Player.to_card) carrying their rank
     and rating in this table's league; king_badge / challenger_badge are
     the badge each shows by their name in it ({key, name, tier} or None).
-    table_record_streak is the longest run anyone has had here.
+    table_record_streak is the longest run anyone has had here, and
+    table_record_holder the card of whoever set it (None before anyone
+    has, or once a season reset clears it).
 
     A plain read, no locks: this is a display, and matchmaking - the only
     thing that changes who is at a table - never reads it.
@@ -145,6 +147,8 @@ def table_snapshot(table_id):
     king = active.player_one if active is not None else None
     challenger = active.player_two if active is not None else None
     badges = featured_badges([king, challenger], league)
+    record = table.table_record_streak or 0
+    holder = table.record_holder if record else None
 
     return {
         "table_id": table.table_id,
@@ -157,7 +161,8 @@ def table_snapshot(table_id):
         "king": king.to_card(league) if king else None,
         "challenger": challenger.to_card(league) if challenger else None,
         "king_streak": streak,
-        "table_record_streak": table.table_record_streak or 0,
+        "table_record_streak": record,
+        "table_record_holder": holder.to_card(league) if holder else None,
         "king_badge": badges.get(king.user_id) if king else None,
         "challenger_badge": badges.get(challenger.user_id) if challenger else None,
     }

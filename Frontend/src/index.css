@@ -2754,3 +2754,328 @@ select[aria-invalid='true'] {
 .settings-add .btn {
   margin-bottom: 2px;
 }
+
+/* --- Choosing a table to wait for (on the status panel) --- */
+
+.table-choice {
+  border: none;
+  margin: 0 0 18px;
+  padding: 0;
+  min-width: 0;
+}
+
+.table-choice[data-compact='true'] {
+  margin: 18px 0 0;
+}
+
+.table-choice-legend {
+  padding: 0;
+  margin-bottom: 8px;
+  font-size: var(--step--1);
+  font-weight: 600;
+  color: var(--panel-dim);
+}
+
+.table-choice-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* Radio buttons drawn as chips; the chosen one in the panel's loud colour. */
+.table-choice-option {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 7.5rem;
+  padding: 8px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--panel-line);
+  background: var(--panel-fill);
+  color: var(--panel-text);
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.table-choice-option:hover {
+  background: var(--panel-fill-hover);
+}
+
+.table-choice-option[data-checked='true'] {
+  background: var(--panel-cta-bg);
+  border-color: var(--panel-cta-bg);
+  color: var(--panel-cta-text);
+}
+
+.table-choice-option:has(:focus-visible) {
+  outline: 2px solid var(--panel-focus);
+  outline-offset: 2px;
+}
+
+.table-choice:disabled .table-choice-option {
+  cursor: progress;
+  opacity: 0.7;
+}
+
+.table-choice-name {
+  font-weight: 700;
+}
+
+.table-choice-count {
+  font-size: 0.78rem;
+  opacity: 0.85;
+}
+
+/* --- A league's queue, line by line --- */
+
+.queue-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.queue-line + .queue-line {
+  margin-top: 16px;
+}
+
+.queue-line-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+  font-size: var(--step--1);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.queue-line-count {
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* --- A table's record, and whose it is --- */
+
+.table-record {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-top: 12px;
+  padding: 6px 12px;
+  border-radius: var(--radius);
+  background: var(--accent-wash);
+  font-size: var(--step--1);
+  color: var(--text-muted);
+}
+
+.table-record-icon {
+  flex: none;
+  color: var(--accent);
+}
+
+.table-record-label strong {
+  color: var(--text);
+}
+
+/* --- The champions across every school (top of the league picker) --- */
+
+.champions {
+  margin-bottom: 36px;
+  border-top: 4px solid var(--accent);
+}
+
+.champions-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.champions-title {
+  display: flex;
+  align-items: center;
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--step-2);
+  font-weight: 400;
+  color: var(--heading);
+}
+
+.champions-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(230px, 100%), 1fr));
+  gap: 18px 28px;
+}
+
+.champions-period-title {
+  margin: 0 0 6px;
+  font-size: var(--step--1);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.champions-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.champion {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.champion:last-child {
+  border-bottom: none;
+}
+
+.champion-place {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: var(--step--1);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  background: var(--fill-soft);
+  color: var(--text-muted);
+}
+
+.champion[data-place='1'] .champion-place {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.champion-who {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.champion-school {
+  padding-left: 4px;
+  font-size: 0.76rem;
+  color: var(--text-muted);
+}
+
+.champion-value {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-size: var(--step--1);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.champion-value strong {
+  font-size: var(--step-0);
+  color: var(--text);
+}
+
+.champion-record {
+  font-size: 0.76rem;
+}
+
+.champions-empty {
+  padding: 6px 0;
+}
+
+/* --- Schools on the league picker, each in its own colours --- */
+
+.school-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(170px, 100%), 1fr));
+  gap: 14px;
+  margin-bottom: 30px;
+}
+
+.school-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-height: 100px;
+  padding: 18px 16px 14px;
+  font: inherit;
+  text-align: left;
+  color: var(--opt-text);
+  background: var(--opt-bg);
+  border: 1px solid var(--opt-border, transparent);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--opt-shadow);
+  cursor: pointer;
+  overflow: hidden;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.school-tile::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 4px;
+  background: var(--opt-edge);
+}
+
+.school-tile:hover {
+  transform: translateY(-2px);
+}
+
+/* The school being looked at: a ring in the page's colour - which is now
+   the school's own. */
+.school-tile[aria-pressed='true'] {
+  box-shadow: 0 0 0 3px var(--page), 0 0 0 6px var(--accent), var(--opt-shadow);
+}
+
+.school-tile-name {
+  font-family: var(--font-display);
+  font-size: var(--step-1);
+  line-height: 1.1;
+}
+
+.school-tile-games {
+  font-size: 0.78rem;
+  color: var(--opt-dim);
+}
+
+.school-tile-current {
+  margin-top: auto;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.league-select-hint {
+  text-align: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .school-tile,
+  .table-choice-option {
+    transition: none;
+  }
+
+  .school-tile:hover {
+    transform: none;
+  }
+}

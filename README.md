@@ -1,18 +1,24 @@
 # Billiards & Ping Pong League
 
 Queue up for a pool table or a ping pong table, report your score, and
-track your league's ladder - at CCNY, John Jay and Brooklyn College, a
-billiards league and a ping pong league at each.
+track your league's ladder - at CCNY, John Jay, Brooklyn College, Hunter
+College, City Tech, Queens College and Baruch College, a billiards league
+and a ping pong league at each.
 
-After signing in, players pick a league for the session. Anyone can look
-at any league; playing in one takes its 4-digit PIN, entered once. Every
-league runs the same king-of-the-hill queue - winner stays on, next in
-line plays them - with one line for all of its tables. When it's your
-turn you have a minute to say you're here, or the next person is up; and
-a game both players agree to call off is cancelled with nothing
-recorded. Each league has its own ratings, ranks, ladder, match history
-and colours - the school's, each in light and dark. Tap any player to
-see their profile, their games and their record against you.
+After signing in, players see the champions across every school - the
+top 3 in each game this week, this month and of all time - then pick
+their school and league for the session. Anyone can look at any league;
+playing in one takes its 4-digit PIN, entered once. Every league runs
+the same king-of-the-hill queue - winner stays on, next in line plays
+them. At a league with several tables, a player waits either for one
+table they choose or for whichever frees up first, and can change their
+mind without losing their place. When it's your turn you have a minute
+to say you're here, or the next person is up; and a game both players
+agree to call off is cancelled with nothing recorded. Each league has
+its own ratings, ranks, ladder, match history and colours - the
+school's, each in light and dark. Each table shows its winning-streak
+record and who holds it. Tap any player to see their profile, their
+games and their record against you.
 
 Stack: **MySQL + Python/Flask + React (Vite)**. Kept deliberately plain so
 the app can be ported to React Native later.
@@ -58,12 +64,18 @@ and it is safe to run on every start. It:
   (maroon and gold) start with a table each and no PIN. Each player's old
   ratings are copied into `Standings`, one row per player per league -
   the old columns on `Players` stay, untouched and unused,
+- adds any league in `LEAGUES` (in `Backend/database.py`) that a
+  database which already has leagues is missing - which is how Hunter,
+  City Tech, Queens and Baruch arrived - each with a "Table 1" and no
+  PIN; leagues already there are never changed,
 - puts any table, queue entry or badge with no league into its league,
 - converts match rows written by the original code, which kept the two
   seats in `winner_id`/`loser_id`, into `king_id`/`challenger_id`,
 - removes duplicate queue entries, then adds the indexes the models
   declare, including a unique one that stops a double-tapped Join
-  queueing someone twice.
+  queueing someone twice,
+- names the holder of every table record set before holders were kept,
+  by replaying that table's games.
 
 Each step prints a `[schema]` line when it changes something.
 
@@ -173,9 +185,9 @@ DATABASE_URL="<the live DATABASE_URL, with ssl_ca pointing at a downloaded RDS b
   flask --app app reset-league ccny-ping-pong
 ```
 
-Leagues are named by slug: `ccny-billiards`, `ccny-ping-pong`,
-`john-jay-billiards`, `john-jay-ping-pong`, `brooklyn-billiards`,
-`brooklyn-ping-pong` (`billiards` and `ping_pong` still mean CCNY's).
+Leagues are named by slug - the school's, then `-billiards` or
+`-ping-pong`: `ccny-`, `john-jay-`, `brooklyn-`, `hunter-`, `city-tech-`,
+`queens-` and `baruch-` (`billiards` and `ping_pong` still mean CCNY's).
 
 It prints which database and how many players before asking to confirm.
 
@@ -265,10 +277,11 @@ either app: **Manage league** at the top of the website, or **Manage
   Changing a PIN means everyone has to enter the new one (players
   already in a game or in line keep their place, and are asked for it).
   Five wrong tries in 15 minutes and that player has to wait.
-- **Tables** can be added, renamed and removed at any time. The league's
-  one queue fills them: whoever is next goes to the first table that
-  needs a player. A table with someone at it can't be removed; a removed
-  table's games stay in the history.
+- **Tables** can be added, renamed and removed at any time. Players then
+  choose one, or "first available" (see *How the leagues work*). A
+  table with someone at it can't be removed; a removed table's games stay
+  in the history, and anyone waiting for it waits for any table instead,
+  keeping their place.
 
 ### Deleting duplicate or joke accounts
 
@@ -514,6 +527,7 @@ Backend/
     password_reset.py       forgot your password: an emailed code
     mailer.py               sending email through Brevo's HTTPS API
     leaderboard.py          top 50, per league
+    global_leaderboard.py   the champions across every school
     leagues.py              who may play where: PINs, access, standings;
                             the organiser's table changes
   tests/                    ORM tests against in-memory SQLite
@@ -536,7 +550,8 @@ Frontend/
       StatusPanel.jsx       the five player states: join, I'm here, leave,
                             report or cancel a game, give up the table -
                             or the PIN, where the player has none
-      LeagueSelect.jsx      choosing a league after sign-in, by school
+      LeagueSelect.jsx      choosing a school, then its league, after sign-in
+      GlobalLeaderboard.jsx the champions, at the top of the picker
       LeagueSettings.jsx    the organiser's: a league's PIN and tables
       ActiveTable.jsx       who is at each table right now
       MatchHistory.jsx      recent games, everyone's or yours
@@ -581,12 +596,24 @@ A league is a row in `Leagues`: a school, a game (`billiards` or
 `Pool_Tables` rows with its `league_id` and `is_active` set. A match
 belongs to its table's league.
 
-- **One queue per league.** `Queue` rows carry `league_id`; a queued
-  player's `table_id` is empty until their turn comes, when it says which
-  table they're called to. Matchmaking - still exactly one
-  implementation, `attempt_matchmaking()` - serves a whole league at
-  once: a player already called keeps their table; then kings waiting
-  for a challenger; then free tables, two players at a time.
+- **A queue per league, a line per table.** `Queue` rows carry
+  `league_id`, and `target_table_id`: the table the player chose, or
+  NULL for whichever frees up first. Their `table_id` is empty until
+  their turn comes, when it says which table they're called to.
+  Matchmaking - still exactly one implementation, `attempt_matchmaking()`
+  - serves a whole league at once: a player already called keeps their
+  table; then kings waiting for a challenger; then free tables, two
+  players at a time. Each table takes the next player who chose it, and
+  only when nobody has the next who'll play anywhere - so after a game
+  the table's own line is checked first. Someone who chose a table is
+  only ever called there. Two players left alone at different free
+  tables play each other at the one the choosier of them picked.
+- **Changing your mind.** Joining again with another choice
+  (`POST /queue/join` with a different `table_id`, or none) changes the
+  line you're in and keeps your place - unless your turn has already come
+  at a table the new choice rules out (409: say you're here, or leave
+  first). A league with one table has one line: choosing its table is
+  kept as "any", so nobody jumps the line by naming it.
 - **Ratings** live in `Standings`, one row per player per league (elo,
   wins, losses, rank, featured badge). A player gets one when they first
   enter a league's PIN. All leagues share the `Ranks` tiers.
@@ -610,6 +637,14 @@ belongs to its table's league.
   rating of 1200 - averaged between the two players so the ladder stays
   zero-sum. A lopsided game moves up to 50% more than a close one (11-0
   vs 11-9 or a deuce game). Billiards keeps its flat K of 32.
+- **Champions.** `GET /leaderboard/global` (`logic/global_leaderboard.py`)
+  is the top 3 in each game, across every school: this week and this
+  month by rating points gained (added up across all of that game's
+  leagues), and all time by the best rating anyone holds. It's at the top
+  of the league picker in both apps.
+- **Table records.** `Pool_Tables.table_record_holder_id` is whoever
+  first reached the table's record streak; the table cards show their
+  picture and name beside it.
 - **Colours.** Each app turns a league's two colours into its whole
   colour scheme (`leagueColors.js`): the status panel in the first, with
   the second along its top and on its main button, and text darkened or

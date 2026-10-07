@@ -244,8 +244,12 @@ export function LiveProvider({ children }) {
     [perform, leagueId, reportFailure, toast, replaceLeague, refresh],
   );
 
-  const join = useCallback(async () => {
-    const res = await perform(() => api.joinQueue(leagueId));
+  /**
+   * tableId: the table to wait for, or null for whichever frees up first.
+   * Already waiting, it changes where they'll play and keeps their place.
+   */
+  const join = useCallback(async (tableId = null) => {
+    const res = await perform(() => api.joinQueue(leagueId, tableId));
     if (!res.ok) {
       reportFailure(res);
       noticeLocked(res);
@@ -254,11 +258,15 @@ export function LiveProvider({ children }) {
       refresh();
       return;
     }
+    const tables = league?.tables ?? [];
+    const tableName = tables.find((t) => t.table_id === tableId)?.table_name;
     if (res.data?.match_started) toast.push('Match found - get to the table.', 'success');
+    else if (res.data?.status === 'switched') toast.push(res.data.message || 'Changed - you kept your place.', 'success');
     else if (res.data?.status === 'already_queued') toast.push("You're already in the queue.", 'info');
+    else if (tableName && tables.length > 1) toast.push(`You joined the line for ${tableName}.`, 'success');
     else toast.push('You joined the queue.', 'success');
     refresh();
-  }, [perform, leagueId, reportFailure, noticeLocked, refresh, toast]);
+  }, [perform, leagueId, league, reportFailure, noticeLocked, refresh, toast]);
 
   const leave = useCallback(async () => {
     const res = await perform(() => api.leaveQueue(leagueId));

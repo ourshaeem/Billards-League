@@ -359,7 +359,10 @@ class ViewQueueTests(BaseTestCase):
         join_queue(self.alice, BILLIARDS)
         self.assertEqual(
             set(view_queue(BILLIARDS)[0].keys()),
-            {"queue_position", "user_id", "username", "called", "confirmed", "table_id", "table_name"},
+            {
+                "queue_position", "user_id", "username", "called", "confirmed",
+                "table_id", "table_name", "target_table_id", "target_table_name",
+            },
         )
 
     def test_empty_queue_returns_empty_list(self):

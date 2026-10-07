@@ -8,15 +8,22 @@ stuck-queue bug happened because a second, incomplete copy of that logic
 lived in the /queue/join route and didn't know about a waiting king. Any
 future change to matchmaking belongs here and nowhere else.
 
-Each league has one line, however many tables it has. A player joins the
-league's queue, not a table's; when their turn comes, matchmaking calls
-them to whichever table needs a player - a king waiting for a challenger
-first, then a free table, two at a time - and the queue row says which
-(table_id). Every table in a league is matched in one pass, under the
-league's lock, so two tables can never call the same player.
+Each league has one queue, with a line in it for each table plus one for
+whichever table frees up first. A player joining picks: one table
+(target_table_id) or the first free one (NULL). When a table needs a
+player - a king waiting for a challenger, or a free table, two at a time -
+it calls the next in its own line, and only when that line is empty the
+next in the line for any table. A player who chose a table is only ever
+called to it. The queue row says where they're called (table_id). Every
+table in a league is matched in one pass, under the league's lock, so two
+tables can never call the same player.
+
+A league with one table has just the one line: there, choosing the table
+is the same as choosing any, and is kept as any - otherwise asking for the
+only table would put a player ahead of everyone who didn't.
 """
 import logging
-from collections import deque
+from collections import Counter
 
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
@@ -50,6 +57,13 @@ RECENTLY_HERE_SECONDS = 60
 JOIN_RESULT_JOINED = "joined"
 JOIN_RESULT_ALREADY_QUEUED = "already_queued"
 JOIN_RESULT_ALREADY_PLAYING = "already_playing"
+# Waiting already, for another table (or any): now they wait for this one
+# instead, keeping their place.
+JOIN_RESULT_SWITCHED = "switched"
+# Their turn has come at a table the new choice rules out.
+JOIN_RESULT_CALLED_ELSEWHERE = "called_elsewhere"
+# Not one of the league's tables in use.
+JOIN_RESULT_NO_SUCH_TABLE = "no_such_table"
 
 # step_down outcomes, named for the same reason.
 STEP_DOWN_RESULT_DONE = "stepped_down"
@@ -171,32 +185,76 @@ def lock_active_match_for_player(user_id):
     return _active_match_for_player(user_id, lock=True)
 
 
-@retry_on_deadlock
-def join_queue(user_id, league):
+def _line_for(league_id, table_id):
     """
-    Add a player to a league's queue.
+    What a player asking for table_id (None: any table) waits for, as
+    (target_table_id, ok). ok is False for a table that isn't one of the
+    league's in use. A league with one table has one line: its table is
+    kept as "any" (see the module's docstring).
+    """
+    if table_id is None:
+        return None, True
+    in_use = [table.table_id for table in active_tables(league_id)]
+    if table_id not in in_use:
+        return None, False
+    return (table_id if len(in_use) > 1 else None), True
 
-    Returns JOIN_RESULT_JOINED / JOIN_RESULT_ALREADY_QUEUED /
-    JOIN_RESULT_ALREADY_PLAYING.
+
+@retry_on_deadlock
+def join_queue(user_id, league, table_id=None):
+    """
+    Add a player to a league's queue, waiting for table_id or - None - for
+    whichever of its tables frees up first. Returns one of:
+
+      JOIN_RESULT_JOINED             in the queue now, at the back of their line
+      JOIN_RESULT_ALREADY_QUEUED     already waiting, for this same choice
+      JOIN_RESULT_SWITCHED           already waiting for another table (or
+                                     any): now for this one, keeping their
+                                     place - they joined when they joined
+      JOIN_RESULT_CALLED_ELSEWHERE   their turn has come at a table this
+                                     choice rules out: they say they're
+                                     here, or leave, first
+      JOIN_RESULT_NO_SUCH_TABLE      table_id isn't one of the league's in use
+      JOIN_RESULT_ALREADY_PLAYING    mid-game or holding a table
 
     Deliberately does NOT try to form a match - call attempt_matchmaking()
     afterwards. Keeping the two apart is what stops a second copy of the
     matchmaking rules growing inside the join path again.
+
+    Under the league's lock, like matchmaking: a player changing tables
+    can't cross with matchmaking calling them to the old one.
     """
     league_id = _league_id(league)
     try:
-        already_queued = db.session.scalars(
-            db.select(QueueEntry).where(
-                QueueEntry.user_id == user_id,
-                QueueEntry.league_id == league_id,
+        _lock_league(league_id)
+        target, ok = _line_for(league_id, table_id)
+        if not ok:
+            db.session.commit()
+            return JOIN_RESULT_NO_SUCH_TABLE
+
+        entry = db.session.scalars(
+            _locked(
+                db.select(QueueEntry).where(
+                    QueueEntry.user_id == user_id,
+                    QueueEntry.league_id == league_id,
+                )
             )
         ).first()
-        if already_queued:
-            return JOIN_RESULT_ALREADY_QUEUED
+        if entry is not None:
+            if entry.target_table_id == target:
+                outcome = JOIN_RESULT_ALREADY_QUEUED
+            elif entry.is_called and target not in (None, entry.table_id):
+                outcome = JOIN_RESULT_CALLED_ELSEWHERE
+            else:
+                entry.target_table_id = target
+                outcome = JOIN_RESULT_SWITCHED
+            db.session.commit()
+            return outcome
 
         # At ANY table, not just this league's: someone mid-game or holding
         # a table can't also be waiting for another.
         if _active_match_for_player(user_id):
+            db.session.commit()
             return JOIN_RESULT_ALREADY_PLAYING
 
         highest = db.session.scalar(
@@ -209,7 +267,12 @@ def join_queue(user_id, league):
         # joined_at is left unset on purpose so MySQL fills it from its own
         # clock, matching the NOW() the wait is measured against later.
         db.session.add(
-            QueueEntry(user_id=user_id, league_id=league_id, queue_position=next_position)
+            QueueEntry(
+                user_id=user_id,
+                league_id=league_id,
+                queue_position=next_position,
+                target_table_id=target,
+            )
         )
         db.session.commit()
         return JOIN_RESULT_JOINED
@@ -333,8 +396,10 @@ def get_queue_status(user_id, league):
     """
     None if the player isn't in the league's queue, otherwise:
         {queue_position, seconds_waiting, can_leave, leave_unlocks_in,
-         called, confirmed, seconds_left, table_id}
+         called, confirmed, seconds_left, table_id, target_table_id}
 
+    queue_position is their place in their own line - the one for the
+    table they chose (target_table_id), or for any table (None).
     called / confirmed / seconds_left are the ready check: whether the
     player's turn has come, whether they've said they're here, and how
     long they have left to (None once they have, or before their turn).
@@ -378,7 +443,7 @@ def get_queue_status(user_id, league):
         if entry is None:
             return None
         return {
-            "queue_position": _place_in_line(entry.queue_id, entry.queue_position, league_id),
+            "queue_position": _place_in_line(entry),
             "seconds_waiting": LEAVE_UNLOCK_SECONDS,
             "can_leave": True,
             "leave_unlocks_in": 0,
@@ -386,13 +451,14 @@ def get_queue_status(user_id, league):
             "confirmed": entry.is_confirmed,
             "seconds_left": None if entry.is_confirmed or not entry.is_called else READY_CHECK_SECONDS,
             "table_id": entry.table_id if entry.is_called else None,
+            "target_table_id": entry.target_table_id,
         }
 
     if row is None:
         return None
 
     entry, seconds_waiting, seconds_called = row
-    queue_position = _place_in_line(entry.queue_id, entry.queue_position, league_id)
+    queue_position = _place_in_line(entry)
 
     if seconds_waiting is None:
         # Row predates joined_at being populated. Don't trap someone in a
@@ -413,12 +479,21 @@ def get_queue_status(user_id, league):
             _seconds_left(seconds_called) if entry.is_called and not entry.is_confirmed else None
         ),
         "table_id": entry.table_id if entry.is_called else None,
+        "target_table_id": entry.target_table_id,
     }
 
 
-def _place_in_line(queue_id, stored_position, league_id):
+def _same_line(target_table_id):
+    """A condition: a queue row is in the line for this table (None: any table)."""
+    if target_table_id is None:
+        return QueueEntry.target_table_id.is_(None)
+    return QueueEntry.target_table_id == target_table_id
+
+
+def _place_in_line(entry):
     """
-    1 for the front of the line, 2 behind them, and so on.
+    1 for the front of the player's line, 2 behind them, and so on - their
+    line being the one for the table they chose, or for any table.
 
     The stored queue_position is a sort key, not a place: it only ever
     counts up (new joiners get the highest plus one) and nothing renumbers
@@ -427,12 +502,13 @@ def _place_in_line(queue_id, stored_position, league_id):
     """
     ahead = db.session.scalar(
         db.select(func.count()).select_from(QueueEntry).where(
-            QueueEntry.league_id == league_id,
+            QueueEntry.league_id == entry.league_id,
+            _same_line(entry.target_table_id),
             db.or_(
-                QueueEntry.queue_position < stored_position,
+                QueueEntry.queue_position < entry.queue_position,
                 db.and_(
-                    QueueEntry.queue_position == stored_position,
-                    QueueEntry.queue_id < queue_id,
+                    QueueEntry.queue_position == entry.queue_position,
+                    QueueEntry.queue_id < entry.queue_id,
                 ),
             ),
         )
@@ -454,12 +530,14 @@ def attempt_matchmaking(league):
       2. It's free: it needs two, to play each other.
       3. A game is on: it needs nobody.
 
-    The league's one line fills those seats from the front: whoever is
-    already up keeps their table while it still has room, then the next in
-    line go to kings waiting for a challenger, then to free tables, two at
-    a time. A free table never starts with one: a player left alone is
-    paired with one left alone at another free table, or goes back to
-    waiting at the front of the line.
+    The league's queue fills those seats: whoever is already up keeps
+    their table while it still has room, then kings waiting for a
+    challenger are given one, then free tables two at a time. Each table
+    takes the next player in its own line - those who chose it - and only
+    when that line is empty the next in the line for any table. A free
+    table never starts with one: a player left alone is paired with one
+    left alone at another free table, at the table one of them chose, or
+    goes back to waiting at the front of their line.
 
     Case 1 is the one the old /queue/join route didn't handle, which is
     why players piled up in the queue behind a king and no match ever
@@ -479,7 +557,8 @@ def attempt_matchmaking(league):
         _lock_league(league_id)
 
         needs, kings = {}, {}
-        for table in active_tables(league_id):
+        tables = active_tables(league_id)
+        for table in tables:
             active = _active_match_for_table(table.table_id, lock=True)
             if active is None:
                 needs[table.table_id] = 2
@@ -489,6 +568,7 @@ def attempt_matchmaking(league):
 
         clocks = _turn_clocks(league_id)
         waiting = _without_missed_turns(_eligible_queue(league_id), clocks)
+        _forget_lost_tables(waiting, [table.table_id for table in tables])
         plan = _plan(waiting, needs)
 
         # Anyone not given a table isn't up, whatever was true a moment ago.
@@ -535,6 +615,20 @@ def attempt_matchmaking(league):
     return started
 
 
+def _forget_lost_tables(waiting, in_use):
+    """
+    A player waiting for a table the league no longer uses - removed by
+    the organiser, or the league down to one table - waits for any table
+    instead, keeping their place. remove_table() does this as it removes
+    one; this is the safety net for whatever got past it.
+    """
+    for entry in waiting:
+        target = entry.target_table_id
+        if target is not None and (target not in in_use or len(in_use) < 2):
+            log.info("%r: table %s isn't one of several in use; waiting for any", entry, target)
+            entry.target_table_id = None
+
+
 def _plan(waiting, needs):
     """
     Which players go to which table: {table_id: [entries]}, in line
@@ -548,33 +642,72 @@ def _plan(waiting, needs):
     # nobody's minute restarts because someone else joined.
     for entry in waiting:
         table_id = entry.table_id if entry.is_called else None
-        if table_id in plan and len(plan[table_id]) < needs[table_id]:
+        if (
+            table_id in plan
+            and len(plan[table_id]) < needs[table_id]
+            and entry.target_table_id in (None, table_id)
+        ):
             plan[table_id].append(entry)
             taken.add(entry.queue_id)
 
-    line = deque(entry for entry in waiting if entry.queue_id not in taken)
+    line = [entry for entry in waiting if entry.queue_id not in taken]
+
+    def next_for(table_id):
+        # The table's own line first, then the line for any table.
+        for wanted in (table_id, None):
+            for index, entry in enumerate(line):
+                if entry.target_table_id == wanted:
+                    return line.pop(index)
+        return None
 
     # Kings first: one player and a game starts.
     for table_id in sorted(plan):
-        if needs[table_id] == 1 and not plan[table_id] and line:
-            plan[table_id].append(line.popleft())
+        if needs[table_id] == 1 and not plan[table_id]:
+            entry = next_for(table_id)
+            if entry is not None:
+                plan[table_id].append(entry)
 
     # Then free tables, two at a time.
     for table_id in sorted(plan):
         if needs[table_id] == 2:
-            while len(plan[table_id]) < 2 and line:
-                plan[table_id].append(line.popleft())
+            while len(plan[table_id]) < 2:
+                entry = next_for(table_id)
+                if entry is None:
+                    break
+                plan[table_id].append(entry)
 
-    # A free table can't start with one. Pair up players left alone at
-    # different free tables; anyone still alone goes back to waiting.
+    # A free table can't start with one. Two players left alone at
+    # different free tables play each other - at the table one of them
+    # chose, since someone who chose a table only ever plays there. Anyone
+    # still alone goes back to waiting.
     alone = [t for t in sorted(plan) if needs[t] == 2 and len(plan[t]) == 1]
-    while len(alone) >= 2:
-        keep, merge = alone.pop(0), alone.pop(0)
-        plan[keep].append(plan[merge].pop())
+    while True:
+        pair = _pair_alone(alone, plan)
+        if pair is None:
+            break
+        keep, move = pair
+        plan[keep].append(plan[move].pop())
+        alone.remove(keep)
+        alone.remove(move)
     for table_id in alone:
         plan[table_id] = []
 
     return {table_id: entries for table_id, entries in plan.items() if entries}
+
+
+def _pair_alone(alone, plan):
+    """
+    Two tables, each with one player left alone, where one of the two
+    players may move: (table to play at, table to move from), or None.
+    Only a player waiting for any table moves.
+    """
+    for i, first in enumerate(alone):
+        for second in alone[i + 1:]:
+            if plan[second][0].target_table_id is None:
+                return first, second
+            if plan[first][0].target_table_id is None:
+                return second, first
+    return None
 
 
 def _waited_long(entries):
@@ -756,6 +889,7 @@ def get_player_status(user_id, league):
         return {"status": "idle"}
 
     names = table_names(league)
+    target = queue_status["target_table_id"]
     if queue_status["called"]:
         table_id = queue_status["table_id"]
         return {
@@ -771,8 +905,11 @@ def get_player_status(user_id, league):
     tables = active_tables(league)
     return {
         "status": "queued",
-        # The league's first table, for apps from before there were more.
-        "table_id": tables[0].table_id if tables else None,
+        # The table they're waiting for - or, waiting for any, the league's
+        # first, for apps from before there were more.
+        "table_id": target or (tables[0].table_id if tables else None),
+        "target_table_id": target,
+        "target_table_name": names.get(target) if target else None,
         "league_type": league.game,
         "league_id": league_id,
         "queue_position": queue_status["queue_position"],
@@ -920,24 +1057,28 @@ def _queue_in_order(league_id, limit=None):
 
 def view_queue(league):
     """
-    A league's queue as the apps expect it:
+    A league's queue as the apps expect it, everyone in the order they
+    joined:
         [{queue_position, user_id, username, called, confirmed,
-          table_id, table_name}, ...]
+          table_id, table_name, target_table_id, target_table_name}, ...]
 
-    queue_position is each player's place in line, 1 upwards - see
-    _place_in_line for why the stored column can't be shown directly.
-    table_id / table_name say which table a player whose turn has come is
-    called to.
+    queue_position is each player's place in their own line - the line
+    for the table they chose (target_table_*), or for any table (None) -
+    1 upwards; see _place_in_line for why the stored column can't be
+    shown directly. table_id / table_name say which table a player whose
+    turn has come is called to.
 
     QueueEntry.player is lazy="joined", so this is one query rather than
     one per waiting player.
     """
     league_id = _league_id(league)
     names = table_names(league_id)
-    return [
-        entry.to_dict(place=place, table_names=names)
-        for place, entry in enumerate(_queue_in_order(league_id), start=1)
-    ]
+    places = Counter()
+    result = []
+    for entry in _queue_in_order(league_id):
+        places[entry.target_table_id] += 1
+        result.append(entry.to_dict(place=places[entry.target_table_id], table_names=names))
+    return result
 
 
 def get_pool_table(table_id):

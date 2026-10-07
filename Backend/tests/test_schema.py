@@ -12,7 +12,7 @@ import unittest
 from tests.conftest_base import PING_PONG_TABLE_ID, BaseTestCase
 from sqlalchemy.exc import DBAPIError, InternalError
 
-from database import MYSQL_DEADLOCK, check_schema, ensure_schema, retry_on_deadlock
+from database import LEAGUES, MYSQL_DEADLOCK, check_schema, ensure_schema, retry_on_deadlock
 from models import BILLIARDS, PING_PONG, League, LeagueAccess, Match, Player, PlayerAchievement, PoolTable, QueueEntry, Standing, db
 
 
@@ -164,7 +164,12 @@ class EnsureSchemaTests(BaseTestCase):
         ensure_schema()
         ensure_schema()
 
-        tables = list(db.session.scalars(db.select(PoolTable).where(PoolTable.league_type == PING_PONG)))
+        # CCNY's: the other schools' ping pong leagues get tables of their own.
+        tables = list(
+            db.session.scalars(
+                db.select(PoolTable).where(PoolTable.league_id == League.of(PING_PONG).league_id)
+            )
+        )
         self.assertEqual(len(tables), 1, "added once, however many times it runs")
 
     def test_duplicate_queue_entries_are_removed_and_the_unique_index_restored(self):
@@ -226,7 +231,7 @@ class MovingToLeagues(BaseTestCase):
         db.session.expire_all()
 
         leagues = {league.slug: league for league in db.session.scalars(db.select(League))}
-        self.assertEqual(len(leagues), 6)
+        self.assertEqual(len(leagues), len(LEAGUES))
         ccny_billiards, ccny_ping_pong = leagues["ccny-billiards"], leagues["ccny-ping-pong"]
         self.assertEqual(ccny_billiards.legacy_key, BILLIARDS)
         self.assertEqual(leagues["john-jay-ping-pong"].primary_color.upper(), "#232C64")
@@ -273,7 +278,56 @@ class MovingToLeagues(BaseTestCase):
             [],
             "nobody let back in without the new PIN",
         )
-        self.assertEqual(db.session.scalar(db.select(db.func.count()).select_from(League)), 6)
+        self.assertEqual(db.session.scalar(db.select(db.func.count()).select_from(League)), len(LEAGUES))
+
+
+class AddingSchools(BaseTestCase):
+    """Leagues added to LEAGUES reach a database that already has leagues."""
+
+    SCHOOLS = {
+        "Hunter College": ("#3F0157", "#FCB827"),
+        "City Tech": ("#003DA5", "#F4AA00"),
+        "Queens College": ("#063358", "#E71939"),
+        "Baruch College": ("#052D4F", "#9FC1E9"),
+    }
+
+    def test_each_school_gets_billiards_and_ping_pong_in_its_colours(self):
+        ensure_schema()
+
+        for school, colours in self.SCHOOLS.items():
+            leagues = list(db.session.scalars(db.select(League).where(League.school == school)))
+            self.assertEqual(sorted(l.game for l in leagues), [BILLIARDS, PING_PONG], school)
+            for league in leagues:
+                self.assertEqual((league.primary_color, league.secondary_color), colours, league.name)
+                self.assertFalse(league.has_pin, "nobody plays until the organiser sets a PIN")
+                tables = list(db.session.scalars(db.select(PoolTable).where(PoolTable.league_id == league.league_id)))
+                self.assertEqual([t.table_name for t in tables], ["Table 1"], league.name)
+
+    def test_once_however_many_times_it_runs(self):
+        ensure_schema()
+        ensure_schema()
+
+        self.assertEqual(db.session.scalar(db.select(db.func.count()).select_from(League)), len(LEAGUES))
+        slugs = list(db.session.scalars(db.select(League.slug)))
+        self.assertEqual(len(slugs), len(set(slugs)))
+
+    def test_nobody_is_let_in(self):
+        ensure_schema()
+
+        hunter = League.of("hunter-billiards")
+        self.assertEqual(
+            db.session.scalars(db.select(LeagueAccess).where(LeagueAccess.league_id == hunter.league_id)).all(),
+            [],
+        )
+
+    def test_existing_leagues_are_left_as_they_are(self):
+        ccny = League.of(BILLIARDS)
+        ccny.primary_color = "#123456"
+        db.session.commit()
+
+        ensure_schema()
+
+        self.assertEqual(League.of(BILLIARDS).primary_color, "#123456")
 
 
 class CheckSchemaTests(BaseTestCase):

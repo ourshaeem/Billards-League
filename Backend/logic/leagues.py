@@ -37,6 +37,7 @@ from models import (
     PinAttempt,
     Player,
     PoolTable,
+    QueueEntry,
     Rank,
     Standing,
     db,
@@ -290,7 +291,10 @@ def remove_table(table_id):
     Stop using a table. Refused while anyone is at it - take them off (or
     let them finish) first, so nobody's game disappears. Its games stay
     in the history. Players called to it are sent to another table, or
-    back to the front of the line. Returns (outcome, active match or None).
+    back to the front of the line, and players waiting for it wait for any
+    table instead, keeping their place - as does everyone waiting for a
+    table, once the league is down to one (one table has one line).
+    Returns (outcome, active match or None).
     """
     table = db.session.get(PoolTable, table_id)
     if table is None or not table.is_active:
@@ -304,6 +308,15 @@ def remove_table(table_id):
             return REMOVE_TABLE_RESULT_BUSY, active
         table = db.session.get(PoolTable, table_id, populate_existing=True)
         table.is_active = False
+        db.session.flush()
+        lost = QueueEntry.target_table_id == table_id
+        if len(active_tables(league)) < 2:
+            lost = QueueEntry.target_table_id.isnot(None)  # one table, one line
+        db.session.execute(
+            db.update(QueueEntry)
+            .where(QueueEntry.league_id == league.league_id, lost)
+            .values(target_table_id=None)
+        )
         db.session.commit()
     except Exception:
         db.session.rollback()

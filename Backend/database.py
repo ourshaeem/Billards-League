@@ -205,16 +205,25 @@ ADDED_COLUMNS = [
     ("Pool_Tables", "is_active", "BOOLEAN NOT NULL DEFAULT 1"),
     ("Queue", "league_id", "INTEGER NULL"),
     ("Player_Achievements", "league_id", "INTEGER NULL"),
+    ("Queue", "target_table_id", "INTEGER NULL"),
+    ("Pool_Tables", "table_record_holder_id", "INTEGER NULL"),
 ]
 # (Ratings used to be columns on Players - elo_rating, ping_pong_elo and
 # the rest - and each league's chosen badge too. They moved to Standings;
 # the columns are left in the database as they were, unused, and no
 # longer added to a new one.)
 
-# The leagues a database starts with, in the order the apps list them:
-# (slug, name, school, game, primary colour, secondary colour, legacy key).
-# CCNY's two are the leagues that existed before there were schools - the
-# legacy key is what apps from then call them.
+# Every league, in the order the apps list them: (slug, name, school,
+# game, primary colour, secondary colour, legacy key) - two per school,
+# billiards and ping pong, in the school's own colours. CCNY's two are the
+# leagues that existed before there were schools - the legacy key is what
+# apps from then call them.
+#
+# A database gets the whole list the first time (ensure_schema's
+# add_leagues); a league added here later is added to an existing
+# database on its next start (add_new_leagues), with a first table and no
+# PIN. Leagues are never removed or recoloured from here: once a league
+# exists, it's the database's.
 CCNY_LAVENDER = "#B57EDC"
 LEAGUES = [
     ("ccny-billiards", "CCNY Billiards", "CCNY", "billiards", CCNY_LAVENDER, "#000000", "billiards"),
@@ -223,6 +232,18 @@ LEAGUES = [
     ("john-jay-ping-pong", "John Jay Ping Pong", "John Jay", "ping_pong", "#232C64", "#00AEEF", None),
     ("brooklyn-billiards", "Brooklyn College Billiards", "Brooklyn College", "billiards", "#882345", "#EBB700", None),
     ("brooklyn-ping-pong", "Brooklyn College Ping Pong", "Brooklyn College", "ping_pong", "#882345", "#EBB700", None),
+    # Hunter: purple and gold.
+    ("hunter-billiards", "Hunter College Billiards", "Hunter College", "billiards", "#3F0157", "#FCB827", None),
+    ("hunter-ping-pong", "Hunter College Ping Pong", "Hunter College", "ping_pong", "#3F0157", "#FCB827", None),
+    # City Tech: royal blue and goldenrod.
+    ("city-tech-billiards", "City Tech Billiards", "City Tech", "billiards", "#003DA5", "#F4AA00", None),
+    ("city-tech-ping-pong", "City Tech Ping Pong", "City Tech", "ping_pong", "#003DA5", "#F4AA00", None),
+    # Queens College: navy and red.
+    ("queens-billiards", "Queens College Billiards", "Queens College", "billiards", "#063358", "#E71939", None),
+    ("queens-ping-pong", "Queens College Ping Pong", "Queens College", "ping_pong", "#063358", "#E71939", None),
+    # Baruch: navy and light steel blue.
+    ("baruch-billiards", "Baruch College Billiards", "Baruch College", "billiards", "#052D4F", "#9FC1E9", None),
+    ("baruch-ping-pong", "Baruch College Ping Pong", "Baruch College", "ping_pong", "#052D4F", "#9FC1E9", None),
 ]
 # What a new league's first table is called.
 FIRST_TABLE_NAME = "Table 1"
@@ -266,6 +287,8 @@ def ensure_schema():
          their Standings in CCNY's two leagues, and every player there is
          gets into both without the PIN. Only that first time: after it,
          access is the PIN's to give, and a changed PIN must stay changed.
+         On later starts, any league in LEAGUES the database doesn't have
+         yet is added, with a first table and no PIN.
       6. Every table, queue row and badge belongs to a league - the ones
          from before schools go to CCNY's league of their game.
       7. Old-style Matches rows are converted. The original code kept the
@@ -280,6 +303,8 @@ def ensure_schema():
       9. No rating is below ELO_FLOOR (0): any older one is raised to it,
          with the rank that earns. Games no longer take anyone below it,
          so after the first run this finds nothing.
+     10. Every table record says who holds it, worked out from the games
+         at that table for records set before that was kept.
 
     Never raises. Each step reports what it did, or why it couldn't.
     """
@@ -371,23 +396,24 @@ def ensure_schema():
         db.session.add(PoolTable(table_name=PING_PONG_TABLE_NAME, league_type=PING_PONG))
         return f"added '{PING_PONG_TABLE_NAME}' to Pool_Tables"
 
+    def new_league(order, slug, name, school, game, primary, secondary, legacy):
+        league = League(
+            slug=slug,
+            name=name,
+            school=school,
+            game=game,
+            primary_color=primary,
+            secondary_color=secondary,
+            legacy_key=legacy,
+            sort_order=order,
+        )
+        db.session.add(league)
+        return league
+
     def add_leagues():
         if db.session.scalar(db.select(League.league_id).limit(1)) is not None:
             return None
-        leagues = []
-        for order, (slug, name, school, game, primary, secondary, legacy) in enumerate(LEAGUES):
-            league = League(
-                slug=slug,
-                name=name,
-                school=school,
-                game=game,
-                primary_color=primary,
-                secondary_color=secondary,
-                legacy_key=legacy,
-                sort_order=order,
-            )
-            db.session.add(league)
-            leagues.append(league)
+        leagues = [new_league(order, *row) for order, row in enumerate(LEAGUES)]
         db.session.flush()
         legacy = {league.legacy_key: league for league in leagues if league.legacy_key}
 
@@ -419,6 +445,26 @@ def ensure_schema():
             f"moved {moved} player(s)' ratings into Standings; let {len(players)} player(s) into "
             f"{' and '.join(l.name for l in legacy.values())}"
         )
+
+    def add_new_leagues():
+        # Leagues added to LEAGUES since this database got its first ones.
+        # Nobody is let in: a new league is the PIN's to open.
+        existing = set(db.session.scalars(db.select(League.slug)))
+        if not existing:
+            return None  # no leagues at all is add_leagues' job
+        added = [
+            new_league(order, *row)
+            for order, row in enumerate(LEAGUES)
+            if row[0] not in existing
+        ]
+        if not added:
+            return None
+        db.session.flush()
+        for league in added:
+            db.session.add(
+                PoolTable(table_name=FIRST_TABLE_NAME, league_id=league.league_id, league_type=league.game)
+            )
+        return f"added {len(added)} league(s): {', '.join(l.name for l in added)}"
 
     def _move_ratings_to_standings(legacy):
         """
@@ -557,6 +603,42 @@ def ensure_schema():
                     added.append(index.name)
         return f"added index(es) {', '.join(added)}" if added else None
 
+    def name_record_holders():
+        # Records set before their holder was kept: replay each table's
+        # games, as the badges do (logic/achievements.py) - the king holds
+        # the first seat, and a run is the king winning again. The holder
+        # is whoever most recently put together a run as long as the
+        # record; after a season reset that is this season's.
+        tables = list(
+            db.session.scalars(
+                db.select(PoolTable).where(
+                    PoolTable.table_record_holder_id.is_(None),
+                    PoolTable.table_record_streak > 0,
+                )
+            )
+        )
+        named = 0
+        for table in tables:
+            games = db.session.execute(
+                db.select(Match.player_one_id, Match.winner_id)
+                .where(
+                    Match.table_id == table.table_id,
+                    Match.match_status == Match.STATUS_FINISHED,
+                    Match.winner_id.isnot(None),
+                )
+                .order_by(Match.played_at, Match.match_id)
+            ).all()
+            king, run, holder = None, 0, None
+            for first_seat, winner in games:
+                run = run + 1 if king is not None and first_seat == king and winner == king else 1
+                king = winner
+                if run == table.table_record_streak:
+                    holder = winner
+            if holder is not None:
+                table.table_record_holder_id = holder
+                named += 1
+        return f"named the holder of {named} table record(s)" if named else None
+
     def raise_ratings_to_floor():
         floor_rank = Rank.for_elo(ELO_FLOOR)
         below = list(db.session.scalars(db.select(Standing).where(Standing.elo < ELO_FLOOR)))
@@ -574,6 +656,7 @@ def ensure_schema():
     step("Table 1", add_table_one)
     step("Ping pong table", add_ping_pong_table)
     step("Leagues", add_leagues)
+    step("New leagues", add_new_leagues)
     step("Tables' leagues", place_tables)
     step("Queue entries' leagues", place_queue_rows)
     step("Badges' leagues", place_badges)
@@ -582,6 +665,7 @@ def ensure_schema():
     step("Indexes", add_indexes)
     step("Old badge index", drop_old_badge_index)
     step("Ratings below the floor", raise_ratings_to_floor)
+    step("Table record holders", name_record_holders)
 
 
 def seconds_since(column):

@@ -390,7 +390,8 @@ class ReadyCheckRoutes(ApiTestCase):
         queue = self.client.get("/queue/1").get_json()
         self.assertEqual(queue, [
             {"queue_position": 1, "user_id": self.bob, "username": "bob",
-             "called": True, "confirmed": False, "table_id": 1, "table_name": "Table 1"},
+             "called": True, "confirmed": False, "table_id": 1, "table_name": "Table 1",
+             "target_table_id": None, "target_table_name": None},
         ])
 
     def entry_for(self, user_id):

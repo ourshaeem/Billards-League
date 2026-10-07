@@ -54,6 +54,8 @@ const POLL_INTERVAL_MS = 2500;
 const HISTORY_EVERY_N_POLLS = 6;
 const HISTORY_LIMIT = 15;
 const LEAGUES_RETRY_MS = 5000;
+// The champions on the league picker change only when a game ends.
+const CHAMPIONS_REFRESH_MS = 60000;
 
 const APP_NAME = 'Billiards & Ping Pong';
 const EMPTY_HISTORY = { all: [], mine: [] };
@@ -158,6 +160,12 @@ export default function App() {
   // What the panel offers: read_only from the latest status poll (which
   // notices a changed PIN at once), else the directory's.
   const readOnly = matchStatus?.read_only ?? league?.read_only ?? false;
+  // The league picker is showing (a chosen view, or a dashboard with no
+  // league to show), and the league whose school it's looking at.
+  const pickerOpen =
+    Boolean(userId) &&
+    (view === 'league' || ((view === 'dashboard' || view === 'league-settings') && leagueId === null));
+  const [preview, setPreview] = useState(null);
 
   const pushToast = useCallback((message, tone = 'info') => {
     if (!message) return;
@@ -229,9 +237,13 @@ export default function App() {
 
   // The league's colours follow the league, and light or dark. Set on
   // <html> so the page background, outside the React tree, changes too.
-  const leagueColors = league ? `${league.league_id}:${league.primary_color}:${league.secondary_color}` : '';
+  // On the picker, the school being looked at.
+  const dressedIn = (pickerOpen && preview) || league;
+  const leagueColors = dressedIn
+    ? `${dressedIn.league_id}:${dressedIn.primary_color}:${dressedIn.secondary_color}`
+    : '';
   useEffect(() => {
-    applyLeagueColors(league, theme);
+    applyLeagueColors(dressedIn, theme);
     // Keyed on the colours, not the league object, which every directory
     // reload replaces.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -361,6 +373,26 @@ export default function App() {
     });
     return () => controller.abort();
   }, [view, countries, pushToast]);
+
+  // The champions across every school, at the top of the league picker:
+  // loaded when it opens, and again every minute while it's open.
+  const [champions, setChampions] = useState(null);
+  useEffect(() => {
+    if (!pickerOpen) return undefined;
+    const controller = new AbortController();
+    let timer;
+    const load = async () => {
+      const res = await api.getGlobalLeaderboard(controller.signal);
+      if (controller.signal.aborted || res.aborted) return;
+      if (res.ok && res.data?.sports) setChampions(res.data);
+      timer = setTimeout(load, CHAMPIONS_REFRESH_MS);
+    };
+    load();
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
+  }, [pickerOpen]);
 
   // --- Polling ---------------------------------------------------------
 
@@ -689,9 +721,13 @@ export default function App() {
     return { ok: true };
   };
 
-  const handleJoin = async () => {
+  /**
+   * tableId: the table to wait for, or null for whichever frees up first.
+   * Already waiting, it changes where they'll play and keeps their place.
+   */
+  const handleJoin = async (tableId = null) => {
     setBusy(true);
-    const res = await api.joinQueue(leagueId);
+    const res = await api.joinQueue(leagueId, tableId);
     setBusy(false);
 
     if (!res.ok) {
@@ -703,10 +739,15 @@ export default function App() {
       return;
     }
 
+    const tableName = league?.tables?.find((t) => t.table_id === tableId)?.table_name;
     if (res.data?.match_started) {
       pushToast('Match found - get to the table.', 'success');
+    } else if (res.data?.status === 'switched') {
+      pushToast(res.data.message || 'Changed - you kept your place.', 'success');
     } else if (res.data?.status === 'already_queued') {
       pushToast("You're already in the queue.", 'info');
+    } else if (tableName && league.tables.length > 1) {
+      pushToast(`You joined the line for ${tableName}.`, 'success');
     } else {
       pushToast('You joined the queue.', 'success');
     }
@@ -1102,7 +1143,10 @@ export default function App() {
             leagues={leagues}
             profile={profile}
             theme={theme}
+            champions={champions}
+            currentUserId={userId}
             onChoose={chooseLeague}
+            onPreview={setPreview}
           />
         )}
 
@@ -1176,7 +1220,7 @@ export default function App() {
                 leagues={leagues}
                 readOnly={readOnly}
                 onUnlock={handleUnlock}
-                queueLength={queue.length}
+                queue={queue}
                 topPlayers={topPlayers}
                 onJoin={handleJoin}
                 onLeave={handleLeave}
@@ -1204,7 +1248,8 @@ export default function App() {
                   currentUsername={user.username}
                   onRemove={isAdmin ? handleRemoveFromQueue : null}
                   busy={busy}
-                  manyTables={tables.length > 1}
+                  manyTables={league.tables.length > 1}
+                  tables={league.tables}
                 />
                 <MatchHistoryCard
                   history={history}

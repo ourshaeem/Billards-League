@@ -22,7 +22,7 @@
  * the PIN changed, say) still shows, with the prompt above it.
  */
 import React, { useEffect, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 
@@ -73,7 +73,8 @@ export function StatusPanel({
   leagues,
   readOnly,
   onUnlock,
-  queueLength,
+  queue = [],
+  queueLength = queue.length,
   onJoin,
   onLeave,
   onConfirm,
@@ -169,11 +170,19 @@ export function StatusPanel({
         />
       )}
       {state === 'queued' && (
-        <QueuedState status={status} onLeave={onLeave} busy={busy} queueLength={queueLength} />
+        <QueuedState
+          status={status}
+          league={league}
+          queue={queue}
+          onJoin={onJoin}
+          onLeave={onLeave}
+          busy={busy}
+          queueLength={queueLength}
+        />
       )}
       {askOnly ? <PinPrompt league={league} onUnlock={onUnlock} busy={busy} /> : null}
       {state === 'idle' && !askOnly && (
-        <IdleState onJoin={onJoin} busy={busy} queueLength={queueLength} league={league} />
+        <IdleState onJoin={onJoin} busy={busy} queueLength={queueLength} queue={queue} league={league} />
       )}
     </View>
   );
@@ -351,8 +360,63 @@ function LoadingState() {
   );
 }
 
-function IdleState({ onJoin, busy, queueLength, league }) {
+/**
+ * Where to play, at a league with more than one table: whichever table
+ * frees up first, or one in particular. Chips, each saying how many are
+ * already waiting in that line.
+ */
+function TableChoice({ label, tables, queue, value, onChange, disabled, style }) {
+  const theme = useTheme();
+  const waiting = (key) => queue.filter((entry) => (entry.target_table_id ?? null) === key).length;
+  const options = [
+    { key: null, label: 'First available' },
+    ...tables.map((t) => ({ key: t.table_id, label: t.table_name })),
+  ];
+  return (
+    <View style={[styles.choice, style]} accessibilityRole="radiogroup" accessibilityLabel={label}>
+      <Text style={[styles.choiceLabel, { color: theme.panelDim }]}>{label}</Text>
+      <View style={styles.choiceOptions}>
+        {options.map((option) => {
+          const count = waiting(option.key);
+          const checked = value === option.key;
+          const countText = count === 0 ? 'nobody waiting' : `${count} waiting`;
+          return (
+            <Pressable
+              key={option.key ?? 'any'}
+              onPress={() => onChange(option.key)}
+              disabled={disabled}
+              accessibilityRole="radio"
+              accessibilityState={{ checked, selected: checked, disabled }}
+              accessibilityLabel={`${option.label}, ${countText}`}
+              style={({ pressed }) => [
+                styles.chip,
+                {
+                  borderColor: checked ? theme.panelCtaBg : theme.panelLine,
+                  backgroundColor: checked ? theme.panelCtaBg : pressed ? theme.panelFillStrong : theme.panelFill,
+                  opacity: disabled ? 0.7 : 1,
+                },
+              ]}
+            >
+              <Text style={[styles.chipName, { color: checked ? theme.panelCtaText : theme.panelText }]}>
+                {option.label}
+              </Text>
+              <Text style={[styles.chipCount, { color: checked ? theme.panelCtaText : theme.panelDim }]}>
+                {countText}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
+function IdleState({ onJoin, busy, queueLength, queue, league }) {
   const tables = league.tables || [];
+  const many = tables.length > 1;
+  // null: the first table that frees up.
+  const [choice, setChoice] = useState(null);
+  const chosen = many ? tables.find((t) => t.table_id === choice) : null;
   return (
     <>
       <Headline>{tables.length === 1 ? tables[0].table_name : league.name} is open to you</Headline>
@@ -361,18 +425,28 @@ function IdleState({ onJoin, busy, queueLength, league }) {
           ? 'Nobody is waiting. Join and you play as soon as someone else does.'
           : `${queueLength} ${queueLength === 1 ? 'player is' : 'players are'} waiting. Join the line to get a game.`}
       </Sub>
+      {many ? (
+        <TableChoice
+          label="Where do you want to play?"
+          tables={tables}
+          queue={queue}
+          value={chosen ? chosen.table_id : null}
+          onChange={setChoice}
+          disabled={busy}
+        />
+      ) : null}
       <Button
-        title={busy ? 'Joining...' : 'Join the queue'}
+        title={busy ? 'Joining...' : chosen ? `Join the line for ${chosen.table_name}` : 'Join the queue'}
         variant="panelPrimary"
         size="lg"
-        onPress={onJoin}
+        onPress={() => onJoin(chosen ? chosen.table_id : null)}
         disabled={busy}
       />
     </>
   );
 }
 
-function QueuedState({ status, onLeave, busy, queueLength }) {
+function QueuedState({ status, league, queue, onJoin, onLeave, busy, queueLength }) {
   // Ticks locally so the number moves every second rather than lurching
   // with each poll. The server enforces the wait itself, so drift here
   // can't let anyone leave early.
@@ -381,10 +455,18 @@ function QueuedState({ status, onLeave, busy, queueLength }) {
   const canLeave = secondsLeft <= 0;
   const position = status.queue_position;
   const ahead = Math.max(0, (position ?? 1) - 1);
+  const tables = league.tables || [];
+  const many = tables.length > 1;
+  const target = status.target_table_id ?? null;
 
   return (
     <>
       <Headline>{ahead === 0 ? "You're up next" : `You're number ${position} in line`}</Headline>
+      {many ? (
+        <Where>
+          {status.target_table_name ? `Waiting for ${status.target_table_name}` : 'Waiting for the first free table'}
+        </Where>
+      ) : null}
       <Sub>
         {ahead === 0
           ? "Stay close to the table. When it's your turn you'll have a minute to say you're here - keep the app open."
@@ -415,6 +497,18 @@ function QueuedState({ status, onLeave, busy, queueLength }) {
           Joined by accident? Leaving unlocks shortly, so nobody drops out of a match that was
           about to start.
         </Sub>
+      ) : null}
+
+      {many ? (
+        <TableChoice
+          label="Change where you'll play - you keep your place"
+          tables={tables}
+          queue={queue}
+          value={target}
+          onChange={(key) => key !== target && onJoin(key)}
+          disabled={busy}
+          style={styles.choiceQueued}
+        />
       ) : null}
     </>
   );
@@ -789,4 +883,11 @@ const styles = StyleSheet.create({
   pinField: { flex: 1, marginBottom: 0 },
   pinInput: { fontSize: 22, letterSpacing: 8, textAlign: 'center', fontVariant: ['tabular-nums'] },
   pinButton: { marginTop: 25 },
+  choice: { marginBottom: 18 },
+  choiceQueued: { marginTop: 18, marginBottom: 0 },
+  choiceLabel: { fontFamily: fonts.semibold, fontSize: type.small, marginBottom: 8 },
+  choiceOptions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip: { minWidth: 104, paddingVertical: 8, paddingHorizontal: 12, borderRadius: radius.md, borderWidth: 1 },
+  chipName: { fontFamily: fonts.bold, fontSize: type.small },
+  chipCount: { fontFamily: fonts.regular, fontSize: 12 },
 });

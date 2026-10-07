@@ -64,7 +64,7 @@ def reset_league_standings(league):
         db.session.execute(
             db.update(PoolTable)
             .where(PoolTable.league_id == resolved.league_id)
-            .values(current_streak=0, table_record_streak=0)
+            .values(current_streak=0, table_record_streak=0, table_record_holder_id=None)
         )
         db.session.commit()
         # Bulk updates skip the session; don't serve anyone the old numbers.

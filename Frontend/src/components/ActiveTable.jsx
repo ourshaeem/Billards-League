@@ -7,7 +7,7 @@
  * For the organiser (onRemove given), each player has a Remove button.
  */
 import React, { useState } from 'react';
-import { Crown, Swords } from 'lucide-react';
+import { Crown, Swords, Trophy } from 'lucide-react';
 
 import { RemoveButton, RemoveConfirm } from './AdminControls.jsx';
 import { NameBadge } from './Badges.jsx';
@@ -169,15 +169,33 @@ function TableBlock({ table, showName, league, currentUserId, onRemove, busy }) 
       {table.king_streak >= 2 && (
         <p className="small muted matchup-streak">
           {table.king.username} has won {table.king_streak} in a row
-          {table.king_streak >= (table.table_record_streak ?? 0)
-            ? ' - the table record.'
-            : `. The table record is ${table.table_record_streak}.`}
+          {table.king_streak >= (table.table_record_streak ?? 0) ? ' - the table record.' : '.'}
         </p>
       )}
-      {!(table.king_streak >= 2) && table.table_record_streak >= 2 && (
-        <p className="small muted matchup-streak">
-          Table record: {table.table_record_streak} wins in a row.
-        </p>
+      <TableRecord table={table} league={league} currentUserId={currentUserId} />
+    </div>
+  );
+}
+
+/** The table's longest winning run, and whose it is - their picture and name. */
+function TableRecord({ table, league, currentUserId }) {
+  const record = table.table_record_streak ?? 0;
+  const holder = table.table_record_holder;
+  if (record < 2) return null;
+  return (
+    <div className="table-record">
+      <Trophy size={16} aria-hidden="true" className="table-record-icon" />
+      <span className="table-record-label">
+        Table record: <strong>{record} wins in a row</strong>
+        {holder ? ', by' : '.'}
+      </span>
+      {holder && (
+        <PlayerChip
+          player={holder}
+          league={league}
+          size="sm"
+          isYou={holder.user_id === currentUserId}
+        />
       )}
     </div>
   );

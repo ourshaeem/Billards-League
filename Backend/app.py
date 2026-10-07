@@ -60,6 +60,7 @@ from logic.corrections import (
     void_finished_match,
 )
 from logic.countries import country_list
+from logic.global_leaderboard import global_leaderboard
 from logic.leaderboard import top50_leaderboard
 from logic.match_history import (
     DEFAULT_LIMIT,
@@ -118,10 +119,12 @@ from logic.privacy import privacy_policy_html
 from logic.seasons import league_standings, reset_league_standings
 from logic.profile import EDITABLE_FIELDS, get_profile, get_public_profile, set_email, update_profile
 from logic.tables import (
+    active_tables,
     default_table_for,
     league_for_table,
     league_tables,
     list_leagues,
+    table_names,
     table_snapshot,
 )
 from logic.top_players import top_players
@@ -133,6 +136,9 @@ from logic.manage_queue import (
     CONFIRM_RESULT_TOO_LATE,
     JOIN_RESULT_ALREADY_PLAYING,
     JOIN_RESULT_ALREADY_QUEUED,
+    JOIN_RESULT_CALLED_ELSEWHERE,
+    JOIN_RESULT_NO_SUCH_TABLE,
+    JOIN_RESULT_SWITCHED,
     READY_CHECK_SECONDS,
     STEP_DOWN_RESULT_IN_GAME,
     STEP_DOWN_RESULT_NOT_HOLDING,
@@ -858,6 +864,22 @@ def read_table_and_league(source, must_exist=False):
     return table_id, table_league, None
 
 
+def read_table_choice(source, table_id):
+    """
+    The table a player joining asked to wait for: table_id (already read
+    by read_table_and_league), or None for whichever frees up first.
+
+    An app from before tables could be chosen also sends a table_id - its
+    league's first table, to say which league - along with league_type
+    and never league_id. That isn't a choice, so it joins the line for any
+    table, as it always meant to.
+    """
+    if source.get("table_id") is None:
+        return None
+    from_before = source.get("league_id") in (None, "") and source.get("league_type") not in (None, "")
+    return None if from_before else table_id
+
+
 def signed_in_user():
     """The signed-in player's user_id, or None - for routes anyone may call."""
     try:
@@ -946,6 +968,16 @@ def register_routes(app):
         if bad:
             return bad
         return jsonify(top50_leaderboard(league or League.of(BILLIARDS)))
+
+    # 1-. THE CHAMPIONS ACROSS EVERY SCHOOL (Public) - the top 3 in each
+    # game this week, this month and of all time, in any league.
+    @app.route("/leaderboard/global", methods=["GET"])
+    def get_global_leaderboard():
+        try:
+            return jsonify(global_leaderboard())
+        except Exception:
+            log.exception("global leaderboard failed")
+            return error("Couldn't load the champions just now.", 500)
 
     # 1a. PLAYERS OF THE DAY, WEEK AND MONTH (Public) - who gained the
     # most points in each, in the league's own calendar.
@@ -1071,23 +1103,36 @@ def register_routes(app):
 
         # league_id picks the league; a table_id picks its league (apps
         # from before send that, with league_type). Any of them together
-        # have to agree.
-        _table_id, league, bad = read_table_and_league(json_body(), must_exist=True)
+        # have to agree. table_id is also the table to wait for, if the
+        # player chose one; without one they wait for the first free table.
+        data = json_body()
+        table_id, league, bad = read_table_and_league(data, must_exist=True)
         if bad:
             return bad
+        choice = read_table_choice(data, table_id)
         if not has_access(user_id, league):
             return error(NEEDS_PIN, 403, read_only=True, league_id=league.league_id)
         if default_table_for(league) is None:
             return error(f"{league.name} doesn't have a table yet.", 404)
 
         try:
-            result = join_queue(user_id, league)
+            result = join_queue(user_id, league, choice)
         except Exception:
             log.exception("join_queue failed (user %s, league %s)", user_id, league.league_id)
             return error("Couldn't add you to the queue just now. Please try again.", 500)
 
         if result == JOIN_RESULT_ALREADY_PLAYING:
             return error("You're already playing or holding a table.", 409)
+        if result == JOIN_RESULT_NO_SUCH_TABLE:
+            return error(f"That table isn't in use in {league.name} any more.", 400, field="table_id")
+        if result == JOIN_RESULT_CALLED_ELSEWHERE:
+            status = get_queue_status(user_id, league) or {}
+            called_to = table_names(league).get(status.get("table_id"), "a table")
+            return error(
+                f"It's your turn at {called_to} - say you're here, or leave the queue "
+                "to wait for another table.",
+                409,
+            )
 
         if result == JOIN_RESULT_ALREADY_QUEUED:
             # Tapping Join again when it's your turn says you're here, as
@@ -1113,10 +1158,21 @@ def register_routes(app):
             log.exception("matchmaking after join failed (league %s)", league.league_id)
             match_started = False
 
+        # Named only where there's a choice: a league with one table has one line.
+        many = len(active_tables(league)) > 1
+        waiting_for = table_names(league).get(choice) if choice and many else None
         if match_started:
             message = "Match found - get to the table!"
+        elif result == JOIN_RESULT_SWITCHED:
+            message = (
+                f"You're waiting for {waiting_for} now - you kept your place."
+                if waiting_for
+                else "You're waiting for the first free table now - you kept your place."
+            )
         elif result == JOIN_RESULT_ALREADY_QUEUED:
             message = "You're already in the queue, waiting for an opponent."
+        elif waiting_for:
+            message = f"Joined the line for {waiting_for}! Waiting for an opponent..."
         else:
             message = "Joined the queue! Waiting for an opponent..."
 

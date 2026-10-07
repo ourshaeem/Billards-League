@@ -163,8 +163,33 @@ function TableBlock({ table, showName, divided, league, currentUserId, onRemove,
 
       {table.king_streak >= 2 ? (
         <Txt variant="small" muted style={styles.streak}>
-          {table.king.username} has won {table.king_streak} in a row.
+          {table.king.username} has won {table.king_streak} in a row
+          {table.king_streak >= (table.table_record_streak ?? 0) ? ' - the table record.' : '.'}
         </Txt>
+      ) : null}
+      <TableRecord table={table} league={league} currentUserId={currentUserId} />
+    </View>
+  );
+}
+
+/** The table's longest winning run, and whose it is - their picture and name. */
+function TableRecord({ table, league, currentUserId }) {
+  const theme = useTheme();
+  const record = table.table_record_streak ?? 0;
+  const holder = table.table_record_holder;
+  if (record < 2) return null;
+  return (
+    <View style={[styles.record, { backgroundColor: theme.accentWash }]}>
+      <View style={styles.recordHead}>
+        <MaterialCommunityIcons name="trophy-outline" size={16} color={theme.accent} />
+        <Txt variant="small" muted>
+          Table record:{' '}
+          <Text style={{ fontFamily: fonts.semibold, color: theme.text }}>{record} wins in a row</Text>
+          {holder ? ', by' : '.'}
+        </Txt>
+      </View>
+      {holder ? (
+        <PlayerChip player={holder} league={league} size="sm" isYou={holder.user_id === currentUserId} />
       ) : null}
     </View>
   );
@@ -211,6 +236,26 @@ function turnLabel(entry, showTable) {
   return entry.confirmed ? `here${where}` : `up${where || ' - confirming'}`;
 }
 
+/**
+ * A league's queue, split into its lines when it has more than one table:
+ * the line for whichever table frees up first, then one for each table
+ * someone chose. queue_position is each player's place in their own line.
+ */
+function linesOf(queue, tables) {
+  const lines = [{ key: 'any', title: 'First available table', entries: [] }];
+  (tables || []).forEach((t) => lines.push({ key: t.table_id, title: t.table_name, entries: [] }));
+  queue.forEach((entry) => {
+    const key = entry.target_table_id ?? 'any';
+    let line = lines.find((l) => l.key === key);
+    if (!line) {
+      line = { key, title: entry.target_table_name || 'Another table', entries: [] };
+      lines.push(line);
+    }
+    line.entries.push(entry);
+  });
+  return lines.filter((l) => l.entries.length > 0);
+}
+
 export function QueueCard({
   queue,
   loaded,
@@ -218,17 +263,104 @@ export function QueueCard({
   onRemove = null,
   busy = false,
   manyTables = false,
+  tables = null,
 }) {
   const theme = useTheme();
   const openPlayer = useOpenPlayer();
   // user_id of the player the organiser is asking to remove.
   const [asking, setAsking] = useState(null);
+  const lines = manyTables ? linesOf(queue, tables) : [{ key: 'any', title: null, entries: queue }];
+
+  const row = (player, index, entries) => {
+    const isYou = currentUsername && player.username === currentUsername;
+    const place = player.queue_position ?? index + 1;
+    const next = place === 1 || player.called;
+    const turn = turnLabel(player, manyTables);
+    const said = turn ?? (place === 1 ? 'up next' : null);
+    const removable = Boolean(onRemove && player.user_id);
+    const askingHere = removable && asking === player.user_id;
+    const divided = index < entries.length - 1 && { borderBottomWidth: 1, borderBottomColor: theme.lineSoft };
+    return (
+      <View key={`${player.username}-${player.user_id}`} style={divided}>
+        {/* The Remove button sits beside the row, not inside it: a
+            button inside a button can't be reached by a screen
+            reader, which reads the outer one as a single control. */}
+        <View style={styles.queueLine}>
+          <Pressable
+            onPress={() => openPlayer(player.user_id)}
+            disabled={!player.user_id}
+            accessibilityRole="button"
+            accessibilityLabel={`Number ${place}, ${player.username}${isYou ? ', you' : ''}${said ? `, ${said}` : ''}`}
+            accessibilityHint="Opens their profile"
+            style={({ pressed }) => [styles.queueRow, pressed && { backgroundColor: theme.accentWash }]}
+          >
+            <View style={[styles.queuePos, { backgroundColor: next ? theme.accent : theme.fillSoft }]}>
+              <Text style={[styles.queuePosText, { color: next ? theme.onAccent : theme.textMuted }]}>
+                {place}
+              </Text>
+            </View>
+            <Txt numberOfLines={1} weight="semibold" style={styles.queueName}>
+              {player.username}
+            </Txt>
+            {isYou ? <YouTag /> : null}
+            {turn ? (
+              <View
+                style={[
+                  styles.turnTag,
+                  { backgroundColor: player.confirmed ? theme.accent : theme.accentSoft },
+                ]}
+              >
+                <Text
+                  style={[styles.turnTagText, { color: player.confirmed ? theme.onAccent : theme.accentText }]}
+                >
+                  {turn.toUpperCase()}
+                </Text>
+              </View>
+            ) : place === 1 ? (
+              <Txt variant="label" color={theme.accentText}>
+                up next
+              </Txt>
+            ) : null}
+          </Pressable>
+          {removable ? (
+            <RemoveButton
+              name={player.username}
+              place="the queue"
+              expanded={askingHere}
+              onPress={() => setAsking(askingHere ? null : player.user_id)}
+            />
+          ) : null}
+        </View>
+        {askingHere ? (
+          <RemoveConfirm
+            question={`Take ${player.username} out of the queue?`}
+            consequence={
+              player.called
+                ? "It's their turn, so the next in line is up instead."
+                : 'They lose their place in line.'
+            }
+            busy={busy}
+            onCancel={() => setAsking(null)}
+            onConfirm={async () => {
+              await onRemove(player);
+              setAsking(null);
+            }}
+          />
+        ) : null}
+      </View>
+    );
+  };
+
   return (
     <Card
       title="Waiting to play"
       icon="users"
       right={<Pill>{`${queue.length} ${queue.length === 1 ? 'player' : 'players'}`}</Pill>}
-      footer="The winner keeps the table and plays whoever is next in line. When it's your turn, you have a minute to say you're here."
+      footer={
+        manyTables
+          ? "Each table takes the next player who chose it, and only then the next who'll play anywhere. The winner keeps the table. When it's your turn, you have a minute to say you're here."
+          : "The winner keeps the table and plays whoever is next in line. When it's your turn, you have a minute to say you're here."
+      }
     >
       {!loaded ? <Txt muted style={styles.empty}>Checking the queue...</Txt> : null}
 
@@ -239,89 +371,21 @@ export function QueueCard({
       ) : null}
 
       {loaded && queue.length > 0
-        ? queue.map((player, index) => {
-            const isYou = currentUsername && player.username === currentUsername;
-            const next = index === 0 || player.called;
-            const turn = turnLabel(player, manyTables);
-            const said = turn ?? (index === 0 ? 'up next' : null);
-            const removable = Boolean(onRemove && player.user_id);
-            const askingHere = removable && asking === player.user_id;
-            const divided = index < queue.length - 1 && { borderBottomWidth: 1, borderBottomColor: theme.lineSoft };
-            return (
-              <View key={`${player.username}-${player.queue_position}`} style={divided}>
-                {/* The Remove button sits beside the row, not inside it: a
-                    button inside a button can't be reached by a screen
-                    reader, which reads the outer one as a single control. */}
-                <View style={styles.queueLine}>
-                  <Pressable
-                    onPress={() => openPlayer(player.user_id)}
-                    disabled={!player.user_id}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Number ${index + 1}, ${player.username}${isYou ? ', you' : ''}${said ? `, ${said}` : ''}`}
-                    accessibilityHint="Opens their profile"
-                    style={({ pressed }) => [styles.queueRow, pressed && { backgroundColor: theme.accentWash }]}
-                  >
-                    <View
-                      style={[styles.queuePos, { backgroundColor: next ? theme.accent : theme.fillSoft }]}
-                    >
-                      <Text style={[styles.queuePosText, { color: next ? theme.onAccent : theme.textMuted }]}>
-                        {index + 1}
-                      </Text>
-                    </View>
-                    <Txt numberOfLines={1} weight="semibold" style={styles.queueName}>
-                      {player.username}
-                    </Txt>
-                    {isYou ? <YouTag /> : null}
-                    {turn ? (
-                      <View
-                        style={[
-                          styles.turnTag,
-                          { backgroundColor: player.confirmed ? theme.accent : theme.accentSoft },
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            styles.turnTagText,
-                            { color: player.confirmed ? theme.onAccent : theme.accentText },
-                          ]}
-                        >
-                          {turn.toUpperCase()}
-                        </Text>
-                      </View>
-                    ) : index === 0 ? (
-                      <Txt variant="label" color={theme.accentText}>
-                        up next
-                      </Txt>
-                    ) : null}
-                  </Pressable>
-                  {removable ? (
-                    <RemoveButton
-                      name={player.username}
-                      place="the queue"
-                      expanded={askingHere}
-                      onPress={() => setAsking(askingHere ? null : player.user_id)}
-                    />
-                  ) : null}
+        ? lines.map((line, lineIndex) => (
+            <View key={line.key} style={lineIndex > 0 && styles.lineGap}>
+              {line.title ? (
+                <View style={[styles.lineHead, { borderBottomColor: theme.line }]}>
+                  <Txt variant="label" muted accessibilityRole="header">
+                    {line.title.toUpperCase()}
+                  </Txt>
+                  <Txt variant="small" muted>
+                    {`${line.entries.length} waiting`}
+                  </Txt>
                 </View>
-                {askingHere ? (
-                  <RemoveConfirm
-                    question={`Take ${player.username} out of the queue?`}
-                    consequence={
-                      player.called
-                        ? "It's their turn, so the next in line is up instead."
-                        : 'They lose their place in line.'
-                    }
-                    busy={busy}
-                    onCancel={() => setAsking(null)}
-                    onConfirm={async () => {
-                      await onRemove(player);
-                      setAsking(null);
-                    }}
-                  />
-                ) : null}
-              </View>
-            );
-          })
+              ) : null}
+              {line.entries.map((player, index) => row(player, index, line.entries))}
+            </View>
+          ))
         : null}
     </Card>
   );
@@ -347,6 +411,17 @@ const styles = StyleSheet.create({
   seatLabel: { fontFamily: fonts.semibold, fontSize: 11.5, letterSpacing: 0.5 },
   vs: { fontFamily: fonts.display, fontStyle: 'italic', fontSize: type.large },
   streak: { marginTop: 12 },
+  lineGap: { marginTop: 16 },
+  lineHead: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    gap: 10,
+    paddingBottom: 6,
+    borderBottomWidth: 1,
+  },
+  record: { marginTop: 12, paddingVertical: 6, paddingHorizontal: 10, borderRadius: radius.md, gap: 4 },
+  recordHead: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
   tableHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 6 },
   tableName: { flexShrink: 1 },
   queueLine: { flexDirection: 'row', alignItems: 'center', gap: 10 },

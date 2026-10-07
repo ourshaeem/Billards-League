@@ -58,7 +58,7 @@ export function PlayScreen({ navigation }) {
         manyTables={tables.length > 1}
         readOnly={live.readOnly}
         onUnlock={live.unlock}
-        queueLength={live.queue.length}
+        queue={live.queue}
         onJoin={live.join}
         onLeave={live.leave}
         onConfirm={live.confirm}
@@ -86,6 +86,7 @@ export function PlayScreen({ navigation }) {
         onRemove={isAdmin ? live.removeFromQueue : null}
         busy={live.busy}
         manyTables={tables.length > 1}
+        tables={tables}
       />
 
       {isAdmin && league ? (

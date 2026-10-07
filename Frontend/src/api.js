@@ -284,6 +284,15 @@ export const getLeagueQueue = (leagueId, signal) => request(`/leagues/${leagueId
 export const unlockLeague = (leagueId, pin) =>
   request('/league/unlock', { method: 'POST', auth: true, body: { league_id: leagueId, pin } });
 
+/**
+ * The champions across every school - the top 3 in each game this week,
+ * this month and of all time, in any league: { timezone, sports: {
+ * billiards: { week, month, all_time }, ping_pong: {...} } }, each a list
+ * of { place, player: card, league_id, league_name, school, wins, losses,
+ * points (week, month) | elo (all time) }.
+ */
+export const getGlobalLeaderboard = (signal) => request('/leaderboard/global', { signal });
+
 export const getLeaderboard = (leagueId, signal) =>
   request(withQuery('/leaderboard', { league_id: leagueId }), { signal });
 
@@ -424,8 +433,19 @@ export const uploadProfilePicture = (image) =>
 export const getMatchStatus = (leagueId, signal) =>
   request(withQuery('/match/status', { league_id: leagueId }), { auth: true, signal });
 
-export const joinQueue = (leagueId) =>
-  request('/queue/join', { method: 'POST', auth: true, body: { league_id: leagueId } });
+/**
+ * Join a league's queue, waiting for tableId - or, null, for whichever of
+ * its tables frees up first. Already waiting, it changes where they'll
+ * play and they keep their place: { status: "switched" }. 409 when their
+ * turn has already come at another table; 400 (field "table_id") for a
+ * table no longer in use.
+ */
+export const joinQueue = (leagueId, tableId = null) =>
+  request('/queue/join', {
+    method: 'POST',
+    auth: true,
+    body: tableId ? { league_id: leagueId, table_id: tableId } : { league_id: leagueId },
+  });
 
 export const leaveQueue = (leagueId) =>
   request('/queue/leave', { method: 'POST', auth: true, body: { league_id: leagueId } });

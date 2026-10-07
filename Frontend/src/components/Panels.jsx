@@ -32,8 +32,30 @@ function TurnTag({ entry, showTable }) {
 }
 
 /**
+ * A league's queue, split into its lines when it has more than one table:
+ * the line for whichever table frees up first, then one for each table
+ * someone chose. queue_position is each player's place in their own line.
+ * [{key, title, entries}], lines with nobody in them left out.
+ */
+function linesOf(queue, tables) {
+  const lines = [{ key: 'any', title: 'First available table', entries: [] }];
+  (tables || []).forEach((t) => lines.push({ key: t.table_id, title: t.table_name, entries: [] }));
+  queue.forEach((entry) => {
+    const key = entry.target_table_id ?? 'any';
+    let line = lines.find((l) => l.key === key);
+    if (!line) {
+      line = { key, title: entry.target_table_name || 'Another table', entries: [] };
+      lines.push(line);
+    }
+    line.entries.push(entry);
+  });
+  return lines.filter((l) => l.entries.length > 0);
+}
+
+/**
  * onRemove is given for the organiser only: each waiting player then has
- * a Remove button, which asks first.
+ * a Remove button, which asks first. tables (the league's, when it has
+ * more than one) splits the queue into its lines.
  */
 export function QueueCard({
   queue,
@@ -42,9 +64,66 @@ export function QueueCard({
   onRemove = null,
   busy = false,
   manyTables = false,
+  tables = null,
 }) {
   // user_id of the player the organiser is asking to remove.
   const [asking, setAsking] = useState(null);
+  const lines = manyTables ? linesOf(queue, tables) : [{ key: 'any', title: null, entries: queue }];
+
+  const row = (player, index) => {
+    const isYou = currentUsername && player.username === currentUsername;
+    const removable = Boolean(onRemove && player.user_id);
+    const askingHere = removable && asking === player.user_id;
+    const place = player.queue_position ?? index + 1;
+    return (
+      <li
+        className="queue-row"
+        key={`${player.username}-${player.user_id}`}
+        data-next={place === 1 || player.called ? 'true' : 'false'}
+      >
+        <span className="queue-pos" aria-hidden="true">
+          {place}
+        </span>
+        <span className="queue-name">
+          <PlayerLink userId={player.user_id} name={player.username} isYou={isYou} />
+          {isYou && <span className="tag-you">you</span>}
+        </span>
+        {player.called ? (
+          <TurnTag entry={player} showTable={manyTables} />
+        ) : (
+          place === 1 && <span className="up-next">up next</span>
+        )}
+        {removable && (
+          <RemoveButton
+            id={`remove-queued-${player.user_id}`}
+            name={player.username}
+            place="the queue"
+            expanded={askingHere}
+            controls={`remove-queued-${player.user_id}-confirm`}
+            onClick={() => setAsking(askingHere ? null : player.user_id)}
+          />
+        )}
+        {askingHere && (
+          <RemoveConfirm
+            id={`remove-queued-${player.user_id}-confirm`}
+            triggerId={`remove-queued-${player.user_id}`}
+            question={`Take ${player.username} out of the queue?`}
+            consequence={
+              player.called
+                ? "It's their turn, so the next in line is up instead."
+                : 'They lose their place in line.'
+            }
+            busy={busy}
+            onCancel={() => setAsking(null)}
+            onConfirm={async () => {
+              await onRemove(player);
+              setAsking(null);
+            }}
+          />
+        )}
+      </li>
+    );
+  };
 
   return (
     <section className="card" aria-labelledby="queue-heading">
@@ -64,67 +143,26 @@ export function QueueCard({
         <p className="empty">Nobody is waiting. Join and you're first up.</p>
       )}
 
-      {loaded && queue.length > 0 && (
-        <ol style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-          {queue.map((player, index) => {
-            const isYou = currentUsername && player.username === currentUsername;
-            const removable = Boolean(onRemove && player.user_id);
-            const askingHere = removable && asking === player.user_id;
-            return (
-              <li
-                className="queue-row"
-                key={`${player.username}-${player.queue_position}`}
-                data-next={index === 0 || player.called ? 'true' : 'false'}
-              >
-                <span className="queue-pos" aria-hidden="true">
-                  {index + 1}
-                </span>
-                <span className="queue-name">
-                  <PlayerLink userId={player.user_id} name={player.username} isYou={isYou} />
-                  {isYou && <span className="tag-you">you</span>}
-                </span>
-                {player.called ? (
-                  <TurnTag entry={player} showTable={manyTables} />
-                ) : (
-                  index === 0 && <span className="up-next">up next</span>
-                )}
-                {removable && (
-                  <RemoveButton
-                    id={`remove-queued-${player.user_id}`}
-                    name={player.username}
-                    place="the queue"
-                    expanded={askingHere}
-                    controls={`remove-queued-${player.user_id}-confirm`}
-                    onClick={() => setAsking(askingHere ? null : player.user_id)}
-                  />
-                )}
-                {askingHere && (
-                  <RemoveConfirm
-                    id={`remove-queued-${player.user_id}-confirm`}
-                    triggerId={`remove-queued-${player.user_id}`}
-                    question={`Take ${player.username} out of the queue?`}
-                    consequence={
-                      player.called
-                        ? "It's their turn, so the next in line is up instead."
-                        : 'They lose their place in line.'
-                    }
-                    busy={busy}
-                    onCancel={() => setAsking(null)}
-                    onConfirm={async () => {
-                      await onRemove(player);
-                      setAsking(null);
-                    }}
-                  />
-                )}
-              </li>
-            );
-          })}
-        </ol>
-      )}
+      {loaded &&
+        queue.length > 0 &&
+        lines.map((line) => (
+          <div className="queue-line" key={line.key}>
+            {line.title && (
+              <h3 className="queue-line-title">
+                {line.title}
+                <span className="queue-line-count">{line.entries.length} waiting</span>
+              </h3>
+            )}
+            <ol className="queue-list" aria-label={line.title ? `Waiting for ${line.title}` : undefined}>
+              {line.entries.map(row)}
+            </ol>
+          </div>
+        ))}
 
       <p className="small muted" style={{ marginTop: 16 }}>
-        The winner keeps the table and plays whoever is next in line. When it&rsquo;s your turn, you
-        have a minute to say you&rsquo;re here.
+        {manyTables
+          ? "Each table takes the next player who chose it, and only then the next who'll play anywhere. The winner keeps the table. When it's your turn, you have a minute to say you're here."
+          : "The winner keeps the table and plays whoever is next in line. When it's your turn, you have a minute to say you're here."}
       </p>
     </section>
   );

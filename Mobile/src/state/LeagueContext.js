@@ -119,6 +119,16 @@ export function LeagueProvider({ children }) {
   return <LeagueContext.Provider value={value}>{children}</LeagueContext.Provider>;
 }
 
+/**
+ * Draws everything inside it in another theme - the league picker uses
+ * it to dress itself in the school being looked at, before it's chosen.
+ */
+export function ThemeOverride({ theme, children }) {
+  const value = useContext(LeagueContext);
+  const merged = useMemo(() => ({ ...value, theme }), [value, theme]);
+  return <LeagueContext.Provider value={merged}>{children}</LeagueContext.Provider>;
+}
+
 /** { leagueId, league, info, leagues, tables, unreachable, theme, reload, replaceLeague, noticeReadOnly } */
 export function useLeague() {
   return useContext(LeagueContext);

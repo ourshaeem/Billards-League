@@ -434,8 +434,9 @@ class PoolTable(db.Model):
     """
     A physical table in the venue. Maps to the existing `Pool_Tables`.
 
-    `current_king_id`, `current_streak` and `table_record_streak` are a
-    denormalized cache of facts that `Matches` already holds. They are
+    `current_king_id`, `current_streak`, `table_record_streak` and
+    `table_record_holder_id` are a denormalized cache of facts that
+    `Matches` already holds. They are
     written in exactly one place - `record_match.refresh_table_state()` -
     and never read to decide anything. Matchmaking always derives the
     king from `Matches`.
@@ -468,6 +469,8 @@ class PoolTable(db.Model):
 
     current_streak = db.Column(db.Integer, nullable=True, default=0, server_default="0")
     table_record_streak = db.Column(db.Integer, nullable=True, default=0, server_default="0")
+    # Whoever set table_record_streak: the first to reach it.
+    table_record_holder_id = db.Column(db.Integer, db.ForeignKey("Players.user_id"), nullable=True)
 
     # The game played here - always its league's game. From before there
     # were schools, when the game was the league; kept in step so a table
@@ -477,6 +480,7 @@ class PoolTable(db.Model):
     )
 
     current_king = db.relationship("Player", foreign_keys=[current_king_id], lazy="joined")
+    record_holder = db.relationship("Player", foreign_keys=[table_record_holder_id])
     league = db.relationship("League")
 
     def to_dict(self):
@@ -495,10 +499,11 @@ class PoolTable(db.Model):
 
 class QueueEntry(db.Model):
     """
-    One player waiting in one league's line. Maps to the existing `Queue`
-    table. The line is the league's, not a table's: when a player's turn
-    comes, matchmaking calls them to whichever table needs them, and
-    table_id says which.
+    One player waiting in one league's queue. Maps to the existing `Queue`
+    table. A player waits either for one table they chose
+    (target_table_id) or for whichever table frees up first (NULL). When
+    their turn comes, matchmaking calls them to a table and table_id says
+    which - always their chosen one, if they chose.
 
     Named QueueEntry rather than Queue because `Queue` collides with
     Python's stdlib queue.Queue. `__tablename__` still points at the real
@@ -513,6 +518,10 @@ class QueueEntry(db.Model):
     # The table this player has been called to; NULL while they're only
     # waiting. (NULL is allowed in the database from ensure_schema on.)
     table_id = db.Column(db.Integer, nullable=True)
+    # The table this player is waiting for: NULL means the first free one.
+    # Only ever one of the league's tables in use (see
+    # manage_queue.join_queue); a removed table's line goes back to NULL.
+    target_table_id = db.Column(db.Integer, nullable=True)
     queue_position = db.Column(db.Integer, nullable=False)
 
     # Powers the leave-queue timer. server_default matters: inserts don't
@@ -551,12 +560,16 @@ class QueueEntry(db.Model):
 
     def to_dict(self, place=None, table_names=None):
         """
-        One line of a league's queue. `place` is the player's actual place
-        in line; queue_position on its own is only a sort key and drifts
-        upwards over an evening. called / confirmed let everyone watching
-        see whose turn it is and whether they've said they're here, and
-        table_id / table_name which table they're called to.
+        One player in a league's queue. `place` is their actual place in
+        their own line - the line for the table they chose, or the line for
+        the first free table; queue_position on its own is only a sort key
+        and drifts upwards over an evening. called / confirmed let everyone
+        watching see whose turn it is and whether they've said they're
+        here, table_id / table_name which table they're called to, and
+        target_table_id / target_table_name the table they're waiting for
+        (None: the first free one).
         """
+        names = table_names or {}
         return {
             "queue_position": place if place is not None else self.queue_position,
             "user_id": self.user_id,
@@ -564,7 +577,9 @@ class QueueEntry(db.Model):
             "called": self.is_called,
             "confirmed": self.is_confirmed,
             "table_id": self.table_id if self.is_called else None,
-            "table_name": (table_names or {}).get(self.table_id) if self.is_called else None,
+            "table_name": names.get(self.table_id) if self.is_called else None,
+            "target_table_id": self.target_table_id,
+            "target_table_name": names.get(self.target_table_id) if self.target_table_id else None,
         }
 
     def __repr__(self):

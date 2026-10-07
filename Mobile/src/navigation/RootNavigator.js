@@ -7,7 +7,7 @@
  *                        ForgotPassword
  *   Signed in, no email  AddEmail                (accounts from before sign-up
  *                                                 asked for one; once)
- *   Signed in, no league ChooseLeague
+ *   Signed in, no league ChooseLeague, Player (from the champions)
  *   Signed in, league    Main                    (tabs: Play, Games, Ladder, Profile)
  *                        Player                  (a player's profile, over the tabs)
  *                        SwitchLeague            (a modal over the tabs)
@@ -59,6 +59,14 @@ export function AppNavigation() {
   // sign-in screen meanwhile would flash it at people who are signed in.
   if (status === 'restoring') return <Splash />;
 
+  const playerOptions = {
+    headerShown: true,
+    title: '',
+    headerBackTitle: 'Back',
+    headerStyle: { backgroundColor: theme.page },
+    headerShadowVisible: false,
+  };
+
   const base = theme.scheme === 'dark' ? DarkTheme : DefaultTheme;
   const navigationTheme = {
     ...base,
@@ -100,21 +108,15 @@ export function AppNavigation() {
         ) : needsEmail ? (
           <Stack.Screen name="AddEmail" component={AddEmailScreen} />
         ) : !inLeague ? (
-          <Stack.Screen name="ChooseLeague" component={LeagueSelectScreen} />
+          <>
+            <Stack.Screen name="ChooseLeague" component={LeagueSelectScreen} />
+            {/* The champions on the picker open profiles too. */}
+            <Stack.Screen name="Player" component={PlayerScreen} options={playerOptions} />
+          </>
         ) : (
           <>
             <Stack.Screen name="Main" component={MainTabs} />
-            <Stack.Screen
-              name="Player"
-              component={PlayerScreen}
-              options={{
-                headerShown: true,
-                title: '',
-                headerBackTitle: 'Back',
-                headerStyle: { backgroundColor: theme.page },
-                headerShadowVisible: false,
-              }}
-            />
+            <Stack.Screen name="Player" component={PlayerScreen} options={playerOptions} />
             <Stack.Screen
               name="SwitchLeague"
               component={LeagueSelectScreen}

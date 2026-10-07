@@ -435,7 +435,7 @@ def start_new_session(table_id):
 def refresh_table_state(table_id, latest_winner_id):
     """
     Update Pool_Tables' denormalized columns: current_king_id,
-    current_streak, table_record_streak.
+    current_streak, table_record_streak and table_record_holder_id.
 
     These are a DISPLAY CACHE. Matches remains the source of truth for who
     holds the table, and nothing in matchmaking reads these columns. That
@@ -460,6 +460,7 @@ def refresh_table_state(table_id, latest_winner_id):
 
         if (table.current_streak or 0) > (table.table_record_streak or 0):
             table.table_record_streak = table.current_streak
+            table.table_record_holder_id = latest_winner_id
 
         db.session.commit()
     except Exception:
