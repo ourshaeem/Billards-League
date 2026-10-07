@@ -388,6 +388,7 @@ class MatchStatusRoute(ApiTestCase):
                 "league_type",
                 "league_id",
                 "cancel_requested_by",
+                "removal_vote",
                 "read_only",
             },
             "both apps' status panels read exactly these keys",

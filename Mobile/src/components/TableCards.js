@@ -19,7 +19,7 @@ import { useTheme } from '../state/LeagueContext';
 import { fonts, radius, type } from '../theme';
 import { RemoveButton, RemoveConfirm } from './AdminControls';
 import { PlayerChip, useOpenPlayer } from './Player';
-import { Card, Pill, Txt } from './ui';
+import { Button, Card, Pill, Txt } from './ui';
 
 const STATE_LABEL = {
   free: 'Free',
@@ -35,7 +35,15 @@ function removalConsequence(table, player) {
   return `Their game with ${name} is called off - nothing is recorded and no points move - and ${name} keeps the table.`;
 }
 
-export function TablesCard({ tables, loaded, league, currentUserId, onRemove = null, busy = false }) {
+export function TablesCard({
+  tables,
+  loaded,
+  league,
+  currentUserId,
+  onRemove = null,
+  onVote = null,
+  busy = false,
+}) {
   const many = tables.length > 1;
   const playing = tables.filter((t) => t.state !== 'free').length;
   const single = !many ? tables[0] : null;
@@ -65,6 +73,7 @@ export function TablesCard({ tables, loaded, league, currentUserId, onRemove = n
               league={league}
               currentUserId={currentUserId}
               onRemove={onRemove}
+              onVote={onVote}
               busy={busy}
             />
           ))
@@ -73,7 +82,7 @@ export function TablesCard({ tables, loaded, league, currentUserId, onRemove = n
   );
 }
 
-function TableBlock({ table, showName, divided, league, currentUserId, onRemove, busy }) {
+function TableBlock({ table, showName, divided, league, currentUserId, onRemove, onVote, busy }) {
   const theme = useTheme();
   const state = table.state;
   const occupied = state === 'playing' || state === 'waiting_for_challenger';
@@ -168,6 +177,72 @@ function TableBlock({ table, showName, divided, league, currentUserId, onRemove,
         </Txt>
       ) : null}
       <TableRecord table={table} league={league} currentUserId={currentUserId} />
+      {onVote ? <KingVote table={table} currentUserId={currentUserId} onVote={onVote} busy={busy} /> : null}
+    </View>
+  );
+}
+
+/** "0:42" from a number of seconds. */
+function clockText(seconds) {
+  const whole = Math.max(0, Math.round(seconds ?? 0));
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
+}
+
+/**
+ * A king who isn't at the table: everyone waiting who could play here
+ * votes, and once all have, the king has a minute to say they're here
+ * before they come off it. Shown to those who can vote, and to everyone
+ * once a vote is under way.
+ */
+function KingVote({ table, currentUserId, onVote, busy }) {
+  const theme = useTheme();
+  const vote = table.removal_vote;
+  if (!vote || !table.king) return null;
+  const king = table.king.username;
+  const canVote = vote.electorate.includes(currentUserId);
+  const voted = vote.voters.includes(currentUserId);
+  const counting = vote.seconds_left != null;
+  if (!canVote && vote.votes === 0) return null;
+
+  // Nobody has voted yet: just a quiet way in - most kings are right there.
+  if (vote.votes === 0 && !counting) {
+    return (
+      <View style={styles.voteQuiet}>
+        <Txt variant="small" muted>
+          {king} not here?
+        </Txt>
+        <Button variant="link" size="sm" title="Vote to take them off" onPress={() => onVote(table, true)} disabled={busy} />
+      </View>
+    );
+  }
+
+  const text = counting
+    ? `Everyone waiting voted that ${king} isn't here. Unless they say they are within ${clockText(vote.seconds_left)}, they come off ${table.table_name}.`
+    : `${vote.votes} of ${vote.needed} waiting ${vote.votes === 1 ? 'has' : 'have'} voted that ${king} isn't here. Everyone has to, to take them off.`;
+
+  return (
+    <View
+      accessibilityLiveRegion="polite"
+      style={[
+        styles.vote,
+        counting
+          ? { borderStyle: 'solid', borderColor: theme.warnLine, backgroundColor: theme.warnSoft }
+          : { borderColor: theme.line },
+      ]}
+    >
+      <Txt variant="small" muted={!counting}>
+        {text}
+      </Txt>
+      {canVote ? (
+        <Button
+          variant="quiet"
+          size="sm"
+          title={voted ? 'Take back my vote' : `Vote: ${king} isn't here`}
+          onPress={() => onVote(table, !voted)}
+          disabled={busy}
+          style={styles.voteButton}
+        />
+      ) : null}
     </View>
   );
 }
@@ -420,6 +495,9 @@ const styles = StyleSheet.create({
     paddingBottom: 6,
     borderBottomWidth: 1,
   },
+  vote: { marginTop: 12, padding: 10, borderRadius: radius.md, borderWidth: 1, borderStyle: 'dashed', gap: 8 },
+  voteButton: { alignSelf: 'flex-start' },
+  voteQuiet: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: 10 },
   record: { marginTop: 12, paddingVertical: 6, paddingHorizontal: 10, borderRadius: radius.md, gap: 4 },
   recordHead: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
   tableHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 6 },

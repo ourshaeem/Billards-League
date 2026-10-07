@@ -101,6 +101,18 @@ export function LiveProvider({ children }) {
         toast.push(`${previous.opponent} agreed - the game was cancelled. Nothing was recorded.`, 'info');
         setGamesVersion((v) => v + 1);
       }
+      // A king everyone waiting voted off, whose minute ran out.
+      if (
+        (previous?.status === 'waiting_for_challenger' || previous?.status === 'playing') &&
+        previous.removal_vote?.seconds_left != null &&
+        !previous.removal_vote.you_can_vote &&
+        next.status === 'idle'
+      ) {
+        toast.push(
+          "You were taken off the table: everyone waiting voted you weren't there. Join the queue to play again.",
+          'error',
+        );
+      }
     },
     [toast],
   );
@@ -343,6 +355,29 @@ export function LiveProvider({ children }) {
     refresh();
   }, [perform, reportFailure, refresh, toast, setMatchStatus]);
 
+  /**
+   * Vote that a king isn't here, or (remove false) take the vote back.
+   * table is anything with table_id and match_id: a table card, or the
+   * status of a game.
+   */
+  const voteOnKing = useCallback(
+    async (table, remove = true) => {
+      const res = await perform(() => api.voteOnKing(table.table_id, table.match_id, remove));
+      if (!res.ok) reportFailure(res);
+      else toast.push(res.data?.message || 'Done.', res.data?.status === 'everyone_voted' ? 'success' : 'info');
+      refresh();
+    },
+    [perform, reportFailure, refresh, toast],
+  );
+
+  /** The king says they're here: the vote that they aren't is cleared. */
+  const kingIsHere = useCallback(async () => {
+    const res = await perform(() => api.kingIsHere());
+    if (!res.ok) reportFailure(res);
+    else toast.push(res.data?.message || "You're staying on the table.", 'success');
+    refresh();
+  }, [perform, reportFailure, refresh, toast]);
+
   // --- The organiser's controls: offered only to an admin; the server
   // refuses anyone else regardless ---
 
@@ -420,6 +455,8 @@ export function LiveProvider({ children }) {
       record,
       cancelGame,
       keepPlaying,
+      voteOnKing,
+      kingIsHere,
       removeFromQueue,
       removeFromTable,
     };
@@ -437,6 +474,8 @@ export function LiveProvider({ children }) {
     record,
     cancelGame,
     keepPlaying,
+    voteOnKing,
+    kingIsHere,
     removeFromQueue,
     removeFromTable,
   ]);
@@ -447,7 +486,8 @@ export function LiveProvider({ children }) {
 /**
  * { matchStatus, statusProblem, queue, tables, loaded, offline, readOnly,
  *   busy, gamesVersion, refresh, unlock, join, leave, confirm, stepDown,
- *   record, cancelGame, keepPlaying, removeFromQueue, removeFromTable }
+ *   record, cancelGame, keepPlaying, voteOnKing, kingIsHere,
+ *   removeFromQueue, removeFromTable }
  */
 export function useLive() {
   return useContext(LiveContext);

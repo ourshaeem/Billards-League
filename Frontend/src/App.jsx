@@ -423,6 +423,18 @@ export default function App() {
           'info',
         );
       }
+      // A king everyone waiting voted off, whose minute ran out.
+      if (
+        (previous?.status === 'waiting_for_challenger' || previous?.status === 'playing') &&
+        previous.removal_vote?.seconds_left != null &&
+        !previous.removal_vote.you_can_vote &&
+        next.status === 'idle'
+      ) {
+        pushToast(
+          "You were taken off the table: everyone waiting voted you weren't there. Join the queue to play again.",
+          'error',
+        );
+      }
     },
     [pushToast],
   );
@@ -838,6 +850,36 @@ export default function App() {
     refresh(undefined, { withHistory: true });
   };
 
+  /**
+   * Vote that a king isn't here, or (remove false) take the vote back.
+   * table is anything with table_id and match_id: a table card, or the
+   * status of a game.
+   */
+  const handleVote = async (table, remove = true) => {
+    setBusy(true);
+    const res = await api.voteOnKing(table.table_id, table.match_id, remove);
+    setBusy(false);
+    if (!res.ok) {
+      if (res.kind !== api.ErrorKind.AUTH) pushToast(res.message, 'error');
+    } else {
+      pushToast(res.data?.message || 'Done.', res.data?.status === 'everyone_voted' ? 'success' : 'info');
+    }
+    refresh();
+  };
+
+  /** The king says they're here: the vote that they aren't is cleared. */
+  const handleKingHere = async () => {
+    setBusy(true);
+    const res = await api.kingIsHere();
+    setBusy(false);
+    if (!res.ok) {
+      if (res.kind !== api.ErrorKind.AUTH) pushToast(res.message, 'error');
+    } else {
+      pushToast(res.data?.message || "You're staying on the table.", 'success');
+    }
+    refresh();
+  };
+
   // --- The organiser's controls -----------------------------------------
   // Offered only to an admin; the server refuses anyone else regardless.
 
@@ -1229,6 +1271,8 @@ export default function App() {
                 onCancelGame={handleCancelGame}
                 onKeepPlaying={handleKeepPlaying}
                 onStepDown={handleStepDown}
+                onVote={handleVote}
+                onKingHere={handleKingHere}
                 onSwitchLeague={chooseLeague}
                 busy={busy}
               />
@@ -1240,6 +1284,7 @@ export default function App() {
                   league={league}
                   currentUserId={userId}
                   onRemove={isAdmin ? handleRemoveFromTable : null}
+                  onVote={handleVote}
                   busy={busy}
                 />
                 <QueueCard

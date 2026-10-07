@@ -66,6 +66,8 @@ export function PlayScreen({ navigation }) {
         onCancelGame={live.cancelGame}
         onKeepPlaying={live.keepPlaying}
         onStepDown={live.stepDown}
+        onVote={live.voteOnKing}
+        onKingHere={live.kingIsHere}
         onSwitchLeague={chooseLeague}
         busy={live.busy}
       />
@@ -76,6 +78,7 @@ export function PlayScreen({ navigation }) {
         league={league}
         currentUserId={user?.user_id}
         onRemove={isAdmin ? live.removeFromTable : null}
+        onVote={live.voteOnKing}
         busy={live.busy}
       />
 

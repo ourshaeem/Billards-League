@@ -3136,3 +3136,35 @@ select[aria-invalid='true'] {
     transform: none;
   }
 }
+
+/* --- Voting off an absent king (on a table card) --- */
+
+.king-vote {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin-top: 12px;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  border: 1px dashed var(--line);
+  font-size: var(--step--1);
+  color: var(--text-muted);
+}
+
+.king-vote-text {
+  flex: 1 1 16rem;
+  margin: 0;
+}
+
+/* Once everyone has voted, the king's minute is running: say so louder. */
+.king-vote[data-counting='true'] {
+  border-style: solid;
+  border-color: var(--warn-line, var(--line));
+  background: var(--warn-soft, var(--accent-wash));
+  color: var(--text);
+}
+
+.king-vote-quiet {
+  margin: 10px 0 0;
+}

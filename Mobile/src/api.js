@@ -421,6 +421,24 @@ export const PRIVACY_POLICY_URL = `${API_BASE}/privacy`;
 /** A king with no challenger gives up the table. */
 export const stepDown = () => request('/table/step-down', { method: 'POST', auth: true, body: {} });
 
+/**
+ * Vote that the king at a table isn't here - or, remove false, take the
+ * vote back. matchId is the king's game as the player saw it (409 if the
+ * table has changed hands). Everyone waiting who could play there has to
+ * vote; then the king has a minute to say they're here. Returns
+ * { message, status, removal_vote }; 403 when the player isn't waiting
+ * for that table, 409 on themselves.
+ */
+export const voteOnKing = (tableId, matchId, remove = true) =>
+  request('/table/vote', {
+    method: 'POST',
+    auth: true,
+    body: { table_id: tableId, match_id: matchId, remove },
+  });
+
+/** The king says they're here: every vote that they aren't is cleared. */
+export const kingIsHere = () => request('/table/here', { method: 'POST', auth: true, body: {} });
+
 // --- The organiser's controls ---
 // Only for an account whose profile (or sign-in) says is_admin; the
 // server refuses anyone else (403) whatever the app shows.

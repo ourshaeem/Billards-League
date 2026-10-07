@@ -9,6 +9,7 @@ finds its league. This module is where a table becomes a league and a
 league becomes its tables.
 """
 from logic.achievements import featured_badges
+from logic.king_votes import summary as vote_summary
 from models import BILLIARDS, GAMES, LEAGUE_NAMES, League, Match, PoolTable, db
 
 # The table a request means when it names neither a table nor a league -
@@ -107,7 +108,7 @@ def table_snapshot(table_id):
 
         {table_id, table_name, league_type, league_id, is_active, state,
          match_id, king, challenger, king_streak, table_record_streak,
-         table_record_holder, king_badge, challenger_badge}
+         table_record_holder, king_badge, challenger_badge, removal_vote}
 
     state is "free", "waiting_for_challenger" or "playing". king and
     challenger are player cards (see Player.to_card) carrying their rank
@@ -115,7 +116,10 @@ def table_snapshot(table_id):
     the badge each shows by their name in it ({key, name, tier} or None).
     table_record_streak is the longest run anyone has had here, and
     table_record_holder the card of whoever set it (None before anyone
-    has, or once a season reset clears it).
+    has, or once a season reset clears it). removal_vote is where a vote
+    that the king isn't here stands - {votes, needed, voters, electorate,
+    seconds_left} - or None with no king, or nobody who could vote (see
+    logic/king_votes.py).
 
     A plain read, no locks: this is a display, and matchmaking - the only
     thing that changes who is at a table - never reads it.
@@ -165,6 +169,7 @@ def table_snapshot(table_id):
         "table_record_holder": holder.to_card(league) if holder else None,
         "king_badge": badges.get(king.user_id) if king else None,
         "challenger_badge": badges.get(challenger.user_id) if challenger else None,
+        "removal_vote": vote_summary(active) if active is not None else None,
     }
 
 

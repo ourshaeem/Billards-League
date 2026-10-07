@@ -207,6 +207,7 @@ ADDED_COLUMNS = [
     ("Player_Achievements", "league_id", "INTEGER NULL"),
     ("Queue", "target_table_id", "INTEGER NULL"),
     ("Pool_Tables", "table_record_holder_id", "INTEGER NULL"),
+    ("Matches", "removal_vote_at", "DATETIME NULL"),
 ]
 # (Ratings used to be columns on Players - elo_rating, ping_pong_elo and
 # the rest - and each league's chosen badge too. They moved to Standings;

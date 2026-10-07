@@ -76,6 +76,19 @@ from logic.account import (
     delete_account,
     remove_account,
 )
+from logic.king_votes import (
+    HERE_RESULT_NOT_KING,
+    VOTE_RESULT_ALREADY_VOTED,
+    VOTE_RESULT_EVERYONE_VOTED,
+    VOTE_RESULT_GAME_CHANGED,
+    VOTE_RESULT_NO_KING,
+    VOTE_RESULT_NOT_VOTED,
+    VOTE_RESULT_NOT_WAITING,
+    VOTE_RESULT_WITHDRAWN,
+    VOTE_RESULT_YOU_ARE_KING,
+    cast_vote,
+    king_is_here,
+)
 from logic.admin import (
     QUEUE_REMOVE_RESULT_NOT_QUEUED,
     TABLE_REMOVE_RESULT_GAME_CALLED_OFF,
@@ -1302,6 +1315,85 @@ def register_routes(app):
                 "A challenger is already on - finish the game and report the score first.", 409
             )
         return jsonify({"message": "You gave up the table. Thanks for playing!"})
+
+    # 3c2. VOTE THAT A KING ISN'T HERE (Protected) - or take the vote
+    # back. Everyone waiting who could play at the table has to vote; then
+    # the king has a minute to say they're here (logic/king_votes.py).
+    @app.route("/table/vote", methods=["POST"])
+    @jwt_required()
+    def vote_on_king():
+        user_id = int(get_jwt_identity())
+        data = json_body()
+        if data.get("table_id") is None:
+            return error("Say which table: table_id is missing.", 400)
+        table_id, bad = read_table_id(data)
+        if bad:
+            return bad
+        if get_pool_table(table_id) is None:
+            return error("That table doesn't exist.", 404)
+        match_id, bad = read_match_id(data)
+        if bad:
+            return bad
+        remove = data.get("remove", True)
+        if not isinstance(remove, bool):
+            return error("remove must be true or false.", 400)
+
+        try:
+            outcome, summary = cast_vote(user_id, table_id, match_id, remove)
+        except Exception:
+            log.exception("vote failed (user %s, table %s)", user_id, table_id)
+            reset_session()
+            return error("Couldn't count your vote just now. Please try again.", 500)
+
+        table_name = get_pool_table(table_id).table_name
+        if outcome == VOTE_RESULT_NO_KING:
+            return error(f"Nobody is holding {table_name}.", 404)
+        if outcome == VOTE_RESULT_GAME_CHANGED:
+            return error(f"{table_name} has changed hands since - have another look.", 409)
+        if outcome == VOTE_RESULT_YOU_ARE_KING:
+            return error(
+                "You can't vote yourself off - give up the table instead if you're going.", 409
+            )
+        if outcome == VOTE_RESULT_NOT_WAITING:
+            return error(f"Only players waiting to play at {table_name} can vote.", 403)
+
+        king = table_snapshot(table_id)["king"]
+        name = king["username"] if king else "The king"
+        if outcome == VOTE_RESULT_EVERYONE_VOTED:
+            message = (
+                f"Everyone waiting has voted. {name} has a minute to say they're here, "
+                f"or they're taken off {table_name}."
+            )
+        elif outcome == VOTE_RESULT_ALREADY_VOTED:
+            message = "You've already voted."
+        elif outcome == VOTE_RESULT_WITHDRAWN:
+            message = "You took your vote back."
+        elif outcome == VOTE_RESULT_NOT_VOTED:
+            message = "You hadn't voted."
+        else:
+            message = (
+                f"Your vote is in: {summary['votes']} of {summary['needed']}. "
+                "Everyone waiting has to vote."
+                if summary
+                else "Your vote is in."
+            )
+        return jsonify({"message": message, "status": outcome, "removal_vote": summary})
+
+    # 3c3. THE KING SAYS THEY'RE HERE (Protected) - clears any vote that
+    # they aren't.
+    @app.route("/table/here", methods=["POST"])
+    @jwt_required()
+    def king_here():
+        user_id = int(get_jwt_identity())
+        try:
+            outcome = king_is_here(user_id)
+        except Exception:
+            log.exception("king_is_here failed (user %s)", user_id)
+            reset_session()
+            return error("Couldn't tell them you're here just now. Please try again.", 500)
+        if outcome == HERE_RESULT_NOT_KING:
+            return error("You aren't holding a table.", 404)
+        return jsonify({"message": "Got it - you're staying on the table.", "status": outcome})
 
     # 3d. THE ORGANISER: TAKE A PLAYER OUT OF A QUEUE (Protected, admins)
     # For a player who joined and walked off. Ignores the wait before

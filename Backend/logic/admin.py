@@ -25,9 +25,14 @@ Either way, the removed player's winning streak at the table ends.
 import logging
 
 from database import retry_on_deadlock
-from logic.manage_queue import attempt_matchmaking, leave_queue, lock_active_match_for_player
+from logic.manage_queue import (
+    attempt_matchmaking,
+    leave_queue,
+    lock_active_match_for_player,
+    take_off_table,
+)
 from logic.tables import league_for_table
-from models import League, Match, Player, PoolTable, db
+from models import League, Player, db
 
 log = logging.getLogger(__name__)
 
@@ -113,30 +118,7 @@ def _take_off_table(user_id, table_id, expected_match_id):
             db.session.rollback()
             return TABLE_REMOVE_RESULT_GAME_CHANGED, None
 
-        other_id = match.opponent_of(user_id)
-        # Deleted, not finished: it was never a game with a result, and
-        # every Finished row has a winner.
-        db.session.delete(match)
-        if other_id is not None:
-            # A new row for the player who stays, rather than the old one
-            # with a seat emptied: a score either player sends for the
-            # called-off game then finds nothing, instead of landing on the
-            # next game here.
-            db.session.add(
-                Match(
-                    table_id=table_id,
-                    player_one_id=other_id,
-                    player_two_id=None,
-                    match_status=Match.STATUS_ACTIVE,
-                )
-            )
-
-        # The display cache shouldn't keep showing a king who has gone.
-        table = db.session.get(PoolTable, table_id)
-        if table is not None and table.current_king_id == user_id:
-            table.current_king_id = None
-            table.current_streak = 0
-
+        other_id = take_off_table(match, user_id)
         db.session.commit()
     except Exception:
         db.session.rollback()

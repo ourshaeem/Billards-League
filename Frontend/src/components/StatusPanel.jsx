@@ -90,6 +90,8 @@ export function StatusPanel({
   onCancelGame,
   onKeepPlaying,
   onStepDown,
+  onVote,
+  onKingHere,
   onSwitchLeague,
   busy,
 }) {
@@ -155,6 +157,8 @@ export function StatusPanel({
               onRecord={onRecord}
               onCancelGame={onCancelGame}
               onKeepPlaying={onKeepPlaying}
+              onVote={onVote}
+              onKingHere={onKingHere}
               busy={busy}
             />
           )}
@@ -166,6 +170,7 @@ export function StatusPanel({
               status={status}
               queueLength={queueLength}
               onStepDown={onStepDown}
+              onKingHere={onKingHere}
               busy={busy}
             />
           )}
@@ -471,7 +476,76 @@ function QueuedState({ status, league, queue, onJoin, onLeave, busy, queueLength
   );
 }
 
-function HoldingTableState({ status, queueLength, onStepDown, busy }) {
+/**
+ * A vote that the king isn't at the table (logic/king_votes.py), as the
+ * two players there see it. The king (who can't vote) is told, with an
+ * "I'm here" that clears it; the challenger, seated against a king who
+ * hasn't turned up, can vote. Nothing for anyone else - they vote from
+ * the table card.
+ */
+function KingVoteNotice({ status, onVote, onKingHere, busy }) {
+  const vote = status.removal_vote;
+  const counting = vote?.seconds_left != null;
+  const left = useCountdown(counting ? vote.seconds_left : null);
+  if (!vote) return null;
+
+  if (!vote.you_can_vote) {
+    if (vote.votes === 0) return null;
+    return (
+      <div className="panel-notice" role="alert">
+        <p>
+          <strong>
+            {vote.votes} of {vote.needed} waiting {vote.votes === 1 ? 'says' : 'say'} you&rsquo;re
+            not at the table.
+          </strong>{' '}
+          {counting
+            ? `Say you're here within ${clockText(left)}, or you'll be taken off it.`
+            : "If everyone does, you'll have a minute to say you are."}
+        </p>
+        <div className="panel-notice-actions">
+          <button type="button" className="btn btn-primary btn-small" onClick={onKingHere} disabled={busy}>
+            I&rsquo;m here
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Nobody has voted: only a quiet link, at the foot of the game (every
+  // game has a king, and most kings are standing right there).
+  if (vote.votes === 0 && !counting) return null;
+
+  return (
+    <div className="panel-notice" role="status">
+      <p>
+        {counting ? (
+          <>
+            <strong>Everyone waiting has voted.</strong> {status.opponent} has {clockText(left)} to
+            say they&rsquo;re here, or they come off the table and it&rsquo;s yours.
+          </>
+        ) : (
+          <>
+            <strong>{status.opponent} not at the table?</strong> Vote them off: once everyone
+            waiting has ({vote.votes} of {vote.needed} so far), they get a minute to turn up. If
+            they don&rsquo;t, the game is called off and the table is yours.
+          </>
+        )}
+      </p>
+      <div className="panel-notice-actions">
+        <button
+          type="button"
+          className="btn btn-quiet btn-small"
+          onClick={() => onVote(status, !vote.you_voted)}
+          disabled={busy}
+        >
+          {vote.you_voted ? 'Take back my vote' : `Vote: ${status.opponent} isn't here`}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function HoldingTableState({ status, queueLength, onStepDown, onKingHere, busy }) {
   const upNextLeft = useCountdown(status.up_next_seconds_left ?? null);
 
   let sub;
@@ -492,6 +566,7 @@ function HoldingTableState({ status, queueLength, onStepDown, busy }) {
         <Crown size={30} aria-hidden="true" className="headline-icon headline-icon-crown" />
         You hold {status.table_name || 'the table'}
       </h2>
+      <KingVoteNotice status={status} onKingHere={onKingHere} busy={busy} />
       <p className="status-sub">{sub}</p>
       <div className="status-actions">
         <span className="status-meta">
@@ -509,7 +584,16 @@ function HoldingTableState({ status, queueLength, onStepDown, busy }) {
   );
 }
 
-function PlayingState({ status, league, onRecord, onCancelGame, onKeepPlaying, busy }) {
+function PlayingState({
+  status,
+  league,
+  onRecord,
+  onCancelGame,
+  onKeepPlaying,
+  onVote,
+  onKingHere,
+  busy,
+}) {
   const [scores, setScores] = useState({ mine: '', theirs: '' });
   const [error, setError] = useState(null);
   const info = gameInfo(league.game);
@@ -562,6 +646,8 @@ function PlayingState({ status, league, onRecord, onCancelGame, onKeepPlaying, b
         You're playing {status.opponent}
       </h2>
       {status.table_name && <p className="status-where">At {status.table_name}</p>}
+
+      <KingVoteNotice status={status} onVote={onVote} onKingHere={onKingHere} busy={busy} />
 
       {cancelAsked === 'opponent' && (
         <div className="panel-notice" role="status">
@@ -691,6 +777,22 @@ function PlayingState({ status, league, onRecord, onCancelGame, onKeepPlaying, b
           . It&rsquo;s only called off if you both agree, and then nothing is recorded.
         </p>
       )}
+      {status.removal_vote?.you_can_vote &&
+        status.removal_vote.votes === 0 &&
+        status.removal_vote.seconds_left == null && (
+          <p className="status-note">
+            {status.opponent} not at the table at all?{' '}
+            <button
+              type="button"
+              className="btn-link"
+              onClick={() => onVote(status, true)}
+              disabled={busy}
+            >
+              Vote them off
+            </button>
+            . Everyone waiting has to agree; then they get a minute to turn up.
+          </p>
+        )}
     </>
   );
 }

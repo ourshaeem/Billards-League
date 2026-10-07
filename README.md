@@ -17,7 +17,8 @@ to say you're here, or the next person is up; and a game both players
 agree to call off is cancelled with nothing recorded. Each league has
 its own ratings, ranks, ladder, match history and colours - the
 school's, each in light and dark. Each table shows its winning-streak
-record and who holds it. Tap any player to see their profile, their
+record and who holds it. A king who walked off without giving up the
+table can be voted off by everyone waiting. Tap any player to see their profile, their
 games and their record against you.
 
 Stack: **MySQL + Python/Flask + React (Vite)**. Kept deliberately plain so
@@ -528,6 +529,7 @@ Backend/
     mailer.py               sending email through Brevo's HTTPS API
     leaderboard.py          top 50, per league
     global_leaderboard.py   the champions across every school
+    king_votes.py           voting off a king who isn't at the table
     leagues.py              who may play where: PINs, access, standings;
                             the organiser's table changes
   tests/                    ORM tests against in-memory SQLite
@@ -649,6 +651,23 @@ belongs to its table's league.
   colour scheme (`leagueColors.js`): the status panel in the first, with
   the second along its top and on its main button, and text darkened or
   lightened until it reads at 4.5:1 or better.
+
+## Voting off an absent king
+
+A king who won and walked off holds the table for nobody: the next in
+line is called, says they're here, and plays an empty table. Everyone who
+could play at that table next - the challenger already seated against
+the king, and everyone waiting for that table or for any table, except
+anyone already called to another one - can vote them off
+(`POST /table/vote`, `logic/king_votes.py`). All of them have to vote.
+Then the king has a minute to tap "I'm here" (`POST /table/here`), which
+clears every vote; if they don't, matchmaking takes them off the table,
+exactly as the organiser's Remove does: a king alone gives the table to
+the next in line, and mid-game the game is called off with nothing
+recorded and the challenger holds the table. Votes count for one reign
+only, and taking a vote back stops the king's minute. The vote shows on
+the table card for everyone, and on the status panel for the king and
+the challenger.
 
 ## Taking turns, and calling a game off
 

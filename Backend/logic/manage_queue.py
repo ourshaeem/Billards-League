@@ -30,6 +30,7 @@ from sqlalchemy.exc import IntegrityError
 
 from database import retry_on_deadlock, seconds_since
 from logic.achievements import PATIENCE_WAIT_SECONDS, award
+from logic.king_votes import for_player, forget_votes, vote_due
 from logic.tables import active_tables, league_for_table, table_names
 from models import League, Match, PoolTable, QueueEntry, db
 
@@ -545,6 +546,10 @@ def attempt_matchmaking(league):
     match, a waiting player's status poll - comes through here, so the
     cases can't drift apart again.
 
+    A king everyone waiting has voted off, who didn't say they were here
+    in the minute after, is taken off their table here, before any seat
+    is filled (logic/king_votes.py, take_off_table).
+
     The ready check: being up isn't enough to play. Each player who is up
     has READY_CHECK_SECONDS to say they're here (confirm_here); a table's
     game starts once everyone up for it has. Anyone who lets the time run
@@ -556,19 +561,26 @@ def attempt_matchmaking(league):
     try:
         _lock_league(league_id)
 
-        needs, kings = {}, {}
+        clocks = _turn_clocks(league_id)
+        waiting = _without_missed_turns(_eligible_queue(league_id), clocks)
         tables = active_tables(league_id)
+        _forget_lost_tables(waiting, [table.table_id for table in tables])
+
+        needs, kings = {}, {}
         for table in tables:
             active = _active_match_for_table(table.table_id, lock=True)
+            # A king everyone waiting voted off (logic/king_votes.py), whose
+            # minute to say they're here is up, comes off the table first.
+            if vote_due(active, waiting):
+                log.info("taking voted-off king %s off table %s", active.player_one_id, table.table_id)
+                take_off_table(active, active.player_one_id)
+                active = _active_match_for_table(table.table_id, lock=True)
             if active is None:
                 needs[table.table_id] = 2
             elif active.is_awaiting_challenger:
                 needs[table.table_id] = 1
                 kings[table.table_id] = active
 
-        clocks = _turn_clocks(league_id)
-        waiting = _without_missed_turns(_eligible_queue(league_id), clocks)
-        _forget_lost_tables(waiting, [table.table_id for table in tables])
         plan = _plan(waiting, needs)
 
         # Anyone not given a table isn't up, whatever was true a moment ago.
@@ -613,6 +625,42 @@ def attempt_matchmaking(league):
 
     _award_patience(patient, league_id)
     return started
+
+
+def take_off_table(match, user_id):
+    """
+    Take one player off the table of an Active match, in the caller's
+    transaction - which must hold the table's lock. Shared by the
+    organiser's Remove (logic/admin.py) and a king voted off.
+
+    The match is deleted, not finished: it was never a game with a
+    result, and every Finished row has a winner. The other player, if
+    there was one, holds the table under a new row rather than the old
+    one with a seat emptied: a score either player sends for the
+    called-off game then finds nothing, instead of landing on the next
+    game here. The removed player's streak ends. Returns the other
+    player's id, or None when the table is free.
+    """
+    table_id = match.table_id
+    other_id = match.opponent_of(user_id)
+    forget_votes(match.match_id)
+    db.session.delete(match)
+    if other_id is not None:
+        db.session.add(
+            Match(
+                table_id=table_id,
+                player_one_id=other_id,
+                player_two_id=None,
+                match_status=Match.STATUS_ACTIVE,
+            )
+        )
+
+    # The display cache shouldn't keep showing a king who has gone.
+    table = db.session.get(PoolTable, table_id)
+    if table is not None and table.current_king_id == user_id:
+        table.current_king_id = None
+        table.current_streak = 0
+    return other_id
 
 
 def _forget_lost_tables(waiting, in_use):
@@ -869,7 +917,12 @@ def get_player_status(user_id, league):
     match = _active_match_for_player(user_id)
     queued = match is None and _is_queued(user_id, league_id)
 
-    if (match is not None and match.is_awaiting_challenger) or queued:
+    # A vote on a king, too: when only the challenger could vote, nobody
+    # else's poll would take the king off once their minute is up.
+    waiting_at_table = match is not None and (
+        match.is_awaiting_challenger or match.removal_vote_at is not None
+    )
+    if waiting_at_table or queued:
         heal = league_for_table(match.table_id) if match is not None else league
         try:
             attempt_matchmaking(heal.league_id)
@@ -880,9 +933,12 @@ def get_player_status(user_id, league):
     if match is not None:
         game_league = league_for_table(match.table_id)
         name = table_names(game_league).get(match.table_id)
+        # Where a vote on the king stands (logic/king_votes.py): the king
+        # sees it to say they're here; the challenger, to vote.
+        vote = {"removal_vote": for_player(match, user_id)}
         if match.is_in_progress:
-            return match.to_playing_dict(user_id, game_league, name)
-        return {**match.to_waiting_dict(game_league, name), **_up_next(match.table_id)}
+            return {**match.to_playing_dict(user_id, game_league, name), **vote}
+        return {**match.to_waiting_dict(game_league, name), **_up_next(match.table_id), **vote}
 
     queue_status = get_queue_status(user_id, league_id)
     if queue_status is None:

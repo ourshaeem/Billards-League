@@ -5,6 +5,8 @@
  * and their profile a click.
  *
  * For the organiser (onRemove given), each player has a Remove button.
+ * For everyone waiting who could play at a table, a king who isn't there
+ * can be voted off (onVote; see KingVote).
  */
 import React, { useState } from 'react';
 import { Crown, Swords, Trophy } from 'lucide-react';
@@ -27,7 +29,15 @@ function removalConsequence(table, player) {
   return `Their game with ${name} is called off - nothing is recorded and no points move - and ${name} keeps the table.`;
 }
 
-export function TablesCard({ tables, loaded, league, currentUserId, onRemove = null, busy = false }) {
+export function TablesCard({
+  tables,
+  loaded,
+  league,
+  currentUserId,
+  onRemove = null,
+  onVote = null,
+  busy = false,
+}) {
   const many = tables.length > 1;
   const playing = tables.filter((t) => t.state !== 'free').length;
 
@@ -59,6 +69,7 @@ export function TablesCard({ tables, loaded, league, currentUserId, onRemove = n
             league={league}
             currentUserId={currentUserId}
             onRemove={onRemove}
+            onVote={onVote}
             busy={busy}
           />
         ))}
@@ -72,7 +83,7 @@ export function TablesCard({ tables, loaded, league, currentUserId, onRemove = n
   );
 }
 
-function TableBlock({ table, showName, league, currentUserId, onRemove, busy }) {
+function TableBlock({ table, showName, league, currentUserId, onRemove, onVote, busy }) {
   const state = table.state;
   // { userId, matchId } of the player the organiser is asking to remove.
   // Tied to the game it was asked about: once that game is over, the
@@ -173,6 +184,61 @@ function TableBlock({ table, showName, league, currentUserId, onRemove, busy }) 
         </p>
       )}
       <TableRecord table={table} league={league} currentUserId={currentUserId} />
+      {onVote && <KingVote table={table} currentUserId={currentUserId} onVote={onVote} busy={busy} />}
+    </div>
+  );
+}
+
+/** "0:42" from a number of seconds. */
+function clockText(seconds) {
+  const whole = Math.max(0, Math.round(seconds ?? 0));
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
+}
+
+/**
+ * A king who isn't at the table: everyone waiting who could play here
+ * votes, and once all have, the king has a minute to say they're here
+ * before they come off it. Shown to those who can vote, and to everyone
+ * once a vote is under way.
+ */
+function KingVote({ table, currentUserId, onVote, busy }) {
+  const vote = table.removal_vote;
+  if (!vote || !table.king) return null;
+  const king = table.king.username;
+  const canVote = vote.electorate.includes(currentUserId);
+  const voted = vote.voters.includes(currentUserId);
+  const counting = vote.seconds_left != null;
+  if (!canVote && vote.votes === 0) return null;
+
+  // Nobody has voted yet: just a quiet way in - most kings are right there.
+  if (vote.votes === 0 && !counting) {
+    return (
+      <p className="small muted king-vote-quiet">
+        {king} not here?{' '}
+        <button type="button" className="btn-link" onClick={() => onVote(table, true)} disabled={busy}>
+          Vote to take them off
+        </button>
+      </p>
+    );
+  }
+
+  return (
+    <div className="king-vote" data-counting={counting ? 'true' : 'false'}>
+      <p className="king-vote-text">
+        {counting
+          ? `Everyone waiting voted that ${king} isn't here. Unless they say they are within ${clockText(vote.seconds_left)}, they come off ${table.table_name}.`
+          : `${vote.votes} of ${vote.needed} waiting ${vote.votes === 1 ? 'has' : 'have'} voted that ${king} isn't here. Everyone has to, to take them off.`}
+      </p>
+      {canVote && (
+        <button
+          type="button"
+          className="btn btn-quiet btn-small"
+          onClick={() => onVote(table, !voted)}
+          disabled={busy}
+        >
+          {voted ? 'Take back my vote' : `Vote: ${king} isn't here`}
+        </button>
+      )}
     </div>
   );
 }

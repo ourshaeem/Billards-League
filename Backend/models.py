@@ -658,6 +658,12 @@ class Match(db.Model):
     # A plain number, not a foreign key: it is only ever one of the two
     # seats above, and it only means anything while the game is on.
     cancel_requested_by = db.Column(db.Integer, nullable=True)
+    # When everyone waiting had voted that the king (player_one) isn't
+    # here: they have READY_CHECK_SECONDS from then to say they are, or
+    # matchmaking takes them off the table. NULL while the vote isn't
+    # unanimous, and again once the king says they're here. See
+    # logic/king_votes.py.
+    removal_vote_at = db.Column(db.DateTime, nullable=True)
 
     # Four foreign keys point at Players, so each relationship has to say
     # which one it follows.
@@ -793,6 +799,29 @@ class Match(db.Model):
             f"<Match {self.match_id} table={self.table_id} status={self.match_status} "
             f"p1={self.player_one_id} p2={self.player_two_id} winner={self.winner_id}>"
         )
+
+
+class KingVote(db.Model):
+    """
+    One player's vote that a king isn't at the table (logic/king_votes.py).
+    Tied to the king's Active match row, so a vote is about this reign
+    only: when the king wins again, or the table changes hands, the old
+    votes no longer count. match_id is a plain number, not a foreign key,
+    for the same reason - those rows are deleted when a game is called off
+    or a table given up, and their votes simply stop mattering.
+    """
+
+    __tablename__ = "King_Votes"
+
+    vote_id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    match_id = db.Column(db.Integer, nullable=False)
+    voter_id = db.Column(db.Integer, db.ForeignKey("Players.user_id"), nullable=False)
+    voted_at = db.Column(db.DateTime, nullable=False, server_default=func.current_timestamp())
+
+    __table_args__ = (db.Index("uq_king_vote", "match_id", "voter_id", unique=True),)
+
+    def __repr__(self):
+        return f"<KingVote match={self.match_id} voter={self.voter_id}>"
 
 
 class PlayerAchievement(db.Model):
