@@ -81,6 +81,11 @@ export function PlayerProfile({ userId, league: startLeague, leagues, currentUse
               {player.username}
               {flag && <span className="profile-flag"> {flag}</span>}
             </h2>
+            {player.home_school && (
+              <p className="profile-school" title="The school of the first league they joined">
+                From {player.home_school}
+              </p>
+            )}
             {isYou && <p className="muted small">This is how other players see you.</p>}
           </div>
         </div>

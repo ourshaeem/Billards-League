@@ -157,7 +157,7 @@ class GlobalRoute(GlobalTestCase):
         first = body["sports"][BILLIARDS]["all_time"][0]
         self.assertEqual(
             set(first),
-            {"place", "player", "league_id", "league_name", "school", "elo", "wins", "losses"},
+            {"place", "player", "league_id", "league_name", "school", "home_school", "elo", "wins", "losses"},
         )
         self.assertIn("profile_picture", first["player"])
 

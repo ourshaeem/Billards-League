@@ -208,6 +208,7 @@ ADDED_COLUMNS = [
     ("Queue", "target_table_id", "INTEGER NULL"),
     ("Pool_Tables", "table_record_holder_id", "INTEGER NULL"),
     ("Matches", "removal_vote_at", "DATETIME NULL"),
+    ("Players", "home_league_id", "INTEGER NULL"),
 ]
 # (Ratings used to be columns on Players - elo_rating, ping_pong_elo and
 # the rest - and each league's chosen badge too. They moved to Standings;
@@ -306,6 +307,9 @@ def ensure_schema():
          so after the first run this finds nothing.
      10. Every table record says who holds it, worked out from the games
          at that table for records set before that was kept.
+     11. Every player with a place in a league has a home school - the
+         league they joined first - worked out for those from before it
+         was kept.
 
     Never raises. Each step reports what it did, or why it couldn't.
     """
@@ -640,6 +644,56 @@ def ensure_schema():
                 named += 1
         return f"named the holder of {named} table record(s)" if named else None
 
+    def set_home_schools():
+        # Players with a place somewhere but no home yet: from before homes
+        # were kept. Their home is the league of the earliest sign of their
+        # joining one - their first finished game, or the first PIN they
+        # entered that's still on record - else the first league (in the
+        # apps' order) they have a place in. Everyone from before schools
+        # played at CCNY first, so their games put them there.
+        homeless = list(
+            db.session.scalars(
+                db.select(Player).where(
+                    Player.home_league_id.is_(None),
+                    db.exists().where(Standing.user_id == Player.user_id),
+                )
+            )
+        )
+        if not homeless:
+            return None
+        order = dict(db.session.execute(db.select(League.league_id, League.sort_order)).all())
+        earliest = {}  # user_id -> (when, league_id)
+
+        def seen(user_id, when, league_id):
+            if user_id is not None and when is not None and league_id in order:
+                if user_id not in earliest or when < earliest[user_id][0]:
+                    earliest[user_id] = (when, league_id)
+
+        games = db.session.execute(
+            db.select(Match.player_one_id, Match.player_two_id, Match.played_at, PoolTable.league_id)
+            .join(PoolTable, PoolTable.table_id == Match.table_id)
+            .where(Match.match_status == Match.STATUS_FINISHED)
+        )
+        for seat_one, seat_two, when, league_id in games:
+            seen(seat_one, when, league_id)
+            seen(seat_two, when, league_id)
+        for user_id, league_id, when in db.session.execute(
+            db.select(LeagueAccess.user_id, LeagueAccess.league_id, LeagueAccess.granted_at)
+        ):
+            seen(user_id, when, league_id)
+
+        named = 0
+        for player in homeless:
+            if player.user_id in earliest:
+                player.home_league_id = earliest[player.user_id][1]
+            else:
+                places = [st.league_id for st in player.standings if st.league_id in order]
+                if not places:
+                    continue
+                player.home_league_id = min(places, key=order.get)
+            named += 1
+        return f"set the home school of {named} player(s)" if named else None
+
     def raise_ratings_to_floor():
         floor_rank = Rank.for_elo(ELO_FLOOR)
         below = list(db.session.scalars(db.select(Standing).where(Standing.elo < ELO_FLOOR)))
@@ -667,6 +721,7 @@ def ensure_schema():
     step("Old badge index", drop_old_badge_index)
     step("Ratings below the floor", raise_ratings_to_floor)
     step("Table record holders", name_record_holders)
+    step("Home schools", set_home_schools)
 
 
 def seconds_since(column):

@@ -278,6 +278,14 @@ class Player(db.Model):
     # admin request - never from the client or the login token.
     is_admin = db.Column(db.Boolean, nullable=False, default=False, server_default="0")
 
+    # The league this player joined first; its school is their home - the
+    # school every leaderboard shows by their name, wherever they play.
+    # Set once, the first time they get a place in any league
+    # (logic/leagues.ensure_standing), and never changed by joining more;
+    # NULL until then. ensure_schema works it out for players from before
+    # it was kept. Wiped with the rest when an account is deleted.
+    home_league_id = db.Column(db.Integer, db.ForeignKey("Leagues.league_id"), nullable=True)
+
     __table_args__ = (db.Index("uq_players_email", "email", unique=True),)
 
     @property
@@ -293,6 +301,20 @@ class Player(db.Model):
     def picture_url(self):
         """The player's picture as a link a client can load, or None."""
         return public_url(self.profile_picture)
+
+    @property
+    def home_school(self):
+        """
+        The school of the league this player joined first, or None before
+        they've joined one (or once the account is deleted). Leagues come
+        from the session's identity map after the first, so a ladder of
+        fifty players asks the database for each school once, not fifty
+        times.
+        """
+        if self.home_league_id is None or self.is_deleted:
+            return None
+        league = db.session.get(League, self.home_league_id)
+        return league.school if league is not None else None
 
     def standing_in(self, league):
         """This player's Standing in a league (any League.of reference), or None."""
@@ -310,7 +332,8 @@ class Player(db.Model):
         """
         One row of /leaderboard, the same shape for either league. user_id,
         flag and picture let the ladder draw each player and open their
-        profile.
+        profile; home_school is the school they joined first, shown by
+        their name wherever they play.
 
         "Unranked" mirrors the LEFT JOIN in the old SQL: a player whose
         rank hasn't been calculated yet still has to appear on the ladder.
@@ -325,6 +348,7 @@ class Player(db.Model):
             "total_wins": standing["wins"],
             "total_losses": standing["losses"],
             "rank_name": standing["rank_name"],
+            "home_school": self.home_school,
         }
 
     def to_card(self, league=BILLIARDS):
@@ -332,6 +356,8 @@ class Player(db.Model):
         A player as other people see them: enough to draw their avatar and
         flag, plus the rank and rating the hover card shows for `league`.
         league_type is the league's game; league_id says which league.
+        home_school is the school they joined first - not necessarily
+        `league`'s: a CCNY player at Brooklyn is still from CCNY.
         """
         league = League.of(league)
         return {
@@ -341,6 +367,7 @@ class Player(db.Model):
             "profile_picture": self.picture_url,
             "league_type": league.game if league else BILLIARDS,
             "league_id": league.league_id if league else None,
+            "home_school": self.home_school,
             **self.standing(league),
         }
 
@@ -368,6 +395,7 @@ class Player(db.Model):
             "username": self.display_name,
             "country_flag": self.country_flag,
             "profile_picture": self.picture_url,
+            "home_school": self.home_school,
             "leagues": {game: self.standing(legacy.get(game)) for game in GAMES},
             "standings": [
                 {

@@ -89,7 +89,7 @@ class RecordAgainstEveryone(PlayerProfileTestCase):
         self.assertEqual(
             set(card),
             {"user_id", "username", "country_flag", "profile_picture", "league_type",
-             "league_id", "elo", "rank_name", "wins", "losses"},
+             "league_id", "home_school", "elo", "rank_name", "wins", "losses"},
         )
 
     def test_each_league_is_its_own_record(self):

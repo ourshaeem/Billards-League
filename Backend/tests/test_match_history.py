@@ -17,7 +17,7 @@ ENTRY_KEYS = {
 }
 CARD_KEYS = {
     "user_id", "username", "country_flag", "profile_picture",
-    "league_type", "league_id", "elo", "rank_name", "wins", "losses",
+    "league_type", "league_id", "home_school", "elo", "rank_name", "wins", "losses",
 }
 
 

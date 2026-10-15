@@ -3168,3 +3168,19 @@ select[aria-invalid='true'] {
 .king-vote-quiet {
   margin: 10px 0 0;
 }
+
+/* --- Where a player is from: the school of the first league they joined --- */
+
+.podium-school {
+  margin-top: -6px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--panel-dim);
+}
+
+.profile-school {
+  margin: 2px 0 0;
+  font-size: var(--step--1);
+  font-weight: 600;
+  color: var(--accent-text);
+}

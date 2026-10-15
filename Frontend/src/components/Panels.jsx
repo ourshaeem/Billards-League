@@ -229,7 +229,12 @@ export function LeaderboardCard({ players, loaded, league, currentUsername }) {
                         isYou={isYou}
                       />
                       <NameBadge badge={player.badge} size={20} />
-                      <span className="rank-name">{player.rank_name || 'Unranked'}</span>
+                      <span className="rank-name">
+                        {player.rank_name || 'Unranked'}
+                        {/* Where they're from - the school they joined first -
+                            whichever school's ladder this is. */}
+                        {player.home_school && ` · ${player.home_school}`}
+                      </span>
                     </td>
                     <td className="elo">{player.elo_rating}</td>
                     <td className="record">

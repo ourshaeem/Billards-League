@@ -92,7 +92,7 @@ export function LadderScreen() {
                   onPress={() => openPlayer(player.user_id)}
                   disabled={!player.user_id}
                   accessibilityRole="button"
-                  accessibilityLabel={`${index + 1}, ${player.username}${isYou ? ', you' : ''}, ${player.rank_name || 'Unranked'}, ${pointsText(player.elo_rating)}, ${player.total_wins} won, ${player.total_losses} lost`}
+                  accessibilityLabel={`${index + 1}, ${player.username}${isYou ? ', you' : ''}${player.home_school ? `, from ${player.home_school}` : ''}, ${player.rank_name || 'Unranked'}, ${pointsText(player.elo_rating)}, ${player.total_wins} won, ${player.total_losses} lost`}
                   accessibilityHint="Opens their profile"
                   style={({ pressed }) => [
                     styles.row,
@@ -117,9 +117,17 @@ export function LadderScreen() {
                       </Txt>
                       {flag ? <Text>{flag}</Text> : null}
                     </View>
-                    <Txt variant="small" muted>
+                    <Txt variant="small" muted numberOfLines={1}>
                       {player.rank_name || 'Unranked'}
                     </Txt>
+                    {/* Where they're from - the school they joined first -
+                        whichever school's ladder this is. A line of its own:
+                        beside the rank, a phone cuts it off. */}
+                    {player.home_school ? (
+                      <Txt variant="small" muted numberOfLines={2}>
+                        {player.home_school}
+                      </Txt>
+                    ) : null}
                   </View>
                   <Cell style={[styles.number, styles.points]}>{player.elo_rating}</Cell>
                   <Text style={[styles.cell, styles.number]}>

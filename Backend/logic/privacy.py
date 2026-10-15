@@ -11,7 +11,7 @@ so a personal address never has to be committed to the repository.
 import os
 from html import escape
 
-LAST_UPDATED = "3 October 2026"
+LAST_UPDATED = "15 October 2026"
 
 
 def privacy_policy_html():
@@ -72,7 +72,8 @@ stores about you, who can see it, and how to delete it.</p>
   computer. An uploaded photo is cropped, shrunk and saved again before we store it,
   which removes the extra information phones put in photos, such as where the photo
   was taken.</li>
-  <li><strong>Your league activity:</strong> when you join or leave a queue, when your
+  <li><strong>Your league activity:</strong> the leagues you join, and which you joined
+  first - its school is your home school; when you join or leave a queue, when your
   turn comes and whether you confirm you're there, the games you play and their scores
   (and requests to cancel a game), and your ratings, ranks, wins and losses.</li>
   <li><strong>Server logs:</strong> the service that hosts our server keeps standard
@@ -83,7 +84,8 @@ no advertising and no analytics or tracking. The app opens your photos only when
 choose a profile picture, and only the one photo you pick is uploaded.</p>
 
 <h2>Who can see it</h2>
-<p>Other players can see your username, flag and profile picture, your ranks,
+<p>Other players can see your username, flag and profile picture, your home school,
+your ranks,
 ratings and win-loss records, your place in a queue, and the games you've played -
 including your record against each player. That is how the league works. Your first
 and last name, your email address and your password are never shown to other
@@ -112,7 +114,7 @@ hosting provider and then deleted.</p>
 <h2>Deleting your account</h2>
 <p>In the app, open <strong>Profile</strong>, choose <strong>Delete account</strong>
 and enter your password. This removes your username, name, email, flag, picture
-(deleting a photo you uploaded) and password straight away, takes you out of every queue and off the ladders, and
+(deleting a photo you uploaded), home school and password straight away, takes you out of every queue and off the ladders, and
 signs you out everywhere. Games you played stay in other players' history, shown
 as "Deleted player" with nothing that identifies you. It can't be undone.{ask_by_email}</p>
 

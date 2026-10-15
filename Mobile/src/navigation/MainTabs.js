@@ -14,6 +14,7 @@
 import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import Feather from '@expo/vector-icons/Feather';
+import { useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { HeaderButton } from '../components/ui';
@@ -41,15 +42,23 @@ const TAB_ICONS = {
   Profile: 'user',
 };
 
+// Room the header leaves its title: the Switch league button and margins
+// take the rest. Without a cap a long name ("Brooklyn College Billiards")
+// ran on underneath the button.
+const HEADER_SIDE_ROOM = 196;
+
 export function MainTabs() {
   const { theme, league } = useLeague();
   const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
+  const name = league?.name ?? '';
 
   return (
     <Tab.Navigator
       screenOptions={({ route, navigation }) => ({
-        headerTitle: () => <Wordmark title={league?.name ?? ''} />,
+        headerTitle: () => <Wordmark title={name} size={name.length > 18 ? 22 : 26} />,
         headerTitleAlign: 'left',
+        headerTitleContainerStyle: { maxWidth: Math.max(140, width - HEADER_SIDE_ROOM) },
         headerStyle: { backgroundColor: theme.page },
         headerShadowVisible: false,
         headerRight: () => (

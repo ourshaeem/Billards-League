@@ -67,6 +67,7 @@ function Spot({ period, title, empty, award }) {
                 </span>
               )}
             </span>
+            {player.home_school && <span className="podium-school">{player.home_school}</span>}
           </button>
           {/* Two pieces that each stay whole, so a narrow column breaks
               between them rather than inside "2-0". */}

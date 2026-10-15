@@ -19,8 +19,9 @@ accounts are left out, as they are off the ladders.
 
 Each place carries the player's card in the league the place was earned
 in - where they gained the most points that period, or whose rating it
-is - with that league's name and school, so the apps can say "Giant,
-CCNY Ping Pong".
+is - with that league's name and school, and the player's own home
+school (the league they joined first), so the apps can say where they're
+from and where they earned it: "Shaeem, CCNY @ Brooklyn College".
 """
 from collections import defaultdict
 from datetime import datetime
@@ -37,8 +38,11 @@ def global_leaderboard(now=None):
     """
     {timezone, sports: {billiards: {week, month, all_time}, ping_pong: ...}},
     each timeframe a list of up to TOP places, best first:
-        {place, player: card, league_id, league_name, school, wins, losses,
-         points (week and month: net points gained) | elo (all time)}
+        {place, player: card, league_id, league_name, school, home_school,
+         wins, losses, points (week and month: net points gained) | elo
+         (all time)}
+    school is where the place was earned; home_school where the player is
+    from (None for a player with no home yet).
     wins and losses are the period's, in every league of the game, or (all
     time) the record in the league whose rating it is.
     """
@@ -191,4 +195,5 @@ def _place(place, player, league):
         "league_id": league.league_id,
         "league_name": league.name,
         "school": league.school,
+        "home_school": player.home_school,
     }

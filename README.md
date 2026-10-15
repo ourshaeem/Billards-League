@@ -16,7 +16,9 @@ mind without losing their place. When it's your turn you have a minute
 to say you're here, or the next person is up; and a game both players
 agree to call off is cancelled with nothing recorded. Each league has
 its own ratings, ranks, ladder, match history and colours - the
-school's, each in light and dark. Each table shows its winning-streak
+school's, each in light and dark. Every player has a home school - the
+school of the first league they joined - shown by their name on every
+leaderboard, wherever they play. Each table shows its winning-streak
 record and who holds it. A king who walked off without giving up the
 table can be voted off by everyone waiting. Tap any player to see their profile, their
 games and their record against you.
@@ -76,7 +78,10 @@ and it is safe to run on every start. It:
   declare, including a unique one that stops a double-tapped Join
   queueing someone twice,
 - names the holder of every table record set before holders were kept,
-  by replaying that table's games.
+  by replaying that table's games,
+- gives every player with a place in a league a home school, if they
+  joined before homes were kept: the league of their first game or first
+  PIN, whichever came first.
 
 Each step prints a `[schema]` line when it changes something.
 
@@ -639,11 +644,19 @@ belongs to its table's league.
   rating of 1200 - averaged between the two players so the ladder stays
   zero-sum. A lopsided game moves up to 50% more than a close one (11-0
   vs 11-9 or a deuce game). Billiards keeps its flat K of 32.
+- **Home school.** `Players.home_league_id` is the league a player joined
+  first - by entering its PIN, or playing their first game there - and
+  its school is where they're from. Set once, in `ensure_standing`;
+  joining more leagues never changes it. Ladders, the podium and player
+  profiles show it ("Gold · CCNY", "From CCNY"), so a CCNY player on
+  Brooklyn's ladder is still from CCNY.
 - **Champions.** `GET /leaderboard/global` (`logic/global_leaderboard.py`)
   is the top 3 in each game, across every school: this week and this
   month by rating points gained (added up across all of that game's
-  leagues), and all time by the best rating anyone holds. It's at the top
-  of the league picker in both apps.
+  leagues), and all time by the best rating anyone holds. Each place says
+  where the player is from and where they earned it - "CCNY @ Brooklyn
+  College", or just "CCNY" when that's both. It's at the top of the
+  league picker in both apps.
 - **Table records.** `Pool_Tables.table_record_holder_id` is whoever
   first reached the table's record streak; the table cards show their
   picture and name beside it.

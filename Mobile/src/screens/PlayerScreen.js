@@ -26,7 +26,7 @@ const HEAD_TO_HEAD_LIMIT = 10;
 
 export function PlayerScreen({ route, navigation }) {
   const { userId } = route.params;
-  const { league: screenLeague, leagues } = useLeague();
+  const { league: screenLeague, leagues, theme } = useLeague();
   const { user } = useSession();
   const [leagueId, setLeagueId] = useState(screenLeague?.league_id ?? null);
   const [player, setPlayer] = useState(null);
@@ -78,6 +78,11 @@ export function PlayerScreen({ route, navigation }) {
               {player.username}
               {flag ? ` ${flag}` : ''}
             </Txt>
+            {player.home_school ? (
+              <Txt variant="small" weight="semibold" color={theme.accentText}>
+                From {player.home_school}
+              </Txt>
+            ) : null}
             {isYou ? (
               <Txt variant="small" muted>
                 This is how other players see you.

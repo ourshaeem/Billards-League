@@ -7,6 +7,9 @@
  *
  * This week and this month rank by rating points gained; all time by the
  * best rating anyone holds. Tapping a name opens that player's profile.
+ * Each says where they're from and where they earned their place: "CCNY @
+ * Brooklyn College" for a CCNY player winning at Brooklyn, just "CCNY"
+ * when that's both.
  */
 import React, { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
@@ -26,6 +29,12 @@ const GAME_OPTIONS = LEAGUE_ORDER.map((key) => ({ value: key, label: gameInfo(ke
 
 function signed(points) {
   return points > 0 ? `+${points}` : String(points);
+}
+
+/** "CCNY @ Brooklyn College": home school @ where the place was earned. */
+function fromAt(place) {
+  const home = place.home_school;
+  return home && home !== place.school ? `${home} @ ${place.school}` : place.school;
 }
 
 export function GlobalLeaderboard({ champions, currentUserId }) {
@@ -87,7 +96,7 @@ export function GlobalLeaderboard({ champions, currentUserId }) {
                 isYou={place.player.user_id === currentUserId}
               />
               <Txt variant="small" muted style={styles.school}>
-                {place.school}
+                {fromAt(place)}
               </Txt>
             </View>
             <View style={styles.value} accessible accessibilityLabel={`${value} points, ${place.wins} won, ${place.losses} lost`}>

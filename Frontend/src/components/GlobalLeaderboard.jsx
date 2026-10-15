@@ -5,7 +5,10 @@
  * choosing a league, so a player knows who's on top everywhere.
  *
  * This week and this month rank by rating points gained; all time by the
- * best rating anyone holds. Each name opens that player's profile.
+ * best rating anyone holds. Each name opens that player's profile, and
+ * says where they're from and where they earned their place: "CCNY @
+ * Brooklyn College" for a CCNY player winning at Brooklyn, just "CCNY"
+ * when that's both.
  */
 import React, { useState } from 'react';
 import { Trophy } from 'lucide-react';
@@ -21,6 +24,12 @@ const TIMEFRAMES = [
 
 function signed(points) {
   return points > 0 ? `+${points}` : String(points);
+}
+
+/** "CCNY @ Brooklyn College": home school @ where the place was earned. */
+function fromAt(place) {
+  const home = place.home_school;
+  return home && home !== place.school ? `${home} @ ${place.school}` : place.school;
 }
 
 export function GlobalLeaderboard({ champions, currentUserId }) {
@@ -76,7 +85,16 @@ export function GlobalLeaderboard({ champions, currentUserId }) {
                             size="sm"
                             isYou={place.player.user_id === currentUserId}
                           />
-                          <span className="champion-school">{place.school}</span>
+                          <span
+                            className="champion-school"
+                            title={
+                              place.home_school && place.home_school !== place.school
+                                ? `From ${place.home_school}, playing at ${place.school}`
+                                : undefined
+                            }
+                          >
+                            {fromAt(place)}
+                          </span>
                         </span>
                         <span className="champion-value">
                           <span>
