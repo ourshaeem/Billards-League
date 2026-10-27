@@ -31,6 +31,7 @@ from logic.manage_queue import (
 )
 from logic.tables import active_tables, league_for_table
 from models import (
+    STANDARD,
     STARTING_ELO,
     League,
     LeagueAccess,
@@ -100,18 +101,19 @@ def accessible_league_ids(user_id):
     )
 
 
-def ensure_standing(user_id, league, lock=False):
+def ensure_standing(user_id, league, lock=False, mode=STANDARD):
     """
-    The player's Standing in a league, made - where every new player starts
-    - if they don't have one yet. With lock, the row is held FOR UPDATE and
-    re-read, for changing the numbers. Doesn't commit.
+    The player's Standing in a league at one game mode (8-ball - STANDARD -
+    9-ball or 10-ball; each its own rating), made - where every new player
+    starts - if they don't have one yet. With lock, the row is held FOR
+    UPDATE and re-read, for changing the numbers. Doesn't commit.
 
     The first Standing a player ever gets also makes that league their
     home (Player.home_league_id): whether by entering its PIN or playing
     their first game there, it's the first league they joined.
     """
     league = League.of(league)
-    key = (user_id, league.league_id)
+    key = (user_id, league.league_id, mode)
     standing = db.session.get(Standing, key, with_for_update=lock, populate_existing=lock)
     if standing is not None:
         return standing
@@ -120,6 +122,7 @@ def ensure_standing(user_id, league, lock=False):
     standing = Standing(
         user_id=user_id,
         league_id=league.league_id,
+        mode=mode,
         elo=STARTING_ELO,
         wins=0,
         losses=0,

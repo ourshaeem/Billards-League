@@ -18,6 +18,7 @@ import { Avatar, useOpenPlayer } from '../components/Player';
 import { Button, Card, Field, FieldError, Screen, Segmented, Txt } from '../components/ui';
 import { flagEmoji } from '../flags';
 import { emailProblem } from '../accountRules';
+import { standingRows } from '../leagues';
 import { PhotoProblem, pickSquarePhoto } from '../photo';
 import { APPEARANCE_OPTIONS, useAppearance } from '../state/AppearanceContext';
 import { useLeague } from '../state/LeagueContext';
@@ -498,7 +499,8 @@ function AppearanceCard() {
 /** One row for each league the player is in - a league's PIN puts them on its ladder. */
 function Standing({ profile }) {
   const { theme } = useLeague();
-  const standings = profile.standings || [];
+  // 8-ball, then 9-ball and 10-ball under it: each its own rating.
+  const standings = standingRows(profile.standings, profile.mode_standings);
   return (
     <Card title="Where you stand">
       {standings.length === 0 ? (
@@ -509,16 +511,23 @@ function Standing({ profile }) {
       {standings.map((standing, index) => {
         return (
           <View
-            key={standing.league_id}
+            key={standing.key}
             accessible
-            accessibilityLabel={`${standing.name}: ${standing.rank_name ?? 'Unranked'}, ${pointsText(standing.elo)}, ${standing.wins ?? 0} won, ${standing.losses ?? 0} lost`}
+            accessibilityLabel={`${standing.name}${standing.modeName ? ` ${standing.modeName}` : ''}: ${standing.rank_name ?? 'Unranked'}, ${pointsText(standing.elo)}, ${standing.wins ?? 0} won, ${standing.losses ?? 0} lost`}
             style={[
               styles.standingRow,
               index < standings.length - 1 && { borderBottomWidth: 1, borderBottomColor: theme.lineSoft },
             ]}
           >
             <View style={styles.standingName}>
-              <Txt weight="semibold">{standing.name}</Txt>
+              <View style={styles.nameLine}>
+                <Txt weight="semibold">{standing.name}</Txt>
+                {standing.modeName ? (
+                  <Text style={[styles.modeTag, { color: theme.accentText, backgroundColor: theme.accentSoft }]}>
+                    {standing.modeName}
+                  </Text>
+                ) : null}
+              </View>
               <Txt variant="small" muted>
                 {standing?.rank_name ?? 'Unranked'}
               </Txt>
@@ -561,6 +570,14 @@ const styles = StyleSheet.create({
   selectText: { flex: 1, fontFamily: fonts.regular, fontSize: type.body },
   standingRow: { flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 56, paddingVertical: 8 },
   standingName: { flex: 1 },
+  nameLine: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: 6, rowGap: 2 },
+  modeTag: {
+    fontFamily: fonts.bold,
+    fontSize: type.small,
+    paddingHorizontal: 8,
+    borderRadius: radius.pill,
+    overflow: 'hidden',
+  },
   noStanding: { paddingVertical: 12 },
   standingNumber: { fontFamily: fonts.regular, fontSize: type.body, fontVariant: ['tabular-nums'], minWidth: 44, textAlign: 'right' },
   signOut: { marginTop: 4, marginBottom: 16 },

@@ -5,6 +5,7 @@
 import React, { useState } from 'react';
 import { History } from 'lucide-react';
 
+import { STANDARD, modeInfo } from '../leagues.js';
 import { PlayerChip } from './Player.jsx';
 
 const SCOPES = [
@@ -144,6 +145,10 @@ export function HistoryRow({ match, league, currentUserId, subject = null }) {
       </div>
 
       <p className="history-meta">
+        {/* A 9-ball or 10-ball game says so: its points are that game's. */}
+        {match.mode && match.mode !== STANDARD && (
+          <span className="history-mode">{modeInfo(match.league_type, match.mode).name}</span>
+        )}
         {result && (
           <strong className="history-outcome" data-result={result}>
             {subject ?? 'You'} {result === 'won' ? 'won' : 'lost'}

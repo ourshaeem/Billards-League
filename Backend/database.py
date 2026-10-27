@@ -209,6 +209,7 @@ ADDED_COLUMNS = [
     ("Pool_Tables", "table_record_holder_id", "INTEGER NULL"),
     ("Matches", "removal_vote_at", "DATETIME NULL"),
     ("Players", "home_league_id", "INTEGER NULL"),
+    ("Matches", "mode", "VARCHAR(16) NOT NULL DEFAULT 'standard'"),
 ]
 # (Ratings used to be columns on Players - elo_rating, ping_pong_elo and
 # the rest - and each league's chosen badge too. They moved to Standings;
@@ -279,6 +280,9 @@ def ensure_schema():
          and touches nothing else.
       2. Every column in ADDED_COLUMNS exists, and Queue.table_id allows
          NULL (a queue row names a table only once its player is called).
+         Standings is one row per player, league and game mode (8-ball,
+         9-ball, 10-ball): the mode is added to its key, and every rating
+         from before is 8-ball - the game it was for.
       3. An empty Ranks table gets the DEFAULT_RANKS tiers.
       4. Table 1, and a ping pong table, exist - what every database had
          before there were schools.
@@ -385,6 +389,33 @@ def ensure_schema():
             text(f"ALTER TABLE {QueueEntry.__tablename__} MODIFY COLUMN table_id INT NULL DEFAULT NULL")
         )
         return "Queue.table_id now allows NULL"
+
+    def standings_by_mode():
+        # Standings gained a game mode, part of its key. On MySQL the key
+        # changes in the same statement as the column arrives, so the
+        # foreign keys on user_id and league_id always have an index to
+        # stand on. SQLite (the tests) builds Standings from the models,
+        # which already have it, and can't change a key anyway.
+        connection = db.session.connection()
+        inspector = inspect(connection)
+        actual = {name.lower(): name for name in inspector.get_table_names()}.get(
+            Standing.__tablename__.lower()
+        )
+        if actual is None:
+            return None  # create_missing_tables builds it, mode and all
+        columns = {c["name"] for c in inspector.get_columns(actual)}
+        key = inspector.get_pk_constraint(actual).get("constrained_columns") or []
+        if "mode" in columns and "mode" in key:
+            return None
+        if db.engine.dialect.name != "mysql":
+            if "mode" in columns:
+                return None
+            db.session.execute(text(f"ALTER TABLE {actual} ADD COLUMN mode VARCHAR(16) NOT NULL DEFAULT 'standard'"))
+            return "added Standings.mode"
+        changes = [] if "mode" in columns else ["ADD COLUMN mode VARCHAR(16) NOT NULL DEFAULT 'standard'"]
+        changes.append("DROP PRIMARY KEY, ADD PRIMARY KEY (user_id, league_id, mode)")
+        db.session.execute(text(f"ALTER TABLE {actual} {', '.join(changes)}"))
+        return "one standing per player, league and game mode; every rating so far is 8-ball"
 
     def add_table_one():
         if db.session.get(PoolTable, 1) is not None:
@@ -706,6 +737,8 @@ def ensure_schema():
     step("Missing tables", create_missing_tables)
     step("New columns", add_columns)
     step("Queue tables optional", queue_table_optional)
+    # Before anything reads or writes a Standing.
+    step("Standings by game mode", standings_by_mode)
     # Before anything that looks a rank up by rating.
     step("Rank tiers", seed_ranks)
     step("Table 1", add_table_one)

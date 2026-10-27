@@ -19,6 +19,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowLeftRight, BellRing, LogOut, Moon, Settings, Sun } from 'lucide-react';
 
 import * as api from './api.js';
+import { STANDARD } from './leagues.js';
 import { flagEmoji } from './flags.js';
 import {
   applyLeagueColors,
@@ -114,6 +115,11 @@ export default function App() {
 
   const [queue, setQueue] = useState([]);
   const [leaderboard, setLeaderboard] = useState([]);
+  // Which of a billiards league's ladders is showing: 8-ball (STANDARD),
+  // 9-ball or 10-ball. Read by requests as they return, like leagueRef, so
+  // an answer for the ladder just switched away from doesn't land.
+  const [ladderMode, setLadderMode] = useState(STANDARD);
+  const ladderModeRef = useRef(STANDARD);
   // Every table the league has in use, and who is at each.
   const [tables, setTables] = useState([]);
   const [history, setHistory] = useState(EMPTY_HISTORY);
@@ -201,6 +207,8 @@ export default function App() {
     (next) => {
       leagueRef.current = next;
       setLeagueId(next);
+      ladderModeRef.current = STANDARD;
+      setLadderMode(STANDARD);
       clearLeagueData();
     },
     [clearLeagueData],
@@ -473,9 +481,10 @@ export default function App() {
       // Off the dashboard (a profile page) only your own status matters:
       // enough to tell you when it's your turn.
       if (!statusOnly) {
+        const forMode = ladderModeRef.current;
         const [queueRes, boardRes, tableRes] = await Promise.all([
           api.getLeagueQueue(forLeague, signal),
-          api.getLeaderboard(forLeague, signal),
+          api.getLeaderboard(forLeague, { mode: forMode }, signal),
           api.getLeagueTables(forLeague, signal),
         ]);
         if (stale()) return;
@@ -492,7 +501,7 @@ export default function App() {
           setQueue(Array.isArray(queueRes.data) ? queueRes.data : []);
           setLoaded((l) => (l.queue ? l : { ...l, queue: true }));
         }
-        if (boardRes.ok) {
+        if (boardRes.ok && ladderModeRef.current === forMode) {
           setLeaderboard(Array.isArray(boardRes.data) ? boardRes.data : []);
           setLoaded((l) => (l.leaderboard ? l : { ...l, leaderboard: true }));
         }
@@ -911,10 +920,28 @@ export default function App() {
     finishRemoval(res, player);
   };
 
-  /** gameLeagueId is the league of the game itself (the status's league_id). */
-  const handleRecord = async (myScore, oppScore, matchId, gameLeagueId) => {
+  /** Show another of a billiards league's ladders: 8-ball, 9-ball or 10-ball. */
+  const chooseLadderMode = async (mode) => {
+    if (mode === ladderModeRef.current) return;
+    ladderModeRef.current = mode;
+    setLadderMode(mode);
+    setLeaderboard([]);
+    setLoaded((l) => ({ ...l, leaderboard: false }));
+    const forLeague = leagueId;
+    const res = await api.getLeaderboard(forLeague, { mode });
+    if (res.ok && ladderModeRef.current === mode && leagueRef.current === forLeague) {
+      setLeaderboard(Array.isArray(res.data) ? res.data : []);
+      setLoaded((l) => ({ ...l, leaderboard: true }));
+    }
+  };
+
+  /**
+   * gameLeagueId is the league of the game itself (the status's league_id);
+   * mode the game it was - 8-ball, 9-ball or 10-ball in billiards.
+   */
+  const handleRecord = async (myScore, oppScore, matchId, gameLeagueId, mode = STANDARD) => {
     setBusy(true);
-    const res = await api.recordMatch(myScore, oppScore, matchId, gameLeagueId);
+    const res = await api.recordMatch(myScore, oppScore, matchId, gameLeagueId, mode);
     setBusy(false);
 
     if (!res.ok) {
@@ -1307,6 +1334,8 @@ export default function App() {
                   loaded={loaded.leaderboard}
                   league={league}
                   currentUsername={user.username}
+                  mode={ladderMode}
+                  onModeChange={chooseLadderMode}
                 />
               </div>
 

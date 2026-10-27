@@ -1,11 +1,12 @@
 """The top 50 players by rating, in one league."""
 from logic.achievements import featured_badges
-from models import BILLIARDS, League, Player, Standing, db
+from models import BILLIARDS, STANDARD, League, Player, Standing, db
 
 
-def top50_leaderboard(league=BILLIARDS):
+def top50_leaderboard(league=BILLIARDS, mode=STANDARD):
     """
-    The league's ladder, best first:
+    The league's ladder at one game mode - 8-ball (STANDARD), 9-ball or
+    10-ball, each its own - best first:
         [{user_id, username, country_flag, profile_picture, elo_rating,
           total_wins, total_losses, rank_name, badge}, ...]
     Everyone with a place in the league - their Standing, which they get
@@ -25,6 +26,7 @@ def top50_leaderboard(league=BILLIARDS):
         .join(Standing, Standing.user_id == Player.user_id)
         .where(
             Standing.league_id == league.league_id,
+            Standing.mode == mode,
             # A deleted account keeps its row for other people's history,
             # but has no place on the ladder.
             Player.deleted_at.is_(None),
@@ -36,6 +38,6 @@ def top50_leaderboard(league=BILLIARDS):
     ).all()
     badges = featured_badges(players, league)
     return [
-        {**player.to_leaderboard_dict(league), "badge": badges[player.user_id]}
+        {**player.to_leaderboard_dict(league, mode), "badge": badges[player.user_id]}
         for player in players
     ]

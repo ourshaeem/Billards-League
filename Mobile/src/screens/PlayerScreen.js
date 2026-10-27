@@ -16,6 +16,7 @@ import { GameRow } from '../components/GameRow';
 import { Avatar } from '../components/Player';
 import { Button, Card, Screen, Txt } from '../components/ui';
 import { flagEmoji } from '../flags';
+import { STANDARD, modeInfo } from '../leagues';
 import { useLeague } from '../state/LeagueContext';
 import { useSession } from '../state/SessionContext';
 import { pointsText } from '../format';
@@ -93,6 +94,7 @@ export function PlayerScreen({ route, navigation }) {
         <Standings
           choices={choices}
           standings={standings}
+          modeStandings={player.mode_standings || []}
           selected={league?.league_id}
           onSelect={setLeagueId}
         />
@@ -114,9 +116,11 @@ export function PlayerScreen({ route, navigation }) {
 
 /**
  * Their standing in each league to show, one row each. With more than one,
- * a row is also how to pick the league whose games show below.
+ * a row is also how to pick the league whose games show below. A billiards
+ * league they've played 9-ball or 10-ball in has a row for each of those
+ * games under its own (8-ball's) - separate ratings, not ones to tap.
  */
-function Standings({ choices, standings, selected, onSelect }) {
+function Standings({ choices, standings, modeStandings, selected, onSelect }) {
   const { theme } = useLeague();
   const many = choices.length > 1;
   if (!choices.length) {
@@ -131,38 +135,56 @@ function Standings({ choices, standings, selected, onSelect }) {
       {choices.map((league, index) => {
         const standing = standings.find((st) => st.league_id === league.league_id);
         const isSelected = league.league_id === selected;
+        const others = modeStandings.filter((m) => m.league_id === league.league_id);
+        const last = index === choices.length - 1;
+        const divider = { borderBottomWidth: 1, borderBottomColor: theme.lineSoft };
         return (
-          <Pressable
-            key={league.league_id}
-            onPress={() => onSelect(league.league_id)}
-            disabled={!many}
-            accessibilityRole={many ? 'button' : undefined}
-            accessibilityState={many ? { selected: isSelected } : undefined}
-            accessibilityHint={many ? 'Shows their games in this league' : undefined}
-            accessibilityLabel={`${league.name}: ${standing?.rank_name ?? 'Unranked'}, ${pointsText(standing?.elo)}, ${standing?.wins ?? 0} won, ${standing?.losses ?? 0} lost`}
-            style={({ pressed }) => [
-              styles.standingRow,
-              index < choices.length - 1 && { borderBottomWidth: 1, borderBottomColor: theme.lineSoft },
-              (isSelected || pressed) && many && { backgroundColor: theme.accentWash },
-              isSelected && many && { borderLeftWidth: 3, borderLeftColor: theme.accent },
-            ]}
-          >
-            <View style={styles.standingName}>
-              <Txt weight="semibold">{league.name}</Txt>
-              <Txt variant="small" muted>
-                {standing?.rank_name ?? 'Unranked'}
-              </Txt>
-            </View>
-            <Text style={[styles.number, { color: theme.text, fontFamily: fonts.bold }]}>
-              {standing?.elo ?? 0}
-            </Text>
-            <Text style={[styles.number, { color: theme.textMuted }]}>
-              <Text style={{ color: theme.accentText, fontFamily: fonts.semibold }}>
-                {standing?.wins ?? 0}
-              </Text>
-              –{standing?.losses ?? 0}
-            </Text>
-          </Pressable>
+          <React.Fragment key={league.league_id}>
+            <Pressable
+              onPress={() => onSelect(league.league_id)}
+              disabled={!many}
+              accessibilityRole={many ? 'button' : undefined}
+              accessibilityState={many ? { selected: isSelected } : undefined}
+              accessibilityHint={many ? 'Shows their games in this league' : undefined}
+              accessibilityLabel={`${league.name}${others.length ? ` ${modeInfo(league.game, STANDARD).name}` : ''}: ${standing?.rank_name ?? 'Unranked'}, ${pointsText(standing?.elo)}, ${standing?.wins ?? 0} won, ${standing?.losses ?? 0} lost`}
+              style={({ pressed }) => [
+                styles.standingRow,
+                (!last || others.length > 0) && divider,
+                (isSelected || pressed) && many && { backgroundColor: theme.accentWash },
+                isSelected && many && { borderLeftWidth: 3, borderLeftColor: theme.accent },
+              ]}
+            >
+              <View style={styles.standingName}>
+                <View style={styles.nameLine}>
+                  <Txt weight="semibold">{league.name}</Txt>
+                  {others.length ? <ModeTag name={modeInfo(league.game, STANDARD).name} /> : null}
+                </View>
+                <Txt variant="small" muted>
+                  {standing?.rank_name ?? 'Unranked'}
+                </Txt>
+              </View>
+              <Numbers standing={standing} />
+            </Pressable>
+            {others.map((m, i) => (
+              <View
+                key={m.mode}
+                accessible
+                accessibilityLabel={`${league.name} ${m.mode_name}: ${m.rank_name ?? 'Unranked'}, ${pointsText(m.elo)}, ${m.wins ?? 0} won, ${m.losses ?? 0} lost`}
+                style={[styles.standingRow, styles.modeRow, (!last || i < others.length - 1) && divider]}
+              >
+                <View style={styles.standingName}>
+                  <View style={styles.nameLine}>
+                    <Txt weight="semibold">{league.name}</Txt>
+                    <ModeTag name={m.mode_name} />
+                  </View>
+                  <Txt variant="small" muted>
+                    {m.rank_name ?? 'Unranked'}
+                  </Txt>
+                </View>
+                <Numbers standing={m} />
+              </View>
+            ))}
+          </React.Fragment>
         );
       })}
       {many ? (
@@ -419,6 +441,34 @@ function Games({ player, league, currentUserId, against, onShowAll }) {
   );
 }
 
+/** Rating and won-lost, at the right of a standing row. */
+function Numbers({ standing }) {
+  const { theme } = useLeague();
+  return (
+    <>
+      <Text style={[styles.number, { color: theme.text, fontFamily: fonts.bold }]}>
+        {standing?.elo ?? 0}
+      </Text>
+      <Text style={[styles.number, { color: theme.textMuted }]}>
+        <Text style={{ color: theme.accentText, fontFamily: fonts.semibold }}>
+          {standing?.wins ?? 0}
+        </Text>
+        –{standing?.losses ?? 0}
+      </Text>
+    </>
+  );
+}
+
+/** "9-ball", beside a league's name: which game's rating the row is. */
+function ModeTag({ name }) {
+  const { theme } = useLeague();
+  return (
+    <Text style={[styles.modeTag, { color: theme.accentText, backgroundColor: theme.accentSoft }]}>
+      {name}
+    </Text>
+  );
+}
+
 const styles = StyleSheet.create({
   head: { flexDirection: 'row', alignItems: 'center', gap: 16, marginBottom: 14 },
   headText: { flex: 1, gap: 2 },
@@ -434,6 +484,16 @@ const styles = StyleSheet.create({
     borderRadius: radius.sm,
   },
   standingName: { flex: 1 },
+  // 9-ball and 10-ball sit under their league's row, a step in.
+  modeRow: { paddingLeft: 18 },
+  nameLine: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', columnGap: 6, rowGap: 2 },
+  modeTag: {
+    fontFamily: fonts.bold,
+    fontSize: type.small,
+    paddingHorizontal: 8,
+    borderRadius: radius.pill,
+    overflow: 'hidden',
+  },
   number: {
     fontFamily: fonts.regular,
     fontSize: type.body,

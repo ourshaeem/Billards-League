@@ -413,8 +413,8 @@ export function LiveProvider({ children }) {
 
   /** gameLeagueId is the league of the game itself (the status's league_id). */
   const record = useCallback(
-    async (myScore, oppScore, matchId, gameLeagueId) => {
-      const res = await perform(() => api.recordMatch(myScore, oppScore, matchId, gameLeagueId));
+    async (myScore, oppScore, matchId, gameLeagueId, mode = 'standard') => {
+      const res = await perform(() => api.recordMatch(myScore, oppScore, matchId, gameLeagueId, mode));
       if (!res.ok) {
         reportFailure(res);
         noticeLocked(res);

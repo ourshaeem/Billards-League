@@ -13,7 +13,7 @@ from tests.conftest_base import PING_PONG_TABLE_ID, BaseTestCase
 from sqlalchemy.exc import DBAPIError, InternalError
 
 from database import LEAGUES, MYSQL_DEADLOCK, check_schema, ensure_schema, retry_on_deadlock
-from models import BILLIARDS, PING_PONG, League, LeagueAccess, Match, Player, PlayerAchievement, PoolTable, QueueEntry, Standing, db
+from models import BILLIARDS, PING_PONG, STANDARD, League, LeagueAccess, Match, Player, PlayerAchievement, PoolTable, QueueEntry, Standing, db
 
 
 class EnsureSchemaTests(BaseTestCase):
@@ -245,8 +245,8 @@ class MovingToLeagues(BaseTestCase):
             ).all()
             self.assertEqual([t.table_name for t in tables], ["Table 1"], slug)
 
-        alice_billiards = db.session.get(Standing, (self.alice, ccny_billiards.league_id))
-        alice_ping_pong = db.session.get(Standing, (self.alice, ccny_ping_pong.league_id))
+        alice_billiards = db.session.get(Standing, (self.alice, ccny_billiards.league_id, STANDARD))
+        alice_ping_pong = db.session.get(Standing, (self.alice, ccny_ping_pong.league_id, STANDARD))
         self.assertEqual((alice_billiards.elo, alice_billiards.wins, alice_billiards.losses), (140, 3, 1))
         self.assertEqual((alice_ping_pong.elo, alice_ping_pong.wins), (75, 2))
         self.assertEqual(alice_ping_pong.featured_badge, "shutout")

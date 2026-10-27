@@ -81,7 +81,11 @@ and it is safe to run on every start. It:
   by replaying that table's games,
 - gives every player with a place in a league a home school, if they
   joined before homes were kept: the league of their first game or first
-  PIN, whichever came first.
+  PIN, whichever came first,
+- makes `Standings` one row per player, league and game (`mode` joins its
+  primary key: `standard`, `nine_ball` or `ten_ball`), and adds
+  `Matches.mode`; every rating and game from before is `standard` -
+  8-ball in billiards, the only game in ping pong.
 
 Each step prints a `[schema]` line when it changes something.
 
@@ -181,8 +185,8 @@ a quick look but isn't what ships to phones.
 
 ### Starting a league over (a new season)
 
-Puts every player's rating, record and rank in one league back to a new
-player's, keeps the finished games in the history, and leaves the other
+Puts every player's rating, record and rank in one league - at 8-ball,
+9-ball and 10-ball alike - back to a new player's, keeps the finished games in the history, and leaves the other
 league alone. Everyone's old numbers are saved to `Backend/backups/`
 (gitignored) first. From `Backend/`, against the live database:
 
@@ -224,7 +228,8 @@ DATABASE_URL="<the live DATABASE_URL>" flask --app app set-password <username-or
 
 Removes one finished game from the history and undoes exactly what it
 did: the winner gives back the points it gave them, the loser gets back
-what it cost them, and each loses it from their record. Games since stay
+what it cost them, and each loses it from their record - in the game it
+was, so taking back a 9-ball game moves only 9-ball numbers. Games since stay
 as they were. Find the game's `match_id` in `GET /matches/history`, then
 from `Backend/`, against the live database (as for a reset):
 
@@ -248,8 +253,8 @@ DATABASE_URL="<the live DATABASE_URL>" flask --app app add-games ccny-ping-pong 
   --game Mel "Tom Holland" 11-1
 ```
 
-Players are named by exact username (or email). It lists the games and
-asks first; an unknown name or a score that can't happen stops it
+Players are named by exact username (or email). Billiards games are
+added as 8-ball. It lists the games and asks first; an unknown name or a score that can't happen stops it
 before anything is saved. Everyone's numbers from before go to
 `Backend/backups/`. Take a game back with `void-game`.
 
@@ -621,9 +626,11 @@ belongs to its table's league.
   at a table the new choice rules out (409: say you're here, or leave
   first). A league with one table has one line: choosing its table is
   kept as "any", so nobody jumps the line by naming it.
-- **Ratings** live in `Standings`, one row per player per league (elo,
-  wins, losses, rank, featured badge). A player gets one when they first
-  enter a league's PIN. All leagues share the `Ranks` tiers.
+- **Ratings** live in `Standings`, one row per player per league per game
+  (elo, wins, losses, rank, featured badge) - see *8-ball, 9-ball and
+  10-ball* below. A player gets their 8-ball (or ping pong) row when they
+  first enter a league's PIN, and a 9-ball or 10-ball row with their
+  first game of it. All leagues share the `Ranks` tiers.
 - **Access.** `League_Access` says who has entered which league's PIN.
   Joining, saying "I'm here" and reporting a score are refused (403,
   `read_only`) without it; everything else is open to look at. Admins
@@ -632,7 +639,8 @@ belongs to its table's league.
   (`billiards` / `ping_pong`) or a `table_id`, which the server reads as
   CCNY's league of that game, or the table's league.
 - **Scores** are judged by the rules of the game's own league, whatever
-  league the request claims: billiards 0-8, no tie; ping pong one game to
+  league the request claims: billiards the balls each sank - 0-8 at
+  8-ball, 0-9 at 9-ball, 0-10 at 10-ball - no tie; ping pong one game to
   11, won by two (11-9, 12-10). A report sent for the wrong league is
   refused (409) and nothing is saved.
 - **Nobody goes below 0 points.** A loss that would take a player under
@@ -664,6 +672,31 @@ belongs to its table's league.
   colour scheme (`leagueColors.js`): the status panel in the first, with
   the second along its top and on its main button, and text darkened or
   lightened until it reads at 4.5:1 or better.
+
+## 8-ball, 9-ball and 10-ball
+
+Every billiards league plays three games, each with its own rating,
+record and ladder. When a game is done, whoever reports the score says
+which game it was ("Which game was it?" on the scorecard, 8-ball to start
+with); `POST /match/record` carries it as `mode` (`standard`, `nine_ball`
+or `ten_ball`), and an app from before modes sends none, which is 8-ball.
+
+- **Points stay in their game.** A 9-ball win moves only 9-ball ratings;
+  8-ball and 10-ball are untouched, and the other way round. A player's
+  first 9-ball game starts their 9-ball rating at 0, whatever their
+  8-ball rating is.
+- **A ladder each.** `GET /leaderboard?league_id=&mode=nine_ball` is the
+  9-ball ladder; no `mode` is 8-ball. Both apps' ladders switch between
+  the three. Ping pong has one game and refuses a mode (400).
+- **The game is remembered.** Each game in the history says its `mode`,
+  and the apps label 9-ball and 10-ball games. Profiles list a player's
+  9-ball and 10-ball numbers under the league's 8-ball row
+  (`mode_standings`; `standings` stays 8-ball, for older apps).
+- **Only 8-ball elsewhere.** The champions across every school, the
+  players of the day, week and month, and the badges count 8-ball (and
+  ping pong) only. Head-to-head records count every game the two played.
+- Taking a game back (`void-game`) undoes it in its own game; a season
+  reset starts all three over.
 
 ## Voting off an absent king
 

@@ -22,7 +22,7 @@ from logic.achievements import (
 )
 from logic.manage_queue import attempt_matchmaking, confirm_here, join_queue, step_down
 from logic.record_match import apply_result
-from models import BILLIARDS, PING_PONG, Match, Player, PlayerAchievement, Standing, db
+from models import BILLIARDS, PING_PONG, STANDARD, Match, Player, PlayerAchievement, Standing, db
 
 # A plain Tuesday afternoon, so time-of-day badges stay out of the way
 # unless a test asks for them.
@@ -70,8 +70,8 @@ class AchievementTestCase(BaseTestCase):
         league_id = self.league_id(league)
         apply_result(
             match,
-            db.session.get(Standing, (winner, league_id)),
-            db.session.get(Standing, (loser, league_id)),
+            db.session.get(Standing, (winner, league_id, STANDARD)),
+            db.session.get(Standing, (loser, league_id, STANDARD)),
             change,
             league,
         )

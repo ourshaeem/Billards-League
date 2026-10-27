@@ -65,6 +65,20 @@ ELO_FLOOR = 0
 BILLIARDS = "billiards"
 PING_PONG = "ping_pong"
 GAMES = (BILLIARDS, PING_PONG)
+
+# The games a score can be reported as. Each has its own rating and ladder
+# in every league that plays it: points won at 8-ball never move a 9-ball
+# or 10-ball rating, or the other way round. STANDARD is the game a league
+# has always played - 8-ball in billiards, and ping pong's only one - so
+# every game and rating from before modes is STANDARD.
+STANDARD = "standard"
+NINE_BALL = "nine_ball"
+TEN_BALL = "ten_ball"
+MODES = {BILLIARDS: (STANDARD, NINE_BALL, TEN_BALL), PING_PONG: (STANDARD,)}
+MODE_NAMES = {STANDARD: "8-ball", NINE_BALL: "9-ball", TEN_BALL: "10-ball"}
+# The highest a player's score can be in each billiards game: balls sunk.
+MODE_BALLS = {STANDARD: 8, NINE_BALL: 9, TEN_BALL: 10}
+MODE_ORDER = {mode: order for order, mode in enumerate(MODES[BILLIARDS])}
 LEAGUE_TYPES = GAMES
 GAME_NAMES = {BILLIARDS: "Billiards", PING_PONG: "Ping Pong"}
 # What the two leagues were called before there were schools. Apps from
@@ -163,6 +177,9 @@ class Standing(db.Model):
 
     user_id = db.Column(db.Integer, db.ForeignKey("Players.user_id"), primary_key=True)
     league_id = db.Column(db.Integer, db.ForeignKey("Leagues.league_id"), primary_key=True)
+    # Which game these numbers are for (MODES): STANDARD, or 9-ball or
+    # 10-ball in a billiards league - each its own rating and ladder.
+    mode = db.Column(db.String(16), primary_key=True, default=STANDARD, server_default=STANDARD)
     elo = db.Column(db.Integer, nullable=False, default=STARTING_ELO, server_default=str(STARTING_ELO))
     wins = db.Column(db.Integer, nullable=False, default=0, server_default="0")
     losses = db.Column(db.Integer, nullable=False, default=0, server_default="0")
@@ -191,7 +208,7 @@ class Standing(db.Model):
         }
 
     def __repr__(self):
-        return f"<Standing user={self.user_id} league={self.league_id} {self.elo}>"
+        return f"<Standing user={self.user_id} league={self.league_id} {self.mode} {self.elo}>"
 
 
 # A player with no Standing in a league yet: where everyone starts.
@@ -316,19 +333,22 @@ class Player(db.Model):
         league = db.session.get(League, self.home_league_id)
         return league.school if league is not None else None
 
-    def standing_in(self, league):
-        """This player's Standing in a league (any League.of reference), or None."""
+    def standing_in(self, league, mode=STANDARD):
+        """This player's Standing in a league (any League.of reference) and game mode, or None."""
         league = League.of(league)
         if league is None:
             return None
-        return next((st for st in self.standings if st.league_id == league.league_id), None)
+        return next(
+            (st for st in self.standings if st.league_id == league.league_id and st.mode == mode),
+            None,
+        )
 
-    def standing(self, league=BILLIARDS):
-        """This player's numbers in one league - a new player's if they have none there."""
-        st = self.standing_in(league)
+    def standing(self, league=BILLIARDS, mode=STANDARD):
+        """This player's numbers in one league and mode - a new player's if they have none there."""
+        st = self.standing_in(league, mode)
         return st.numbers() if st is not None else dict(NO_STANDING)
 
-    def to_leaderboard_dict(self, league=BILLIARDS):
+    def to_leaderboard_dict(self, league=BILLIARDS, mode=STANDARD):
         """
         One row of /leaderboard, the same shape for either league. user_id,
         flag and picture let the ladder draw each player and open their
@@ -338,7 +358,7 @@ class Player(db.Model):
         "Unranked" mirrors the LEFT JOIN in the old SQL: a player whose
         rank hasn't been calculated yet still has to appear on the ladder.
         """
-        standing = self.standing(league)
+        standing = self.standing(league, mode)
         return {
             "user_id": self.user_id,
             "username": self.username,
@@ -379,7 +399,10 @@ class Player(db.Model):
 
         `leagues` is keyed "billiards" / "ping_pong" and holds CCNY's two,
         as apps from before schools read it. `standings` is every league
-        the player has numbers in.
+        the player has numbers in, at its standard game (8-ball, or ping
+        pong); `mode_standings` their 9-ball and 10-ball numbers, each with
+        its mode - kept apart so apps from before modes don't list a
+        league twice.
         """
         leagues = {
             league.league_id: league
@@ -388,7 +411,7 @@ class Player(db.Model):
         legacy = {league.legacy_key: league for league in leagues.values() if league.legacy_key}
         mine = sorted(
             (st for st in self.standings if st.league_id in leagues),
-            key=lambda st: leagues[st.league_id].sort_order,
+            key=lambda st: (leagues[st.league_id].sort_order, MODE_ORDER.get(st.mode, len(MODE_ORDER))),
         )
         return {
             "user_id": self.user_id,
@@ -405,6 +428,19 @@ class Player(db.Model):
                     **st.numbers(),
                 }
                 for st in mine
+                if st.mode == STANDARD
+            ],
+            "mode_standings": [
+                {
+                    "league_id": st.league_id,
+                    "name": leagues[st.league_id].name,
+                    "league_type": leagues[st.league_id].game,
+                    "mode": st.mode,
+                    "mode_name": MODE_NAMES.get(st.mode, st.mode),
+                    **st.numbers(),
+                }
+                for st in mine
+                if st.mode != STANDARD
             ],
         }
 
@@ -686,6 +722,11 @@ class Match(db.Model):
     # A plain number, not a foreign key: it is only ever one of the two
     # seats above, and it only means anything while the game is on.
     cancel_requested_by = db.Column(db.Integer, nullable=True)
+    # Which game it was (MODES), said by whoever reported the score: 8-ball
+    # (STANDARD), 9-ball or 10-ball. It decides whose numbers the result
+    # moves - each mode has its own rating - and only means anything once
+    # the game is Finished.
+    mode = db.Column(db.String(16), nullable=False, default=STANDARD, server_default=STANDARD)
     # When everyone waiting had voted that the king (player_one) isn't
     # here: they have READY_CHECK_SECONDS from then to say they are, or
     # matchmaking takes them off the table. NULL while the vote isn't
@@ -817,6 +858,8 @@ class Match(db.Model):
             "elo_change": self.elo_change,
             "loser_elo_change": self.loser_points_lost,
             "seconds_ago": seconds_ago,
+            # The game it was, for the label on a 9-ball or 10-ball game.
+            "mode": self.mode or STANDARD,
         }
         if viewer_id is not None:
             entry["result"] = "won" if viewer_id == self.winner_id else "lost"

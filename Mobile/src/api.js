@@ -227,8 +227,19 @@ export const unlockLeague = (leagueId, pin) =>
  */
 export const getGlobalLeaderboard = (signal) => request('/leaderboard/global', { signal });
 
-export const getLeaderboard = (leagueId, signal) =>
-  request(withQuery('/leaderboard', { league_id: leagueId }), { signal });
+/**
+ * A league's ladder at one game: 8-ball (the default - "standard"),
+ * 9-ball ("nine_ball") or 10-ball ("ten_ball") in billiards, each a ladder
+ * of its own. Ping pong has just the one.
+ */
+export const getLeaderboard = (leagueId, { mode } = {}, signal) =>
+  request(
+    withQuery('/leaderboard', {
+      league_id: leagueId,
+      mode: mode && mode !== 'standard' ? mode : undefined,
+    }),
+    { signal },
+  );
 
 /** Who is at a table right now, as player cards: { table: {state, king, challenger, ...} } */
 export const getTable = (tableId, signal) => request(`/table/${tableId}`, { signal });
@@ -393,9 +404,11 @@ export const keepPlaying = (matchId) =>
  * server refuses (409) a report for a game already recorded. leagueId is
  * that game's league (the status payload's league_id). Scores are in the
  * game's own units: balls sunk, or points in ping pong. 403 with
- * data.read_only when the league's PIN has changed since.
+ * data.read_only when the league's PIN has changed since. mode is the game
+ * it was - 8-ball ("standard"), 9-ball or 10-ball in billiards - whose
+ * rating it moves: each has its own.
  */
-export const recordMatch = (myScore, oppScore, matchId, leagueId) =>
+export const recordMatch = (myScore, oppScore, matchId, leagueId, mode = 'standard') =>
   request('/match/record', {
     method: 'POST',
     auth: true,
@@ -404,6 +417,7 @@ export const recordMatch = (myScore, oppScore, matchId, leagueId) =>
       opp_balls: Number(oppScore),
       match_id: matchId,
       league_id: leagueId,
+      mode,
     },
   });
 

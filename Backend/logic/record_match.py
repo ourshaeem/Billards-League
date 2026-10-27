@@ -16,8 +16,9 @@ so a match can never be half-recorded with one player's ELO moved.
 Every league runs through the same sequence. What differs is the game:
 how a score is judged valid and how many points it moves - see
 score_problem() and the two calculate_* functions. Ratings live in
-Standings, one row per player per league, so a result moves only its own
-league's numbers.
+Standings, one row per player per league per game mode, so a result moves
+only its own league's numbers - and in billiards only those of the game it
+was: 8-ball, 9-ball or 10-ball (the reporter says which; Match.mode).
 """
 import logging
 
@@ -27,7 +28,23 @@ from database import retry_on_deadlock
 from logic.achievements import sync_achievements
 from logic.leagues import ensure_standing, has_access
 from logic.tables import league_for_table
-from models import BILLIARDS, ELO_FLOOR, GAMES, PING_PONG, STARTING_ELO, League, Match, PoolTable, Player, Rank, db
+from models import (
+    BILLIARDS,
+    ELO_FLOOR,
+    GAMES,
+    MODE_BALLS,
+    MODE_NAMES,
+    MODES,
+    PING_PONG,
+    STANDARD,
+    STARTING_ELO,
+    League,
+    Match,
+    Player,
+    PoolTable,
+    Rank,
+    db,
+)
 from logic.manage_queue import attempt_matchmaking, lock_active_match_for_player
 
 log = logging.getLogger(__name__)
@@ -37,8 +54,9 @@ log = logging.getLogger(__name__)
 # much that one upset reshuffles the ladder.
 ELO_K_FACTOR = 32
 DEFAULT_ELO = STARTING_ELO
-# Highest number of balls a player can have sunk in a reported game.
-MAX_BALLS = 8
+# Highest number of balls a player can have sunk in a reported 8-ball game
+# (9-ball and 10-ball: MODE_BALLS).
+MAX_BALLS = MODE_BALLS[STANDARD]
 
 # --- Ping pong ---
 # One game to 11, won by two clear points (ITTF rules). The K-factor
@@ -98,10 +116,21 @@ def _expected_win(winner_elo, loser_elo):
     return 1 / (1 + 10 ** ((loser_elo - winner_elo) / 400))
 
 
-def score_problem(league, my_score, opp_score):
+def mode_problem(league, mode):
     """
-    Why a reported score can't be right for this league's game, or None if
-    it can.
+    Why a game can't have been `mode` in this league, or None if it can:
+    9-ball and 10-ball are billiards games.
+    """
+    if mode in MODES[game_of(league)]:
+        return None
+    return "Ping pong has no 9-ball or 10-ball - report it as a ping pong game."
+
+
+def score_problem(league, my_score, opp_score, mode=STANDARD):
+    """
+    Why a reported score can't be right for this league's game (and, in
+    billiards, the mode it was: 8-ball, 9-ball or 10-ball), or None if it
+    can.
 
     The message is shown to the player as-is. Scores are already whole
     numbers by the time they get here.
@@ -120,10 +149,11 @@ def score_problem(league, my_score, opp_score):
             return "After 10-10 the game is won by two clear points, like 12-10."
         return None
 
-    if not (0 <= my_score <= MAX_BALLS) or not (0 <= opp_score <= MAX_BALLS):
-        return f"Scores must be between 0 and {MAX_BALLS}."
+    balls = MODE_BALLS.get(mode, MAX_BALLS)
+    if not (0 <= my_score <= balls) or not (0 <= opp_score <= balls):
+        return f"In {MODE_NAMES.get(mode, '8-ball')}, scores must be between 0 and {balls}."
     if my_score == opp_score:
-        return "Scores can't be a tie - somebody sank the 8."
+        return f"Scores can't be a tie - somebody sank the {balls}."
     return None
 
 
@@ -241,7 +271,13 @@ def update_player_rank(standing):
 
 @retry_on_deadlock
 def report_result(
-    user_id, my_score, opp_score, expected_match_id=None, league_type=None, league_id=None
+    user_id,
+    my_score,
+    opp_score,
+    expected_match_id=None,
+    league_type=None,
+    league_id=None,
+    mode=STANDARD,
 ):
     """
     A player reports the score of their game. The scores are whole numbers;
@@ -268,6 +304,11 @@ def report_result(
     Reporting takes access to the game's league (NO_ACCESS): a player
     whose access went when the organiser changed the PIN enters the new
     one first.
+
+    mode is the game it was - 8-ball (STANDARD, and what apps from before
+    modes always mean), 9-ball or 10-ball - which decides the score rules
+    and whose numbers move: each mode has its own rating. 9-ball and
+    10-ball in a ping pong league is INVALID_SCORE.
     """
     try:
         # Locked, so two reports of the same game queue up and the second
@@ -303,7 +344,7 @@ def report_result(
             db.session.rollback()
             return REPORT_RESULT_NO_ACCESS, {"league_id": league.league_id, "league_name": league.name}
 
-        problem = score_problem(league, my_score, opp_score)
+        problem = mode_problem(league, mode) or score_problem(league, my_score, opp_score, mode)
         if problem:
             db.session.rollback()
             return REPORT_RESULT_INVALID_SCORE, {"problem": problem}
@@ -315,15 +356,15 @@ def report_result(
             winner_id, loser_id = opponent_id, user_id
             winner_score, loser_score = opp_score, my_score
 
-        winner = ensure_standing(winner_id, league, lock=True)
-        loser = ensure_standing(loser_id, league, lock=True)
+        winner = ensure_standing(winner_id, league, lock=True, mode=mode)
+        loser = ensure_standing(loser_id, league, lock=True, mode=mode)
         elo_change = elo_change_for(league, winner, loser, winner_score, loser_score)
     except Exception:
         db.session.rollback()
         raise
 
     loser_change = record_match_result(
-        match, winner_id, loser_id, elo_change, winner_score, loser_score, league=league
+        match, winner_id, loser_id, elo_change, winner_score, loser_score, league=league, mode=mode
     )
     return REPORT_RESULT_RECORDED, {
         "elo_change": elo_change,
@@ -333,7 +374,14 @@ def report_result(
 
 
 def record_match_result(
-    match, winner_id, loser_id, elo_change, winner_balls=None, loser_balls=None, league=None
+    match,
+    winner_id,
+    loser_id,
+    elo_change,
+    winner_balls=None,
+    loser_balls=None,
+    league=None,
+    mode=STANDARD,
 ):
     """
     Close out a match and hand the table to the winner.
@@ -345,8 +393,10 @@ def record_match_result(
     /match/record), so two reports of one game can't both land.
 
     `league` is the league whose numbers move (by default the table's);
-    every other league is left alone. winner_balls / loser_balls are the
-    score in its game's units - balls sunk, or points.
+    every other league is left alone - and `mode` the game it was, whose
+    rating moves: 8-ball's (STANDARD), 9-ball's or 10-ball's, never the
+    others. winner_balls / loser_balls are the score in its game's units -
+    balls sunk, or points.
 
     The winner gains elo_change. The loser loses it too, unless that would
     take them below ELO_FLOOR, where they stop. Returns what the loser
@@ -356,12 +406,13 @@ def record_match_result(
     try:
         if db.session.get(Player, winner_id) is None or db.session.get(Player, loser_id) is None:
             raise ValueError("Both players must exist to record a result.")
-        winner = ensure_standing(winner_id, league, lock=True)
-        loser = ensure_standing(loser_id, league, lock=True)
+        winner = ensure_standing(winner_id, league, lock=True, mode=mode)
+        loser = ensure_standing(loser_id, league, lock=True, mode=mode)
 
         # 1. Close the match. winner_id now means the winner and nothing
         #    else, so no seat-shuffling is needed.
         match.match_status = Match.STATUS_FINISHED
+        match.mode = mode
         match.winner_id = winner_id
         match.loser_id = loser_id
         match.elo_change = elo_change

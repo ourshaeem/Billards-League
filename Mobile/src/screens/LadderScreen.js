@@ -11,7 +11,8 @@ import * as api from '../api';
 import { SLOW_POLL_INTERVAL_MS } from '../config';
 import { Avatar, useOpenPlayer } from '../components/Player';
 import { flagEmoji } from '../flags';
-import { Card, Screen, Txt } from '../components/ui';
+import { Card, Screen, Segmented, Txt } from '../components/ui';
+import { STANDARD, gameInfo, hasModes, modeInfo } from '../leagues';
 import { useAppActive } from '../hooks/useAppActive';
 import { usePolling } from '../hooks/usePolling';
 import { useLeague } from '../state/LeagueContext';
@@ -21,7 +22,7 @@ import { pointsText } from '../format';
 import { fonts, type } from '../theme';
 
 export function LadderScreen() {
-  const { leagueId, theme } = useLeague();
+  const { leagueId, league, theme } = useLeague();
   const { user } = useSession();
   const { gamesVersion } = useLive();
   const focused = useIsFocused();
@@ -29,22 +30,29 @@ export function LadderScreen() {
   const openPlayer = useOpenPlayer();
   const [refreshing, setRefreshing] = useState(false);
 
-  const [data, setData] = useState(() => ({ leagueId, players: [], loaded: false, problem: null }));
-  if (data.leagueId !== leagueId) setData({ leagueId, players: [], loaded: false, problem: null });
+  // A billiards league has a ladder for each game - 8-ball, 9-ball,
+  // 10-ball - their points kept apart. Back to 8-ball in another league.
+  const modes = hasModes(league?.game) ? gameInfo(league.game).modes : [];
+  const [choice, setChoice] = useState({ leagueId, mode: STANDARD });
+  const mode = choice.leagueId === leagueId ? choice.mode : STANDARD;
+  const key = `${leagueId}:${mode}`;
+
+  const [data, setData] = useState(() => ({ key, players: [], loaded: false, problem: null }));
+  if (data.key !== key) setData({ key, players: [], loaded: false, problem: null });
 
   const load = useCallback(
     async (signal) => {
-      const res = await api.getLeaderboard(leagueId, signal);
+      const res = await api.getLeaderboard(leagueId, { mode }, signal);
       if (signal?.aborted || res.aborted) return;
       setData((current) => {
-        if (current.leagueId !== leagueId) return current;
+        if (current.key !== key) return current;
         if (!res.ok) return current.loaded ? current : { ...current, problem: res.message };
-        return { leagueId, players: Array.isArray(res.data) ? res.data : [], loaded: true, problem: null };
+        return { key, players: Array.isArray(res.data) ? res.data : [], loaded: true, problem: null };
       });
     },
     // gamesVersion isn't read inside, but a new value means a game just
     // ended: fetch again now rather than at the next tick.
-    [leagueId, gamesVersion],
+    [key, leagueId, mode, gamesVersion],
   );
 
   usePolling(load, SLOW_POLL_INTERVAL_MS, focused && active && Boolean(leagueId));
@@ -60,6 +68,17 @@ export function LadderScreen() {
   return (
     <Screen onRefresh={onRefresh} refreshing={refreshing}>
       <Card title="League ladder" icon="bar-chart-2">
+        {modes.length > 1 ? (
+          <View style={styles.modes}>
+            <Segmented
+              options={modes.map((m) => ({ value: m.key, label: m.name }))}
+              value={mode}
+              onChange={(next) => setChoice({ leagueId, mode: next })}
+              accessibilityLabel="Which game's ladder"
+            />
+          </View>
+        ) : null}
+
         {!data.loaded ? (
           <Txt muted style={styles.empty}>
             {data.problem ? `${data.problem} Retrying automatically.` : 'Loading the ladder...'}
@@ -68,7 +87,9 @@ export function LadderScreen() {
 
         {data.loaded && players.length === 0 ? (
           <Txt muted style={styles.empty}>
-            No games played yet. The first result starts the ladder.
+            {modes.length > 1
+              ? `No ${modeInfo(league?.game, mode).name} games yet. The first one reported starts this ladder.`
+              : 'No games played yet. The first result starts the ladder.'}
           </Txt>
         ) : null}
 
@@ -163,6 +184,7 @@ function Cell({ style, muted, children }) {
 
 const styles = StyleSheet.create({
   empty: { paddingVertical: 12 },
+  modes: { marginBottom: 8 },
   row: {
     flexDirection: 'row',
     alignItems: 'center',

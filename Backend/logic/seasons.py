@@ -1,7 +1,8 @@
 """
 Starting a league over: every player's rating, record and rank in one
 league back to where a new player starts, as at the beginning of a
-season. Every other league is untouched.
+season - at every game mode it has (8-ball, 9-ball and 10-ball in
+billiards). Every other league is untouched.
 
 Finished games are kept - they are history, and the Games feeds still
 show them - and so is whoever is at the table or in the queue: nobody is
@@ -23,12 +24,13 @@ def league_standings(league):
         db.select(Standing, Player.username)
         .join(Player, Player.user_id == Standing.user_id)
         .where(Standing.league_id == league.league_id)
-        .order_by(Standing.user_id)
+        .order_by(Standing.user_id, Standing.mode)
     ).all()
     return [
         {
             "user_id": standing.user_id,
             "username": username,
+            "mode": standing.mode,
             "elo": standing.elo,
             "wins": standing.wins,
             "losses": standing.losses,

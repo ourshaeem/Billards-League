@@ -29,7 +29,7 @@
 import React, { useEffect, useState } from 'react';
 import { BellRing, Swords, Users, Clock, Crown, LoaderCircle, Lock } from 'lucide-react';
 
-import { gameInfo } from '../leagues.js';
+import { STANDARD, gameInfo, hasModes, modeInfo } from '../leagues.js';
 import { Podium } from './Podium.jsx';
 
 // The states with room beside them for the players of the day, week and
@@ -584,6 +584,37 @@ function HoldingTableState({ status, queueLength, onStepDown, onKingHere, busy }
   );
 }
 
+/**
+ * Which billiards game was played - 8-ball, 9-ball or 10-ball - as chips,
+ * like the table choice. Each game has its own rating, so this decides
+ * whose numbers the score moves.
+ */
+function ModeChoice({ modes, value, onChange }) {
+  return (
+    <fieldset className="table-choice mode-choice">
+      <legend className="table-choice-legend">Which game was it?</legend>
+      <div className="table-choice-options">
+        {modes.map((m) => (
+          <label
+            key={m.key}
+            className="table-choice-option"
+            data-checked={value === m.key ? 'true' : 'false'}
+          >
+            <input
+              type="radio"
+              name="game-mode"
+              className="sr-only"
+              checked={value === m.key}
+              onChange={() => onChange(m.key)}
+            />
+            <span className="table-choice-name">{m.name}</span>
+          </label>
+        ))}
+      </div>
+    </fieldset>
+  );
+}
+
 function PlayingState({
   status,
   league,
@@ -596,7 +627,11 @@ function PlayingState({
 }) {
   const [scores, setScores] = useState({ mine: '', theirs: '' });
   const [error, setError] = useState(null);
-  const info = gameInfo(league.game);
+  // In billiards, which game it was - 8-ball, 9-ball or 10-ball - chosen
+  // with the score: each has its own rating and ladder.
+  const [mode, setMode] = useState(STANDARD);
+  const modes = hasModes(league.game) ? gameInfo(league.game).modes : [];
+  const info = modeInfo(league.game, mode);
   const unit = info.scoreUnit;
 
   // Note: a new match gets a clean scorecard because the parent gives
@@ -633,8 +668,9 @@ function PlayingState({
     // The match id says which game this score is for. If the opponent has
     // already reported it, the server refuses rather than filing this
     // score against the next game. The league lets the server refuse a
-    // score sent under the wrong league's rules.
-    onRecord(mine, theirs, status.match_id, status.league_id ?? league.league_id);
+    // score sent under the wrong league's rules; the mode says whose
+    // rating moves - 8-ball's, 9-ball's or 10-ball's.
+    onRecord(mine, theirs, status.match_id, status.league_id ?? league.league_id, mode);
   };
 
   const cancelAsked = status.cancel_requested_by;
@@ -695,10 +731,21 @@ function PlayingState({
         {unit === 'points'
           ? 'put the points each of you scored below'
           : 'put the balls each of you sank below'}{' '}
-        and the ladder updates for both of you.
+        and {modes.length > 1 ? `the ${info.name} ladder` : 'the ladder'} updates for both of
+        you.
       </p>
 
       <form onSubmit={submit} noValidate>
+        {modes.length > 1 && (
+          <ModeChoice
+            modes={modes}
+            value={mode}
+            onChange={(next) => {
+              setMode(next);
+              setError(null);
+            }}
+          />
+        )}
         <div className="score-grid">
           <div className="field field-flush">
             <label htmlFor="score-mine">Your {unit}</label>

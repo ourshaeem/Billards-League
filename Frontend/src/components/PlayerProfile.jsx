@@ -11,6 +11,7 @@ import { ArrowLeft, History, Swords, Users } from 'lucide-react';
 
 import * as api from '../api.js';
 import { flagEmoji } from '../flags.js';
+import { standingRows } from '../leagues.js';
 import { BadgesCard } from './Badges.jsx';
 import { HistoryRow } from './MatchHistory.jsx';
 import { Avatar } from './Player.jsx';
@@ -89,7 +90,11 @@ export function PlayerProfile({ userId, league: startLeague, leagues, currentUse
             {isYou && <p className="muted small">This is how other players see you.</p>}
           </div>
         </div>
-        <StandingsTable standings={player.standings} highlight={league?.league_id} />
+        <StandingsTable
+          standings={player.standings}
+          modeStandings={player.mode_standings}
+          highlight={league?.league_id}
+        />
       </section>
 
       {choices.length > 1 && (
@@ -144,8 +149,9 @@ function BackButton({ onBack }) {
   );
 }
 
-function StandingsTable({ standings, highlight }) {
-  if (!standings?.length) {
+function StandingsTable({ standings, modeStandings, highlight }) {
+  const rows = standingRows(standings, modeStandings);
+  if (!rows.length) {
     return <p className="empty">Not on any ladder yet.</p>;
   }
   return (
@@ -160,12 +166,15 @@ function StandingsTable({ standings, highlight }) {
           </tr>
         </thead>
         <tbody>
-          {standings.map((standing) => {
-            const key = standing.league_id;
+          {rows.map((standing) => {
             return (
-              <tr key={key} data-self={key === highlight ? 'true' : 'false'}>
+              <tr
+                key={standing.key}
+                data-self={standing.league_id === highlight ? 'true' : 'false'}
+              >
                 <th scope="row" className="standing-league">
                   {standing.name}
+                  {standing.modeName && <span className="standing-mode">{standing.modeName}</span>}
                 </th>
                 <td>{standing?.rank_name ?? 'Unranked'}</td>
                 <td className="elo">{standing?.elo ?? 0}</td>

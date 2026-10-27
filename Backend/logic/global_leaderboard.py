@@ -28,7 +28,7 @@ from datetime import datetime
 
 from database import seconds_since
 from logic.top_players import league_timezone, period_lengths
-from models import BILLIARDS, GAMES, League, Match, Player, PoolTable, Standing, db
+from models import BILLIARDS, GAMES, STANDARD, League, Match, Player, PoolTable, Standing, db
 
 TOP = 3
 PERIODS = ("week", "month")
@@ -102,6 +102,9 @@ def _period_tallies(lengths, leagues, fallback):
             Match.match_status == Match.STATUS_FINISHED,
             Match.winner_id.isnot(None),
             Match.loser_id.isnot(None),
+            # Billiards' champions are 8-ball's: 9-ball and 10-ball points
+            # are their own, and never added to them.
+            Match.mode == STANDARD,
             seconds_ago <= longest,
         )
     ).all()
@@ -163,7 +166,7 @@ def _best_ratings():
     rows = db.session.execute(
         db.select(Standing, League.game)
         .join(League, League.league_id == Standing.league_id)
-        .where((Standing.wins + Standing.losses) > 0)
+        .where((Standing.wins + Standing.losses) > 0, Standing.mode == STANDARD)
     ).all()
     for standing, game in rows:
         if game not in best:

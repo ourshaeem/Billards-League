@@ -11,6 +11,7 @@ import { ArrowLeft, ImageUp, Trash2 } from 'lucide-react';
 import { emailProblem } from '../accountRules.js';
 import { PRIVACY_POLICY_URL } from '../api.js';
 import { flagEmoji } from '../flags.js';
+import { standingRows } from '../leagues.js';
 import { PhotoProblem, squarePhoto } from '../photo.js';
 import { THEME_CHOICES } from '../theme.js';
 import { useOpenPlayer } from '../openPlayer.js';
@@ -221,10 +222,11 @@ export function ProfileSettings({
                   </td>
                 </tr>
               )}
-              {(profile.standings || []).map((standing) => (
-                <tr key={standing.league_id}>
+              {standingRows(profile.standings, profile.mode_standings).map((standing) => (
+                <tr key={standing.key}>
                   <th scope="row" className="standing-league">
                     {standing.name}
+                    {standing.modeName && <span className="standing-mode">{standing.modeName}</span>}
                   </th>
                   <td>{standing.rank_name ?? 'Unranked'}</td>
                   <td className="elo">{standing.elo ?? 0}</td>

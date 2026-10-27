@@ -20,25 +20,51 @@ export const LEAGUE_ORDER = [BILLIARDS, PING_PONG];
 const PING_PONG_GAME_POINT = 11;
 const PING_PONG_MAX_POINTS = 99;
 
+// The games a billiards score can be reported as. Each has its own rating
+// and ladder in every billiards league: points won at 8-ball never move a
+// 9-ball or 10-ball rating, or the other way round. STANDARD is the game a
+// league has always played - 8-ball, and ping pong's only one.
+export const STANDARD = 'standard';
+export const NINE_BALL = 'nine_ball';
+export const TEN_BALL = 'ten_ball';
+
+/** A billiards game scored in balls sunk, 0 to `balls`, with no tie. */
+function ballGame(key, name, balls, near) {
+  return {
+    key,
+    name,
+    scoreUnit: 'balls',
+    maxScore: balls,
+    quickScores: [
+      { mine: balls, theirs: 0 },
+      { mine: balls, theirs: near },
+      { mine: 0, theirs: balls },
+      { mine: near, theirs: balls },
+    ],
+    scoreProblem(mine, theirs) {
+      if (mine === theirs) return `Scores can't be a tie - somebody sank the ${balls}.`;
+      if (mine < 0 || theirs < 0 || mine > balls || theirs > balls) {
+        return `In ${name}, scores run from 0 to ${balls}.`;
+      }
+      return null;
+    },
+  };
+}
+
+const EIGHT_BALL_GAME = ballGame(STANDARD, '8-ball', 8, 4);
+
 export const LEAGUES = {
   [BILLIARDS]: {
     key: BILLIARDS,
     name: 'Billiards',
     sport: 'billiards',
-    blurb: 'Eight-ball, king of the table. Win and you stay on.',
-    scoreUnit: 'balls',
-    maxScore: 8,
-    quickScores: [
-      { mine: 8, theirs: 0 },
-      { mine: 8, theirs: 4 },
-      { mine: 0, theirs: 8 },
-      { mine: 4, theirs: 8 },
-    ],
-    scoreProblem(mine, theirs) {
-      if (mine === theirs) return "Scores can't be a tie - somebody sank the 8.";
-      if (mine < 0 || theirs < 0 || mine > 8 || theirs > 8) return 'Scores run from 0 to 8.';
-      return null;
-    },
+    blurb: '8-ball, 9-ball or 10-ball, king of the table. Win and you stay on.',
+    // 8-ball's, the standard game's - what the app always used.
+    scoreUnit: EIGHT_BALL_GAME.scoreUnit,
+    maxScore: EIGHT_BALL_GAME.maxScore,
+    quickScores: EIGHT_BALL_GAME.quickScores,
+    scoreProblem: EIGHT_BALL_GAME.scoreProblem,
+    modes: [EIGHT_BALL_GAME, ballGame(NINE_BALL, '9-ball', 9, 4), ballGame(TEN_BALL, '10-ball', 10, 5)],
   },
   [PING_PONG]: {
     key: PING_PONG,
@@ -73,14 +99,60 @@ export const LEAGUES = {
     },
   },
 };
+// Ping pong has one game: its own.
+LEAGUES[PING_PONG].modes = [{ ...LEAGUES[PING_PONG], key: STANDARD, name: 'Ping pong' }];
 
 /** A game's details - pass league.game - falling back to billiards for anything unknown. */
 export function gameInfo(game) {
   return LEAGUES[game] || LEAGUES[BILLIARDS];
 }
 
+/**
+ * One of a game's modes - 8-ball, 9-ball or 10-ball in billiards (with its
+ * name, score unit, quick scores and score rules) - falling back to the
+ * standard one.
+ */
+export function modeInfo(game, mode) {
+  const { modes } = gameInfo(game);
+  return modes.find((m) => m.key === mode) || modes[0];
+}
+
+/** Whether a game has more than one mode - billiards does. */
+export function hasModes(game) {
+  return gameInfo(game).modes.length > 1;
+}
+
 export function isGame(game) {
   return Object.prototype.hasOwnProperty.call(LEAGUES, game);
+}
+
+/**
+ * A player's standings for a profile, with their 9-ball and 10-ball ones
+ * (the profile's mode_standings) right after each league's standard one:
+ * [{...standing, key, modeName}]. modeName names the game - "8-ball",
+ * "9-ball" - wherever a league has more than one row, and is null for a
+ * league with only its standard game's.
+ */
+export function standingRows(standings, modeStandings) {
+  const extra = modeStandings || [];
+  const rows = [];
+  const placed = new Set();
+  (standings || []).forEach((st) => {
+    const others = extra.filter((m) => m.league_id === st.league_id);
+    rows.push({
+      ...st,
+      key: `${st.league_id}:${STANDARD}`,
+      modeName: others.length ? modeInfo(st.league_type, STANDARD).name : null,
+    });
+    others.forEach((m) => {
+      rows.push({ ...m, key: `${m.league_id}:${m.mode}`, modeName: m.mode_name });
+      placed.add(m);
+    });
+  });
+  extra
+    .filter((m) => !placed.has(m))
+    .forEach((m) => rows.push({ ...m, key: `${m.league_id}:${m.mode}`, modeName: m.mode_name }));
+  return rows;
 }
 
 /** Leagues grouped by school, in the order the server lists them: [{school, leagues}]. */

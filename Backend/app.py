@@ -141,7 +141,7 @@ from logic.tables import (
     table_snapshot,
 )
 from logic.top_players import top_players
-from models import BILLIARDS, GAMES, League, Match, Player, PoolTable, db
+from models import BILLIARDS, GAMES, MODE_NAMES, MODES, STANDARD, League, Match, Player, PoolTable, db
 from logic.manage_queue import (
     CONFIRM_RESULT_ALREADY_CONFIRMED,
     CONFIRM_RESULT_CONFIRMED,
@@ -877,6 +877,27 @@ def read_table_and_league(source, must_exist=False):
     return table_id, table_league, None
 
 
+def read_mode(source, league=None):
+    """
+    The game mode a request is about: (mode, None) or (None, error). One of
+    MODES - 8-ball ("standard"), "nine_ball" or "ten_ball" - and STANDARD
+    when the request doesn't say, which is what apps from before modes
+    mean. With a league, it has to be one that league's game has.
+    """
+    raw = source.get("mode")
+    if raw is None or raw == "":
+        return STANDARD, None
+    mode = raw.strip().lower() if isinstance(raw, str) else None
+    known = {m for modes in MODES.values() for m in modes}
+    if mode not in known:
+        return None, error(
+            "mode must be standard (8-ball), nine_ball or ten_ball.", 400, field="mode"
+        )
+    if league is not None and mode not in MODES[league.game]:
+        return None, error(f"{league.name} has no {MODE_NAMES[mode]}.", 400, field="mode")
+    return mode, None
+
+
 def read_table_choice(source, table_id):
     """
     The table a player joining asked to wait for: table_id (already read
@@ -980,7 +1001,12 @@ def register_routes(app):
         league, bad = read_league(request.args)
         if bad:
             return bad
-        return jsonify(top50_leaderboard(league or League.of(BILLIARDS)))
+        league = league or League.of(BILLIARDS)
+        # Billiards has a ladder per game: 8-ball (the default), 9-ball, 10-ball.
+        mode, bad = read_mode(request.args, league)
+        if bad:
+            return bad
+        return jsonify(top50_leaderboard(league, mode))
 
     # 1-. THE CHAMPIONS ACROSS EVERY SCHOOL (Public) - the top 3 in each
     # game this week, this month and of all time, in any league.
@@ -1726,10 +1752,15 @@ def register_routes(app):
         expected_match_id, bad = read_match_id(data)
         if bad:
             return bad
+        # And which game it was: 8-ball, 9-ball or 10-ball. Each has its own
+        # rating. Whether the league plays it is judged with the game itself.
+        mode, bad = read_mode(data)
+        if bad:
+            return bad
 
         try:
             outcome, details = report_result(
-                user_id, my_score, opp_score, expected_match_id, league_type, league_id
+                user_id, my_score, opp_score, expected_match_id, league_type, league_id, mode
             )
         except Exception:
             log.exception("recording a match failed (user %s)", user_id)

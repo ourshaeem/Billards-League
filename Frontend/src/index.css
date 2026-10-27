@@ -3184,3 +3184,30 @@ select[aria-invalid='true'] {
   font-weight: 600;
   color: var(--accent-text);
 }
+
+/* --- Which billiards game it was, on the scorecard --- */
+
+.mode-choice .table-choice-option {
+  min-width: 5.5rem;
+  align-items: center;
+}
+
+.history-mode {
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-weight: 700;
+}
+
+/* "9-ball" beside a league's name, on a profile's standings. */
+.standing-mode {
+  margin-left: 8px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: 0.75rem;
+  font-weight: 700;
+  vertical-align: 1px;
+}

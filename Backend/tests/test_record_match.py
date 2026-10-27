@@ -8,7 +8,7 @@ pull in the next challenger.
 import unittest
 
 from tests.conftest_base import BaseTestCase
-from models import BILLIARDS, Match, Player, PoolTable, Rank, Standing, db
+from models import BILLIARDS, STANDARD, Match, Player, PoolTable, Rank, Standing, db
 
 from logic.manage_queue import join_queue
 from logic.record_match import (
@@ -21,7 +21,7 @@ from logic.record_match import (
 class RecordMatchTests(BaseTestCase):
     def player(self, user_id):
         """The player's numbers in CCNY Billiards (their Standing)."""
-        return db.session.get(Standing, (user_id, self.billiards_league_id))
+        return db.session.get(Standing, (user_id, self.billiards_league_id, STANDARD))
 
     def finished_matches(self):
         return list(

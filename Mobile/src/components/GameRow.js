@@ -8,6 +8,7 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import { useTheme } from '../state/LeagueContext';
 import { fonts, radius, type } from '../theme';
+import { STANDARD, modeInfo } from '../leagues';
 import { PlayerChip } from './Player';
 
 /**
@@ -81,6 +82,12 @@ export function GameRow({ match, league, currentUserId, last = false, subject = 
       </View>
 
       <View style={styles.meta}>
+        {/* A 9-ball or 10-ball game says so: its points are that game's. */}
+        {match.mode && match.mode !== STANDARD ? (
+          <Text style={[styles.metaText, styles.mode, { color: theme.accentText, backgroundColor: theme.accentSoft }]}>
+            {modeInfo(match.league_type, match.mode).name}
+          </Text>
+        ) : null}
         {result ? (
           <Text
             style={[
@@ -122,6 +129,7 @@ function ResultTag({ win = false }) {
 }
 
 const styles = StyleSheet.create({
+  mode: { paddingHorizontal: 8, borderRadius: radius.pill, overflow: 'hidden', fontFamily: fonts.bold },
   row: { paddingVertical: 12 },
   players: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   side: { flex: 1, minWidth: 0, alignItems: 'flex-start', gap: 4 },

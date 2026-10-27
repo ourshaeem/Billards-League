@@ -27,7 +27,7 @@ from zoneinfo import ZoneInfo
 
 from database import seconds_since
 from logic.tables import in_league
-from models import League, Match, Player, PoolTable, db
+from models import STANDARD, League, Match, Player, PoolTable, db
 
 log = logging.getLogger(__name__)
 
@@ -88,6 +88,8 @@ def top_players(league, now=None):
             Match.winner_id.isnot(None),
             Match.loser_id.isnot(None),
             in_league(league),
+            # 8-ball's (or ping pong's): 9-ball and 10-ball points are their own.
+            Match.mode == STANDARD,
             seconds_ago <= max(lengths.values()),
         )
     ).all()

@@ -11,6 +11,7 @@ import { Trophy, Users } from 'lucide-react';
 
 import { RemoveButton, RemoveConfirm } from './AdminControls.jsx';
 import { NameBadge } from './Badges.jsx';
+import { STANDARD, gameInfo, hasModes, modeInfo } from '../leagues.js';
 import { PlayerChip, PlayerLink } from './Player.jsx';
 
 /**
@@ -184,7 +185,21 @@ function asCard(row, league) {
   };
 }
 
-export function LeaderboardCard({ players, loaded, league, currentUsername }) {
+/**
+ * A league's ladder. A billiards league has one for each game - 8-ball,
+ * 9-ball and 10-ball, their points kept apart - and a switch between them
+ * (mode, onModeChange).
+ */
+export function LeaderboardCard({
+  players,
+  loaded,
+  league,
+  currentUsername,
+  mode = STANDARD,
+  onModeChange = null,
+}) {
+  const modes = hasModes(league.game) ? gameInfo(league.game).modes : [];
+  const game = modeInfo(league.game, mode);
   return (
     <section className="card" aria-labelledby="ladder-heading">
       <div className="card-head">
@@ -192,12 +207,31 @@ export function LeaderboardCard({ players, loaded, league, currentUsername }) {
           <Trophy size={18} aria-hidden="true" style={{ marginRight: 8, verticalAlign: '-3px' }} />
           League ladder
         </h2>
+        {modes.length > 1 && onModeChange && (
+          <div className="segmented" role="group" aria-label="Which game's ladder">
+            {modes.map((m) => (
+              <button
+                key={m.key}
+                type="button"
+                className="segmented-option"
+                aria-pressed={mode === m.key}
+                onClick={() => onModeChange(m.key)}
+              >
+                {m.name}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {!loaded && <p className="empty">Loading the ladder...</p>}
 
       {loaded && players.length === 0 && (
-        <p className="empty">No games played yet. The first result starts the ladder.</p>
+        <p className="empty">
+          {modes.length > 1
+            ? `No ${game.name} games yet. The first one reported starts this ladder.`
+            : 'No games played yet. The first result starts the ladder.'}
+        </p>
       )}
 
       {loaded && players.length > 0 && (

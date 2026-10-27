@@ -23,6 +23,7 @@ from app import create_app  # noqa: E402
 from models import (  # noqa: E402
     BILLIARDS,
     PING_PONG,
+    STANDARD,
     League,
     LeagueAccess,
     Match,
@@ -143,7 +144,7 @@ class BaseTestCase(unittest.TestCase):
     def standing(self, user_id, league=BILLIARDS):
         """A player's Standing in one of CCNY's leagues (or any league_id), freshly read."""
         db.session.expire_all()
-        return db.session.get(Standing, (user_id, self.league_id(league)))
+        return db.session.get(Standing, (user_id, self.league_id(league), STANDARD))
 
     def rating(self, user_id, league=BILLIARDS):
         return self.standing(user_id, league).elo

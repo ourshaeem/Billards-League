@@ -26,7 +26,7 @@ import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-nati
 import Feather from '@expo/vector-icons/Feather';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 
-import { gameInfo } from '../leagues';
+import { STANDARD, gameInfo, hasModes, modeInfo } from '../leagues';
 import { useTheme } from '../state/LeagueContext';
 import { fonts, radius, type } from '../theme';
 import { Button, Field, FieldError } from './ui';
@@ -620,11 +620,56 @@ function HoldingTableState({ status, queueLength, onStepDown, onKingHere, busy }
   );
 }
 
+/**
+ * Which billiards game was played - 8-ball, 9-ball or 10-ball - as chips,
+ * like the table choice. Each game has its own rating, so this decides
+ * whose numbers the score moves.
+ */
+function ModeChoice({ modes, value, onChange, disabled }) {
+  const theme = useTheme();
+  return (
+    <View style={styles.choice} accessibilityRole="radiogroup" accessibilityLabel="Which game was it?">
+      <Text style={[styles.choiceLabel, { color: theme.panelDim }]}>Which game was it?</Text>
+      <View style={styles.choiceOptions}>
+        {modes.map((m) => {
+          const checked = value === m.key;
+          return (
+            <Pressable
+              key={m.key}
+              onPress={() => onChange(m.key)}
+              disabled={disabled}
+              accessibilityRole="radio"
+              accessibilityState={{ checked, selected: checked, disabled }}
+              accessibilityLabel={m.name}
+              style={({ pressed }) => [
+                styles.chip,
+                styles.modeChip,
+                {
+                  borderColor: checked ? theme.panelCtaBg : theme.panelLine,
+                  backgroundColor: checked ? theme.panelCtaBg : pressed ? theme.panelFillStrong : theme.panelFill,
+                },
+              ]}
+            >
+              <Text style={[styles.chipName, { color: checked ? theme.panelCtaText : theme.panelText }]}>
+                {m.name}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
 function PlayingState({ status, league, onRecord, onCancelGame, onKeepPlaying, onVote, onKingHere, busy }) {
   const theme = useTheme();
   const [scores, setScores] = useState({ mine: '', theirs: '' });
   const [error, setError] = useState(null);
-  const info = gameInfo(league.game);
+  // In billiards, which game it was - 8-ball, 9-ball or 10-ball - chosen
+  // with the score: each has its own rating and ladder.
+  const [mode, setMode] = useState(STANDARD);
+  const modes = hasModes(league.game) ? gameInfo(league.game).modes : [];
+  const info = modeInfo(league.game, mode);
   const unit = info.scoreUnit;
 
   // A new match gets a clean scorecard because the parent gives this
@@ -656,7 +701,8 @@ function PlayingState({ status, league, onRecord, onCancelGame, onKeepPlaying, o
 
     // The match id says which game this score is for; the league lets the
     // server refuse a score sent under the wrong league's rules.
-    onRecord(mine, theirs, status.match_id, status.league_id ?? league.league_id);
+    // The mode says whose rating moves: 8-ball's, 9-ball's or 10-ball's.
+    onRecord(mine, theirs, status.match_id, status.league_id ?? league.league_id, mode);
   };
 
   const onlyDigits = (value) => value.replace(/[^0-9]/g, '');
@@ -714,8 +760,20 @@ function PlayingState({ status, league, onRecord, onCancelGame, onKeepPlaying, o
         {unit === 'points'
           ? 'put the points each of you scored below'
           : 'put the balls each of you sank below'}{' '}
-        and the ladder updates for both of you.
+        and {modes.length > 1 ? `the ${info.name} ladder` : 'the ladder'} updates for both of you.
       </Sub>
+
+      {modes.length > 1 ? (
+        <ModeChoice
+          modes={modes}
+          value={mode}
+          onChange={(next) => {
+            setMode(next);
+            setError(null);
+          }}
+          disabled={busy}
+        />
+      ) : null}
 
       <View style={styles.scoreGrid}>
         <Field
@@ -981,4 +1039,5 @@ const styles = StyleSheet.create({
   chip: { minWidth: 104, paddingVertical: 8, paddingHorizontal: 12, borderRadius: radius.md, borderWidth: 1 },
   chipName: { fontFamily: fonts.bold, fontSize: type.small },
   chipCount: { fontFamily: fonts.regular, fontSize: 12 },
+  modeChip: { minWidth: 80, alignItems: 'center' },
 });

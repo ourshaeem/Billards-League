@@ -35,7 +35,7 @@ from logic.record_match import (
 )
 from logic.leagues import ensure_standing
 from logic.tables import active_tables, league_for_table
-from models import STARTING_ELO, League, Match, Player, PoolTable, db
+from models import STANDARD, STARTING_ELO, League, Match, Player, PoolTable, db
 
 
 log = logging.getLogger(__name__)
@@ -45,8 +45,8 @@ class GameProblem(ValueError):
     """A game that can't be voided; the message says why."""
 
 
-def _numbers(player, league):
-    standing = player.standing(league)
+def _numbers(player, league, mode=STANDARD):
+    standing = player.standing(league, mode)
     return {
         "user_id": player.user_id,
         "username": player.username,
@@ -72,10 +72,11 @@ def _finished_game(match_id, lock=False):
 def game_summary(match_id):
     """
     What voiding a game would undo, without changing anything:
-    {match_id, league_type, league_id, league_name, seconds_ago,
+    {match_id, league_type, league_id, league_name, mode, seconds_ago,
      elo_change, score, winner: {user_id, username, elo, wins, losses},
      loser: {...}}
-    - the players' numbers as they are now. Raises GameProblem.
+    - the players' numbers as they are now, in the game's mode (8-ball,
+    9-ball or 10-ball: the numbers it moved). Raises GameProblem.
     """
     match = _finished_game(match_id)
     league = league_for_table(match.table_id)
@@ -87,13 +88,14 @@ def game_summary(match_id):
         "league_type": league.game,
         "league_id": league.league_id,
         "league_name": league.name,
+        "mode": match.mode or STANDARD,
         "seconds_ago": None if seconds is None else max(0, int(seconds)),
         "elo_change": match.elo_change or 0,
         # Less than elo_change when the loser stopped at the floor.
         "loser_elo_change": match.loser_points_lost or 0,
         "score": [match.balls_for(match.winner_id), match.balls_for(match.loser_id)],
-        "winner": _numbers(match.winner, league),
-        "loser": _numbers(match.loser, league),
+        "winner": _numbers(match.winner, league, match.mode or STANDARD),
+        "loser": _numbers(match.loser, league, match.mode or STANDARD),
     }
 
 
@@ -116,8 +118,9 @@ def void_finished_match(match_id):
         league = league_for_table(table_id)
         # Locked and re-read, so the numbers changed are the latest ones,
         # not a copy loaded before this request waited for the lock.
-        winner_standing = ensure_standing(match.winner_id, league, lock=True)
-        loser_standing = ensure_standing(match.loser_id, league, lock=True)
+        mode = match.mode or STANDARD
+        winner_standing = ensure_standing(match.winner_id, league, lock=True, mode=mode)
+        loser_standing = ensure_standing(match.loser_id, league, lock=True, mode=mode)
         winner, loser = match.winner, match.loser
         before = game_summary(match_id)
         change = before["elo_change"]
@@ -137,7 +140,10 @@ def void_finished_match(match_id):
 
     return {
         "before": before,
-        "after": {"winner": _numbers(winner, league), "loser": _numbers(loser, league)},
+        "after": {
+            "winner": _numbers(winner, league, mode),
+            "loser": _numbers(loser, league, mode),
+        },
     }
 
 

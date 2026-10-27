@@ -14,6 +14,8 @@ from logic.record_match import record_match_result
 ENTRY_KEYS = {
     "match_id", "table_id", "league_type", "league_id", "winner", "loser",
     "winner_score", "loser_score", "elo_change", "loser_elo_change", "seconds_ago",
+    # 8-ball ("standard"), 9-ball or 10-ball: the apps label the last two.
+    "mode",
 }
 CARD_KEYS = {
     "user_id", "username", "country_flag", "profile_picture",

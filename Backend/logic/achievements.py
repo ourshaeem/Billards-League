@@ -41,6 +41,7 @@ from models import (
     BILLIARDS,
     GAMES,
     PING_PONG,
+    STANDARD,
     League,
     Match,
     Player,
@@ -292,7 +293,12 @@ def _iso_week(day):
 
 
 def _league_matches(league):
-    """A league's finished games, in the order they were recorded."""
+    """
+    A league's finished games, in the order they were recorded - its
+    standard game's: 8-ball in billiards. The badges are made of 8-ball's
+    rules (an 8-0 shutout, an 8-7 nail-biter), and 9-ball and 10-ball are
+    games of their own, with ratings of their own.
+    """
     tables = dict(db.session.execute(db.select(PoolTable.table_id, PoolTable.league_id)).all())
     matches = db.session.scalars(
         db.select(Match)
@@ -300,6 +306,7 @@ def _league_matches(league):
             Match.match_status == Match.STATUS_FINISHED,
             Match.winner_id.isnot(None),
             Match.loser_id.isnot(None),
+            Match.mode == STANDARD,
         )
         .order_by(Match.match_id)
     )
@@ -525,7 +532,11 @@ def _standings(league):
     players = db.session.execute(
         db.select(Standing.user_id, Standing.elo, Standing.wins, Standing.losses)
         .join(Player, Player.user_id == Standing.user_id)
-        .where(Standing.league_id == league.league_id, Player.deleted_at.is_(None))
+        .where(
+            Standing.league_id == league.league_id,
+            Standing.mode == STANDARD,
+            Player.deleted_at.is_(None),
+        )
     ).all()
     rank_floor = {
         name.lower(): min_elo
